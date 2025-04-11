@@ -1,11 +1,11 @@
 from functools import partial
 from typing import Type, Callable
-import json
 
 from jaxtyping import Array, PRNGKeyArray
 import jax
 from jax import numpy as jnp, random as jrnd
 import equinox as eqx
+from gearax.models import Model
 
 from . import core, distributions, dynamics, observations, encoders
 from .core import Hyperparam, Mode
@@ -53,59 +53,35 @@ class DataMasker(eqx.Module, strict=True):
             return subkey, mask
 
 
-class XFADS(eqx.Module, strict=True):
-    spec: dict = eqx.field(static=True)
-    hyperparam: Hyperparam = eqx.field(static=True)
-    forward: eqx.Module
-    backward: eqx.Module
-    likelihood: eqx.Module
-    alpha_encoder: eqx.Module
-    beta_encoder: eqx.Module
-    masker: eqx.Module
-    unconstrained_prior_natural: Array
+class XFADS(Model):
+    hyperparam: Hyperparam = eqx.field(init=False, static=True)
+    forward: eqx.Module = eqx.field(init=False)
+    backward: eqx.Module = eqx.field(init=False)
+    likelihood: eqx.Module = eqx.field(init=False)
+    alpha_encoder: eqx.Module = eqx.field(init=False)
+    beta_encoder: eqx.Module = eqx.field(init=False)
+    masker: eqx.Module = eqx.field(init=False)
+    unconstrained_prior_natural: Array = eqx.field(init=False)
 
-    def __init__(
-        self,
-        observation_dim,
-        state_dim,
-        input_dim,
-        state_noise,
-        *,
-        mode: str,
-        forward_dynamics: str,
-        backward_dynamics: str,
-        approx: str,
-        observation: str,
-        n_steps: int,
-        mc_size: int,
-        seed: int,
-        fb_penalty: float,
-        noise_penalty: float,
-        dropout: float| None,
-        dyn_kwargs: dict,
-        obs_kwargs: dict,
-        enc_kwargs: dict,
-    ) -> None:
-        self.spec = dict(
-            observation_dim=observation_dim,
-            state_dim=state_dim,
-            input_dim=input_dim,
-            state_noise=state_noise,
-            mode=mode,
-            forward_dynamics=forward_dynamics,
-            backward_dynamics=backward_dynamics,
-            approx=approx,
-            observation=observation,
-            n_steps=n_steps,
-            mc_size=mc_size,
-            seed=seed,
-            fb_penalty=fb_penalty,
-            noise_penalty=noise_penalty,
-            dropout=dropout,
-            dyn_kwargs=dyn_kwargs,
-            obs_kwargs=obs_kwargs,
-            enc_kwargs=enc_kwargs,
-        )
+    def __post_init__(self):
+        state_dim = self.conf.state_dim
+        input_dim = self.conf.input_dim
+        observation_dim = self.conf.observation_dim
+        approx: str = self.conf.approx
+        mc_size = self.conf.mc_size
+        seed = self.conf.seed
+        dropout = self.conf.dropout
+        mode = self.conf.mode
+        forward = self.conf.forward
+        backward = self.conf.backward
+        state_noise = self.conf.state_noise
+        dyn_kwargs = self.conf.dyn_kwargs
+        observation = self.conf.observation
+        n_steps = self.conf.n_steps
+        obs_kwargs = self.conf.obs_kwargs
+        enc_kwargs = self.conf.enc_kwargs
+        fb_penalty = self.conf.fb_penalty
+        noise_penalty = self.conf.noise_penalty
 
         key = jrnd.key(seed) 
 
@@ -124,7 +100,7 @@ class XFADS(eqx.Module, strict=True):
             mode=mode,
         )
 
-        dynamics_class = dynamics.get_class(forward_dynamics)
+        dynamics_class = dynamics.get_class(forward)
         key, subkey = jrnd.split(key)
         self.forward = dynamics_class(
             key=subkey,
@@ -134,8 +110,8 @@ class XFADS(eqx.Module, strict=True):
             **dyn_kwargs,
         )
         
-        if backward_dynamics is not None:
-            dynamics_class = dynamics.get_class(backward_dynamics)
+        if backward is not None:
+            dynamics_class = dynamics.get_class(backward)
             key, subkey = jrnd.split(key)
             self.backward = dynamics_class(
                 key=subkey,
@@ -180,20 +156,6 @@ class XFADS(eqx.Module, strict=True):
     def prior_natural(self) -> Array:
         return self.hyperparam.approx.constrain_natural(self.unconstrained_prior_natural)
 
-    def save_model(self, file) -> None:
-        with open(file, "wb") as f:
-            spec = json.dumps(self.spec)
-            f.write((spec + "\n").encode())
-            eqx.tree_serialise_leaves(f, self)
-
-    @classmethod
-    def load_model(cls, file):
-        with open(file, "rb") as f:
-            spec = json.loads(f.readline().decode())
-            model = eqx.filter_eval_shape(XFADS, **spec)
-            return eqx.tree_deserialise_leaves(f, model)
-    
-    # @eqx.filter_jit
     def __call__(self, t, y, u, *, key) -> tuple[Array, Array, Array]:
         batch_alpha_encode: Callable = jax.vmap(jax.vmap(self.alpha_encoder))
         batch_constrain_natural: Callable = jax.vmap(jax.vmap(self.hyperparam.approx.constrain_natural))
