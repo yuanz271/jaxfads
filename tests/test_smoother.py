@@ -2,11 +2,10 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from omegaconf import OmegaConf
 import equinox as eqx
-from xfads.dynamics import registry, AbstractDynamics
+from xfads.dynamics import AbstractDynamics
 from xfads.smoother import XFADS
 
 
-@registry.register()
 class Mock(AbstractDynamics):
     noise: eqx.Module
     layer: eqx.Module

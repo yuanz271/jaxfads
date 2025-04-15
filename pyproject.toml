@@ -31,7 +31,7 @@ build-backend = "hatchling.build"
 allow-direct-references = true
 
 [tool.ruff]
-ignore = ["E501", "F722"]
+lint.ignore = ["E501", "F722"]
 
 [tool.uv.sources]
 gearax = { path = "gearax", editable = true }

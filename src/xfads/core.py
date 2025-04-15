@@ -8,7 +8,6 @@ from jax import numpy as jnp, random as jrandom
 from jax.lax import scan
 from jaxtyping import Array, PRNGKeyArray
 
-from . import distributions
 from .dynamics import sample_expected_moment
 
 

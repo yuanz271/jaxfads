@@ -3,7 +3,6 @@
 # finite horizon, discrete time
 
 
-import functools as ft
 
 import jax
 from jax import lax, numpy as jnp, vmap
