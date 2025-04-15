@@ -1,4 +1,4 @@
-from typing import Protocol, Type
+from typing import ClassVar, Protocol, Type
 
 from jax import numpy as jnp
 from jaxtyping import Array, PRNGKeyArray
@@ -8,15 +8,9 @@ import equinox as eqx
 from .nn import VariantBiasLinear, StationaryLinear
 from .constraints import constrain_positive, unconstrain_positive
 from .distributions import Approx
-from .helper import Registry
 
 
 MAX_LOGRATE = 7.
-registry = Registry()
-
-
-def get_class(name) -> Type:
-    return registry.get_class(name)
 
 
 class Observation(Protocol):
@@ -29,8 +23,19 @@ class Observation(Protocol):
     def init(self, *args, **kwargs): ...
 
 
-@registry.register()
-class Poisson(eqx.Module):
+class Likelihood(eqx.Module):
+    registry: ClassVar[dict] = dict()
+
+    def __init_subclass__(cls, *args, **kwargs):
+        super().__init_subclass__(*args, **kwargs)
+        Likelihood.registry[cls.__name__] = cls
+
+
+def get_class(name) -> Type:
+    return Likelihood.registry[name]
+
+
+class Poisson(Likelihood):
     readout: eqx.Module
 
     def __init__(self, state_dim, observation_dim, *, key, norm_readout: bool = False, **kwargs):
@@ -58,8 +63,7 @@ class Poisson(eqx.Module):
         return ll
 
 
-@registry.register()
-class DiagGaussian(eqx.Module):
+class DiagGaussian(Likelihood):
     unconstrained_cov: Array = eqx.field(static=False)
     readout: eqx.Module
 

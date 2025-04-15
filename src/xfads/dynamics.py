@@ -1,21 +1,13 @@
 from functools import partial
-from typing import Protocol, Type
+from typing import ClassVar, Protocol, Type
 
 import jax
-from jax import numpy as jnp, nn as jnn, random as jrnd
+from jax import numpy as jnp, random as jrnd
 from jaxtyping import Array, PRNGKeyArray, Scalar
 import equinox as eqx
 
-from .helper import Registry
 from .constraints import constrain_positive, unconstrain_positive
 from .distributions import Approx
-
-
-registry = Registry()
-
-
-def get_class(name) -> Type:
-    return registry.get_class(name)
 
 
 class Noise(Protocol):
@@ -28,15 +20,6 @@ def predict_moment(
     """mu[t](z[t-1])"""
     ztp1 = f(z, u, key=key)
     M2 = approx.noise_moment(noise.cov())
-    # match approx():
-    #     case DiagMVN():
-    #         M2 = noise.cov()
-    #     case FullMVN():
-    #         M2 = jnp.diag(noise.cov())
-    #     case LoRaMVN():
-    #         M2 = jnp.diag(noise.cov())
-    #     case _:
-    #         raise ValueError(f"{approx}")
     moment = approx.canon_to_moment(ztp1, M2)
     return moment
 
@@ -76,7 +59,12 @@ class DiagGaussian(eqx.Module, strict=True):
 
 
 class AbstractDynamics(eqx.Module):
+    registry: ClassVar[dict] = dict()
     noise: eqx.AbstractVar[eqx.Module]
+
+    def __init_subclass__(cls, *args, **kwargs):
+        super().__init_subclass__(*args, **kwargs)
+        AbstractDynamics.registry[cls.__name__] = cls
 
     def cov(self) -> Array:
         return self.noise.cov()
@@ -84,6 +72,9 @@ class AbstractDynamics(eqx.Module):
     def loss(self) -> Scalar:
         return 0.
 
+
+def get_class(name) -> Type:
+    return AbstractDynamics.registry[name]
 
 # @registry.register()
 # class Diffusion(AbstractDynamics):

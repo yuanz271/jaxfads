@@ -2,26 +2,20 @@
 Exponential-family variational distributions
 """
 
+from abc import ABC
 import math
-from typing import Protocol, Type
+from typing import ClassVar, Protocol, Type
 
-import jax
 from jax import numpy as jnp, random as jrnd
 # from jax.nn import softplus  # this version is overflow safe
 from jaxtyping import Array, Scalar, PRNGKeyArray
 import tensorflow_probability.substrates.jax.distributions as tfp
 
-from .helper import Registry
 from .constraints import constrain_positive, unconstrain_positive
 
 
 MIN_VAR = 1e-6
 EPS = 1e-6
-registry = Registry()
-
-
-def get_class(name) -> Type:
-    return registry.get_class(name)
 
 
 def _inv(a):
@@ -71,8 +65,19 @@ class Approx(Protocol):
     def noise_moment(cls, noise_cov) -> Array: ...
 
 
-@registry.register()
-class FullMVN:
+class Distribution(ABC):
+    registry: ClassVar[dict] = dict()
+
+    def __init_subclass__(cls, *args, **kwargs):
+        super().__init_subclass__(*args, **kwargs)
+        Distribution.registry[cls.__name__] = cls
+
+
+def get_class(name) -> Type[Approx]:
+    return Distribution.registry[name]
+
+
+class FullMVN(Distribution):
     @classmethod
     def natural_to_moment(cls, natural: Array) -> Array:
         """Pmu, -P/2 => mu, P"""
@@ -184,8 +189,7 @@ class FullMVN:
         return jnp.diag(noise_cov)
 
 
-@registry.register()
-class LoRaMVN:
+class LoRaMVN(Distribution):
     @classmethod
     def constrain_moment(cls, unconstrained: Array) -> Array:
         n = jnp.size(unconstrained)
@@ -203,8 +207,7 @@ class LoRaMVN:
         return jnp.diag(noise_cov)
 
 
-@registry.register()
-class DiagMVN:
+class DiagMVN(Distribution):
     @classmethod
     def natural_to_moment(cls, natural) -> Array:
         nat1, nat2 = jnp.split(natural, 2)
