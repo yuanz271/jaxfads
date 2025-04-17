@@ -1,9 +1,6 @@
 # stochastic LQR with additive homogenenous noise has the same solution as determinitic dynamics does.
 # instead of doing adjoint to optimize dynamics, we can use XFADS trajectory and iLQR.
 # finite horizon, discrete time
-
-
-
 import jax
 from jax import lax, numpy as jnp, vmap
 from jax.scipy.linalg import cho_factor, cho_solve
@@ -175,7 +172,7 @@ def ilqr_backward(Fx, Fu, cx, cu, Cxx, Cux, Cuu, lam, reg):
 
 
 
-def ilqr(f, z, u, Q, R, *, alphas=None, ftol=1e-7, gtol=1e-4, xtol=1e8, ltol=1e-5, maxiter=500, lam=1., dlam=1., flam=1.6, maxlam=1e10, minlam=1e-6, reg=0, minrr=0):
+def ilqr(f, z, u, Q, R, *, alphas=None, ftol=1e-7, gtol=1e-4, xtol=1e8, ltol=1e-5, maxiter=500, lam=1., dlam=1., flam=1.6, maxlam=1e10, minlam=1e-6, reg=0, minrr=0, verbose=False):
     """
     :param alphas: backtracking coefficients
     :param ftol: reduction exit criterion
@@ -207,7 +204,8 @@ def ilqr(f, z, u, Q, R, *, alphas=None, ftol=1e-7, gtol=1e-4, xtol=1e8, ltol=1e-
     recompute = True
 
     for i in range(maxiter):
-        print(f"Iteration - {i}")
+        if verbose:
+            print(f"Iteration - {i}")
         # >>> STEP 1: differentiate on new trajectory
         if recompute:
             # differentiate dynamics
@@ -247,7 +245,8 @@ def ilqr(f, z, u, Q, R, *, alphas=None, ftol=1e-7, gtol=1e-4, xtol=1e8, ltol=1e-
             alpha = alphas[w]
             expected = -alpha*(dV[0] + alpha*dV[1])
             
-            print(f"{dcost=}, {expected=}")
+            if verbose:
+                print(f"{dcost=}, {expected=}")
 
             if expected > 0:
                 rr = dcost / expected
@@ -255,7 +254,8 @@ def ilqr(f, z, u, Q, R, *, alphas=None, ftol=1e-7, gtol=1e-4, xtol=1e8, ltol=1e-
                 rr = jnp.sign(dcost)
                 # should not occur
             
-            print(f"{rr=}")
+            if verbose:
+                print(f"{rr=}")
             fwd_succeeded = rr >= minrr  # TODO: strict >?
             
             if fwd_succeeded:
@@ -277,18 +277,21 @@ def ilqr(f, z, u, Q, R, *, alphas=None, ftol=1e-7, gtol=1e-4, xtol=1e8, ltol=1e-
 
             if dcost < ftol:
                 # success
-                print("SUCCESS: cost change < tol")
+                if verbose:
+                    print("SUCCESS: cost change < tol")
                 break
         else:
             # increase lambda
             lam, dlam = inc_lam(lam, dlam, flam, minlam)
             
             if lam > maxlam:
-                print("EXIT: lambda > maximum lambda")
+                if verbose:
+                    print("EXIT: lambda > maximum lambda")
                 break
         # <<< STEP 4
     else:
-        print("Maxiter reached.")
+        if verbose:
+            print("Maxiter reached.")
 
     return u, x
 
