@@ -34,6 +34,7 @@ def filter(
     t: Array,
     alpha: Array,
     u: Array,
+    c: Array,
     model,
 ) -> tuple[Array, Array, Array]:
     """
@@ -49,16 +50,16 @@ def filter(
     def ff(carry, obs, expected_moment):
         key, nature_tm1 = carry
         key, subkey = jrandom.split(key)
-        a_t, u_tm1 = obs
+        a_t, u_tm1, c_tm1 = obs
         moment_tm1 = approx.natural_to_moment(nature_tm1)
-        moment_p_t = expected_moment(subkey, moment_tm1, u_tm1)
+        moment_p_t = expected_moment(subkey, moment_tm1, u_tm1, c_tm1)
         nature_p_t = approx.moment_to_natural(moment_p_t)
         nature_t = nature_p_t + a_t
         return (key, nature_t), (moment_p_t, nature_p_t, nature_t)
 
     key, subkey = jrandom.split(key)
     _, (moment_p, _, nature_f) = scan(
-        partial(ff, expected_moment=expected_moment_forward), init=(subkey, nature_f_1), xs=(alpha[1:], u[:-1])  # t = 2 ... T+1
+        partial(ff, expected_moment=expected_moment_forward), init=(subkey, nature_f_1), xs=(alpha[1:], u[:-1], c[:-1])  # t = 2 ... T+1
     )
     nature_f = jnp.vstack((nature_f_1, nature_f))  # 1...T
 
@@ -73,6 +74,7 @@ def bismooth(
     t: Array,
     alpha: Array,
     u: Array,
+    c: Array,
     model,
 ) -> tuple[Array, Array, Array]:
     """
@@ -98,9 +100,9 @@ def bismooth(
     def ff(carry, obs, expected_moment):
         key, nature_f_tm1 = carry
         key_tp1, key_t = jrandom.split(key, 2)
-        update_obs_t, u = obs
+        update_obs_t, u, c = obs
         moment_f_tm1 = approx.natural_to_moment(nature_f_tm1)
-        moment_p_t = expected_moment(key_t, moment_f_tm1, u)
+        moment_p_t = expected_moment(key_t, moment_f_tm1, u, c)
         nature_p_t = approx.moment_to_natural(moment_p_t)
         nature_f_t = nature_p_t + update_obs_t
         return (key_tp1, nature_f_t), (moment_p_t, nature_p_t, nature_f_t)
@@ -108,17 +110,17 @@ def bismooth(
     # Forward
     key, forward_key = jrandom.split(key, 2)
     _, (_, _, nature_f) = scan(
-        partial(ff, expected_moment=expected_moment_forward), init=(forward_key, nature_f_1), xs=(alpha[1:], u[:-1])  # t = 2 ... T+1
+        partial(ff, expected_moment=expected_moment_forward), init=(forward_key, nature_f_1), xs=(alpha[1:], u[:-1], c[:-1])  # t = 2 ... T+1
     )
     nature_f = jnp.vstack((nature_f_1, nature_f))  # 1...T
 
     ## Backward
     key, subkey = jrandom.split(key, 2)
-    (_, nature_b_Tp1), _ = ff((subkey, nature_f[-1]), (jnp.zeros_like(nature_prior), u[-1]), expected_moment_forward)
+    (_, nature_b_Tp1), _ = ff((subkey, nature_f[-1]), (jnp.zeros_like(nature_prior), u[-1], c[-1]), expected_moment_forward)
 
     key, backward_key = jrandom.split(key, 2)
     _, (_, nature_p_b, _) = scan(
-        partial(ff, expected_moment=expected_moment_backward), init=(backward_key, nature_b_Tp1), xs=(alpha, u), reverse=True
+        partial(ff, expected_moment=expected_moment_backward), init=(backward_key, nature_b_Tp1), xs=(alpha, u, c), reverse=True
     )
 
     nature_s = nature_f + nature_p_b - jnp.expand_dims(nature_prior, axis=0)

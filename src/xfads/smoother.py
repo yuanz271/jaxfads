@@ -66,6 +66,7 @@ class XFADS(Model):
     def __post_init__(self):
         state_dim = self.conf.state_dim
         input_dim = self.conf.input_dim
+        ctx_dim = self.conf.ctx_dim
         observation_dim = self.conf.observation_dim
         approx: str = self.conf.approx
         mc_size = self.conf.mc_size
@@ -106,6 +107,7 @@ class XFADS(Model):
             key=subkey,
             state_dim=state_dim,
             input_dim=input_dim,
+            ctx_dim=ctx_dim,
             cov=state_noise,
             **dyn_kwargs,
         )
@@ -148,7 +150,7 @@ class XFADS(Model):
 
         self.unconstrained_prior_natural = approx.unconstrain_natural(approx.prior_natural(state_dim))
     
-    def init(self, t, y, u):
+    def init(self, t, y, u, c):
         mean_y = jnp.mean(y, axis=0)
         biases = jnp.log(jnp.maximum(mean_y, 1e-6))
         return eqx.tree_at(lambda model: model.likelihood.readout.biases, self, biases)
@@ -156,7 +158,7 @@ class XFADS(Model):
     def prior_natural(self) -> Array:
         return self.hyperparam.approx.constrain_natural(self.unconstrained_prior_natural)
 
-    def __call__(self, t, y, u, *, key) -> tuple[Array, Array, Array]:
+    def __call__(self, t, y, u, c, *, key) -> tuple[Array, Array, Array]:
         batch_alpha_encode: Callable = jax.vmap(jax.vmap(self.alpha_encoder))
         batch_constrain_natural: Callable = jax.vmap(jax.vmap(self.hyperparam.approx.constrain_natural))
         batch_beta_encode: Callable = jax.vmap(self.beta_encoder)
@@ -206,4 +208,4 @@ class XFADS(Model):
         key, subkey = jrnd.split(key)
         alpha = batch_encode(y, subkey)
 
-        return batch_smooth(jrnd.split(key, len(t)), t, alpha, u)
+        return batch_smooth(jrnd.split(key, len(t)), t, alpha, u, c)

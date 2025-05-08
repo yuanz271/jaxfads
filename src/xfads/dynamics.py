@@ -15,10 +15,10 @@ class Noise(Protocol):
 
 
 def predict_moment(
-    z: Array, u: Array, f, noise: Noise, approx: Type[Approx], *, key=None
+    z: Array, u: Array, c: Array, f, noise: Noise, approx: Type[Approx], *, key=None
 ) -> Array:
     """mu[t](z[t-1])"""
-    ztp1 = f(z, u, key=key)
+    ztp1 = f(z, u, c, key=key)
     M2 = approx.noise_moment(noise.cov())
     moment = approx.canon_to_moment(ztp1, M2)
     return moment
@@ -28,6 +28,7 @@ def sample_expected_moment(
     key: PRNGKeyArray,
     moment: Array,
     u: Array,
+    c: Array,
     f,
     noise: Noise,
     approx: Type[Approx],
@@ -37,11 +38,13 @@ def sample_expected_moment(
     key, subkey = jrnd.split(key)
     z = approx.sample_by_moment(subkey, moment, mc_size)
     u_shape = (mc_size,) + u.shape
+    c_shape = (mc_size,) + c.shape
     u = jnp.broadcast_to(u, shape=u_shape)
+    c = jnp.broadcast_to(c, shape=c_shape)
     f_vmap_sample_axis = jax.vmap(
-        partial(predict_moment, f=f, noise=noise, approx=approx, key=key), in_axes=(0, 0)
+        partial(predict_moment, f=f, noise=noise, approx=approx, key=key), in_axes=(0, 0, 0)
     )
-    moment = jnp.mean(f_vmap_sample_axis(z, u), axis=0)
+    moment = jnp.mean(f_vmap_sample_axis(z, u, c), axis=0)
     return moment
 
 
@@ -75,26 +78,3 @@ class AbstractDynamics(eqx.Module):
 
 def get_class(name) -> Type:
     return AbstractDynamics.registry[name]
-
-# @registry.register()
-# class Diffusion(AbstractDynamics):
-#     unconstrained_cov: Array
-
-#     def __init__(
-#         self,
-#         state_dim: int,
-#         input_dim: int,
-#         width: int,
-#         depth: int,
-#         cov,
-#         *,
-#         key: PRNGKeyArray,
-#         **kwargs,
-#     ):
-#         self.unconstrained_cov = jnp.full(state_dim, fill_value=jax.scipy.special.logit(cov))
-
-#     def __call__(self, z: Array, u: Array) -> Array:
-#         return jnp.sqrt(1 - self.cov()) * z
-
-#     def cov(self) -> Array:
-#         return jnn.sigmoid(self.unconstrained_cov)
