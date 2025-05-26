@@ -1,56 +1,15 @@
 from functools import partial
 from typing import Type, Callable
 
-from jaxtyping import Array, PRNGKeyArray
+from jaxtyping import Array
 import jax
 from jax import numpy as jnp, random as jrnd
 import equinox as eqx
 from gearax.models import Model
 
 from . import core, distributions, dynamics, observations, encoders
+from .nn import DataMasker
 from .core import Hyperparam, Mode
-
-
-class DataMasker(eqx.Module, strict=True):
-    p: float
-    inference: bool
-
-    def __init__(
-        self,
-        p: float = 0.5,
-        inference: bool = False,
-    ):
-
-        self.p = p
-        self.inference = inference
-
-    @jax.named_scope("xfads.DataMasker")
-    def __call__(
-        self,
-        x: Array,
-        *,
-        key: PRNGKeyArray | None = None,
-        inference: bool | None = None,
-    ) -> Array:
-        
-        if inference is None:
-            inference = self.inference
-
-        if isinstance(self.p, (int, float)) and self.p == 0:
-            inference = True
-        
-        shape = x.shape[:2] + (1,)  # broadcast to the last dimension
-        if inference:
-            return key, jnp.ones(shape)
-        elif key is None:
-            raise RuntimeError(
-                f"{self.__name__} requires a key when running in non-deterministic mode."
-            )
-        else:
-            key, subkey = jrnd.split(key)
-            q  = 1 - jax.lax.stop_gradient(self.p)
-            mask = jrnd.bernoulli(key, q, shape) 
-            return subkey, mask
 
 
 class XFADS(Model):
@@ -84,7 +43,7 @@ class XFADS(Model):
         fb_penalty = self.conf.fb_penalty
         noise_penalty = self.conf.noise_penalty
 
-        key = jrnd.key(seed) 
+        key = jrnd.key(seed)
 
         self.masker: DataMasker = DataMasker(dropout)
 
@@ -111,7 +70,7 @@ class XFADS(Model):
             cov=state_noise,
             **dyn_kwargs,
         )
-        
+
         if backward is not None:
             dynamics_class = dynamics.get_class(backward)
             key, subkey = jrnd.split(key)
@@ -134,13 +93,17 @@ class XFADS(Model):
             n_steps=n_steps,
             **obs_kwargs,
         )
-        
+
         #####
         key, subkey = jrnd.split(key)
-        self.alpha_encoder = encoders.AlphaEncoder(state_dim, observation_dim, approx=approx, key=subkey, **enc_kwargs)
-        
+        self.alpha_encoder = encoders.AlphaEncoder(
+            state_dim, observation_dim, approx=approx, key=subkey, **enc_kwargs
+        )
+
         key, subkey = jrnd.split(key)
-        self.beta_encoder = encoders.BetaEncoder(state_dim, approx=approx, key=subkey, **enc_kwargs)
+        self.beta_encoder = encoders.BetaEncoder(
+            state_dim, approx=approx, key=subkey, **enc_kwargs
+        )
         #####
 
         # if "l" in static_params:
@@ -148,53 +111,71 @@ class XFADS(Model):
         # if "s" in static_params:
         #     self.forward.set_static()
 
-        self.unconstrained_prior_natural = approx.unconstrain_natural(approx.prior_natural(state_dim))
-    
+        self.unconstrained_prior_natural = approx.unconstrain_natural(
+            approx.prior_natural(state_dim)
+        )
+
     def init(self, t, y, u, c):
         mean_y = jnp.mean(y, axis=0)
         biases = jnp.log(jnp.maximum(mean_y, 1e-6))
         return eqx.tree_at(lambda model: model.likelihood.readout.biases, self, biases)
-    
+
     def prior_natural(self) -> Array:
-        return self.hyperparam.approx.constrain_natural(self.unconstrained_prior_natural)
+        return self.hyperparam.approx.constrain_natural(
+            self.unconstrained_prior_natural
+        )
 
     def __call__(self, t, y, u, c, *, key) -> tuple[Array, Array, Array]:
         batch_alpha_encode: Callable = jax.vmap(jax.vmap(self.alpha_encoder))
-        batch_constrain_natural: Callable = jax.vmap(jax.vmap(self.hyperparam.approx.constrain_natural))
+        batch_constrain_natural: Callable = jax.vmap(
+            jax.vmap(self.hyperparam.approx.constrain_natural)
+        )
         batch_beta_encode: Callable = jax.vmap(self.beta_encoder)
 
         match self.hyperparam.mode:
             case Mode.BIFILTER:
                 batch_smooth = jax.vmap(partial(core.bismooth, model=self))
+
                 def batch_encode(y, key) -> Array:
-                    mask_y = jnp.all(jnp.isfinite(y), axis=2, keepdims=True)  # nonfinite are missing values
+                    mask_y = jnp.all(
+                        jnp.isfinite(y), axis=2, keepdims=True
+                    )  # nonfinite are missing values
                     # chex.assert_equal_shape((y, valid_mask), dims=(0,1))
                     y = jnp.where(mask_y, y, 0)
 
                     key, subkey = jrnd.split(key)
-                    a = batch_constrain_natural(batch_alpha_encode(y, key=jrnd.split(subkey, y.shape[:2])))
+                    a = batch_constrain_natural(
+                        batch_alpha_encode(y, key=jrnd.split(subkey, y.shape[:2]))
+                    )
                     a = jnp.where(mask_y, a, 0)
 
-                    key, mask_a= self.masker(a, key=key)
+                    key, mask_a = self.masker(a, key=key)
                     a = jnp.where(mask_a, a, 0)
 
                     return a
             case _:
                 batch_smooth = jax.vmap(partial(core.filter, model=self))
+
                 def batch_encode(y, key) -> Array:
                     # handling missing values
-                    mask_y = jnp.all(jnp.isfinite(y), axis=2, keepdims=True)  # nonfinite are missing values
+                    mask_y = jnp.all(
+                        jnp.isfinite(y), axis=2, keepdims=True
+                    )  # nonfinite are missing values
                     # chex.assert_equal_shape((y, mask_y), dims=(0, 1))
                     y = jnp.where(mask_y, y, 0)
-                    
+
                     key, subkey = jrnd.split(key)
-                    a = batch_constrain_natural(batch_alpha_encode(y, key=jrnd.split(subkey, y.shape[:2])))
+                    a = batch_constrain_natural(
+                        batch_alpha_encode(y, key=jrnd.split(subkey, y.shape[:2]))
+                    )
                     a = jnp.where(mask_y, a, 0)  # miss_values have no updates to state
 
                     key, mask_a = self.masker(y, key=key)
                     a = jnp.where(mask_a, a, 0)  # pseudo missing values
-        
-                    b = batch_constrain_natural(batch_beta_encode(a, key=jrnd.split(key, a.shape[0])))
+
+                    b = batch_constrain_natural(
+                        batch_beta_encode(a, key=jrnd.split(key, a.shape[0]))
+                    )
                     key, mask_b = self.masker(y, key=key)
                     b = jnp.where(mask_b, b, 0)  # filter only steps
 
@@ -204,8 +185,30 @@ class XFADS(Model):
                     # ab = jnp.where(mask_ab, ab, 0)
 
                     return ab
-                
+
         key, subkey = jrnd.split(key)
         alpha = batch_encode(y, subkey)
 
         return batch_smooth(jrnd.split(key, len(t)), t, alpha, u, c)
+
+
+# @dataclass
+# class ModelConf:
+#     seed: int
+#     observation_dim: int
+#     state_dim: int
+#     input_dim: int = 0
+#     ctx_dim: int = 0
+#     approx: str = "DiagMVN"
+#     mc_size: int = 10
+#     dropout: float = 0.5
+#     mode: str = "pseudo"
+#     forward: str
+#     backward: str | None = None
+#     state_noise: float = 1
+#     observation: str = "Poisson"
+#     n_steps: int = 0
+#     dyn_kwargs: dict
+#     obs_kwargs: dict
+#     enc_kwargs: dict
+#     noise_penalty: float = 0

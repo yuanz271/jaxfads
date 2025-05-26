@@ -206,9 +206,17 @@ def ilqr(x0, u, c, target, Q, R, f, Df, max_iter=100, tol=1e-6, verbose=False):
         )
 
         converge = abs(cost - new_cost) < tol
-        
+
         if verbose:
-            jax.debug.print("Iteration {iteration}: cost = {cost:.4f}, new_cost = {new_cost:.4f}, alpha = {alpha:.4f}, line search = {success}, converge = {converge}", iteration=i, cost=cost, new_cost=new_cost, alpha=alpha, success=success, converge=converge)
+            jax.debug.print(
+                "Iteration {iteration}: cost = {cost:.4f}, new_cost = {new_cost:.4f}, alpha = {alpha:.4f}, line search = {success}, converge = {converge}",
+                iteration=i,
+                cost=cost,
+                new_cost=new_cost,
+                alpha=alpha,
+                success=success,
+                converge=converge,
+            )
 
         return i + 1, converge, success, new_cost, x_optimal, u_optimal
 
@@ -218,4 +226,4 @@ def ilqr(x0, u, c, target, Q, R, f, Df, max_iter=100, tol=1e-6, verbose=False):
 
     i, converge, success, cost, x_optimal, u_optimal = carry
 
-    return u_optimal, x_optimal
+    return u_optimal, x_optimal, success

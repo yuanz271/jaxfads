@@ -9,7 +9,6 @@ from xfads.ilqr import ilqr
 
 
 def test_ilqr():
-
     def dynamics(x, u, c):
         return x + (0.5 * x * x + u) * 0.1
 
@@ -32,7 +31,17 @@ def test_ilqr():
 
     # Run iLQR:
     pilqr = jax.jit(
-        partial(ilqr, c=c, target=target, Q=Q, R=R, f=dynamics, Df=jac, max_iter=10, verbose=True)
+        partial(
+            ilqr,
+            c=c,
+            target=target,
+            Q=Q,
+            R=R,
+            f=dynamics,
+            Df=jac,
+            max_iter=10,
+            verbose=True,
+        )
     )
     vilqr = vmap(pilqr)
 
@@ -41,7 +50,7 @@ def test_ilqr():
     u_opt, x_opt = vilqr(x0, u_init)
 
     # Plotting position tracking
-    time = np.linspace(0, T * dt, T + 1)
+    # time = np.linspace(0, T * dt, T + 1)
     plt.figure(figsize=(10, 5))
     plt.plot(*target.T, label="Target Trajectory", linewidth=1)
     for x in x_opt:

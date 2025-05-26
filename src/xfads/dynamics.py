@@ -42,7 +42,8 @@ def sample_expected_moment(
     u = jnp.broadcast_to(u, shape=u_shape)
     c = jnp.broadcast_to(c, shape=c_shape)
     f_vmap_sample_axis = jax.vmap(
-        partial(predict_moment, f=f, noise=noise, approx=approx, key=key), in_axes=(0, 0, 0)
+        partial(predict_moment, f=f, noise=noise, approx=approx, key=key),
+        in_axes=(0, 0, 0),
     )
     moment = jnp.mean(f_vmap_sample_axis(z, u, c), axis=0)
     return moment
@@ -50,7 +51,7 @@ def sample_expected_moment(
 
 class DiagGaussian(eqx.Module, strict=True):
     unconstrained_cov: Array
-    
+
     def __init__(self, cov, size):
         self.unconstrained_cov = jnp.full(size, fill_value=unconstrain_positive(cov))
 
@@ -71,9 +72,9 @@ class AbstractDynamics(eqx.Module):
 
     def cov(self) -> Array:
         return self.noise.cov()
-    
+
     def loss(self) -> Scalar:
-        return 0.
+        return 0.0
 
 
 def get_class(name) -> Type:

@@ -11,16 +11,23 @@ class AlphaEncoder(eqx.Module):
     # approx: Type = eqx.field(static=True)
     layer: eqx.Module
 
-    def __init__(self, state_dim, observation_dim, depth, width, approx, *, key, dropout=None):
+    def __init__(
+        self, state_dim, observation_dim, depth, width, approx, *, key, dropout=None
+    ):
         # self.approx = approx
-        
+
         self.layer = make_mlp(
-            observation_dim, approx.param_size(state_dim), width, depth, key=key, dropout=dropout
+            observation_dim,
+            approx.param_size(state_dim),
+            width,
+            depth,
+            key=key,
+            dropout=dropout,
         )
-    
+
     def __call__(self, y, *, key=None):
         return self.layer(y, key=key)
-    
+
 
 class BetaEncoder(eqx.Module):
     # approx: Type = eqx.field(static=True)
@@ -31,7 +38,7 @@ class BetaEncoder(eqx.Module):
 
     def __init__(self, state_dim, depth, width, approx, *, key, dropout=None):
         # self.approx = approx
-        
+
         param_size = approx.param_size(state_dim)
 
         key, subkey = jrnd.split(key)
@@ -46,15 +53,16 @@ class BetaEncoder(eqx.Module):
 
         if dropout is not None:
             self.dropout = eqx.nn.Dropout(dropout)
-    
+
     def __call__(self, a: Float[Array, "t h"], *, key):
         """
         :param a: natural form observation information
         """
+
         def step(h, inp):
             h = self.cell(inp, h)
             return h, h
-        
+
         _, hs = jax.lax.scan(step, init=self.h0, xs=a, reverse=True)
 
         if self.dropout is not None:

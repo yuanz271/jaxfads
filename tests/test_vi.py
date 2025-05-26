@@ -16,18 +16,18 @@
 #     chex.assert_shape(y, (neural_dim,))
 #     readout = enn.Linear(state_dim, neural_dim, key=key)
 #     lik = PoissonLik(readout)
-    
+
 #     m = jnp.ones(state_dim)
 #     cov = jnp.eye(state_dim)
 #     moment = approx.canon_to_moment(m, cov)
 #     chex.assert_shape(moment, (state_dim * state_dim + state_dim,))
-    
+
 #     covariate_predict = jnp.zeros_like(y)
 
 #     ell = lik.eloglik(key, moment, covariate_predict, y, approx, mc_size=10)
 #     chex.assert_shape(ell, y.shape)
 #     chex.assert_tree_all_finite(ell)
-    
+
 
 # def test_elbo(spec):
 #     key = jrnd.key(0)
@@ -39,7 +39,7 @@
 #     cov1 = jnp.eye(state_dim)
 #     m2 = jnp.zeros(state_dim)
 #     cov2 = jnp.eye(state_dim)
-    
+
 #     moment1 = MVN.canon_to_moment(m1, cov1)
 #     moment2 = MVN.canon_to_moment(m2, cov2)
 

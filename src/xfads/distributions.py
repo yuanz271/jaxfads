@@ -7,6 +7,7 @@ import math
 from typing import ClassVar, Protocol, Type
 
 from jax import numpy as jnp, random as jrnd
+
 # from jax.nn import softplus  # this version is overflow safe
 from jaxtyping import Array, Scalar, PRNGKeyArray
 import tensorflow_probability.substrates.jax.distributions as tfp

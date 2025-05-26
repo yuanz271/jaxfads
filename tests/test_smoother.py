@@ -29,7 +29,7 @@ class Mock(AbstractDynamics):
         pass
 
     def loss(self):
-        return 0.
+        return 0.0
 
 
 def test_constructor():
@@ -37,14 +37,14 @@ def test_constructor():
     y_size = 10
     z_size = 2
     u_size = 1
-    state_noise = 1.
+    state_noise = 1.0
     mc_size = 10
     seed = 0
     observation = "Poisson"
     dropout = 0.5
     width = 16
     depth = 2
-    emission_noise = 1.
+    emission_noise = 1.0
     normed_readout = True
 
     model_conf = OmegaConf.create(
@@ -70,9 +70,7 @@ def test_constructor():
                 linear_input_size=1,
                 dropout=dropout,
             ),
-            enc_kwargs=dict(
-                width=width, depth=depth, dropout=dropout
-            ),
+            enc_kwargs=dict(width=width, depth=depth, dropout=dropout),
             obs_kwargs=dict(
                 emission_noise=emission_noise,
                 norm_readout=normed_readout,
@@ -80,7 +78,7 @@ def test_constructor():
             ),
         )
     )
-    
+
     model = XFADS(model_conf)
 
     with TemporaryDirectory() as tmp_dir:

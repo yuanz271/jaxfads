@@ -4,7 +4,12 @@ import chex
 from jaxtyping import Array
 
 from xfads.distributions import DiagMVN
-from xfads.dynamics import AbstractDynamics, predict_moment, sample_expected_moment, DiagGaussian
+from xfads.dynamics import (
+    AbstractDynamics,
+    predict_moment,
+    sample_expected_moment,
+    DiagGaussian,
+)
 from xfads.nn import make_mlp
 
 
@@ -25,7 +30,15 @@ class Nonlinear(AbstractDynamics):
         **kwargs,
     ):
         self.noise = DiagGaussian(cov, state_dim)
-        self.f = make_mlp(state_dim + input_dim, state_dim, width, depth, key=key, final_bias=False, dropout=dropout)
+        self.f = make_mlp(
+            state_dim + input_dim,
+            state_dim,
+            width,
+            depth,
+            key=key,
+            final_bias=False,
+            dropout=dropout,
+        )
 
     def __call__(self, z: Array, u: Array, *, key=None) -> Array:
         x = jnp.concatenate((z, u), axis=-1)
@@ -37,10 +50,10 @@ class Nonlinear(AbstractDynamics):
 
 def test_predict_moment(spec):
     key = jrnd.key(0)
-    state_dim = spec['state_dim']
-    input_dim = spec['input_dim']
+    state_dim = spec["state_dim"]
+    input_dim = spec["input_dim"]
 
-    f = Nonlinear(state_dim, input_dim, spec['width'], spec['depth'], key=key, cov=1.)
+    f = Nonlinear(state_dim, input_dim, spec["width"], spec["depth"], key=key, cov=1.0)
     noise = DiagGaussian(1, state_dim)
 
     z = jrnd.normal(key, (state_dim,))
@@ -52,15 +65,15 @@ def test_predict_moment(spec):
 
 def test_sample_expected_moment(spec):
     key = jrnd.key(0)
-    state_dim = spec['state_dim']
-    input_dim = spec['input_dim']
+    state_dim = spec["state_dim"]
+    input_dim = spec["input_dim"]
 
-    f = Nonlinear(state_dim, input_dim, spec['width'], spec['depth'], key=key, cov=1.)
+    f = Nonlinear(state_dim, input_dim, spec["width"], spec["depth"], key=key, cov=1.0)
     noise = DiagGaussian(1, state_dim)
 
     z = jrnd.normal(key, (state_dim,))
     u = jrnd.normal(key, (input_dim,))
-    
+
     moment = predict_moment(z, u, f, noise, DiagMVN)
     moment = sample_expected_moment(key, moment, u, f, noise, DiagMVN, 10)
     chex.assert_shape(moment, (DiagMVN.param_size(state_dim),))

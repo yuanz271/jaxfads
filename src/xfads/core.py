@@ -41,9 +41,17 @@ def filter(
     :param alpha:
     """
     approx = model.hyperparam.approx
-    nature_p_1 = model.prior_natural()  # TODO: where should prior belongs, approx or dynamics?
-    
-    expected_moment_forward = partial(sample_expected_moment, f=model.forward, noise=model.forward, approx=approx, mc_size=model.hyperparam.mc_size)
+    nature_p_1 = (
+        model.prior_natural()
+    )  # TODO: where should prior belongs, approx or dynamics?
+
+    expected_moment_forward = partial(
+        sample_expected_moment,
+        f=model.forward,
+        noise=model.forward,
+        approx=approx,
+        mc_size=model.hyperparam.mc_size,
+    )
 
     nature_f_1 = nature_p_1 + alpha[0]
 
@@ -59,12 +67,16 @@ def filter(
 
     key, subkey = jrandom.split(key)
     _, (moment_p, _, nature_f) = scan(
-        partial(ff, expected_moment=expected_moment_forward), init=(subkey, nature_f_1), xs=(alpha[1:], u[:-1], c[:-1])  # t = 2 ... T+1
+        partial(ff, expected_moment=expected_moment_forward),
+        init=(subkey, nature_f_1),
+        xs=(alpha[1:], u[:-1], c[:-1]),  # t = 2 ... T+1
     )
     nature_f = jnp.vstack((nature_f_1, nature_f))  # 1...T
 
     moment_f = jax.vmap(approx.natural_to_moment)(nature_f)
-    moment_p = jnp.vstack((approx.natural_to_moment(nature_f_1), moment_p))  # prediction of t=1 is the prior
+    moment_p = jnp.vstack(
+        (approx.natural_to_moment(nature_f_1), moment_p)
+    )  # prediction of t=1 is the prior
 
     return nature_f, moment_f, moment_p
 
@@ -92,8 +104,20 @@ def bismooth(
     nature_prior = model.prior_natural()
 
     natural_to_moment = jax.vmap(approx.natural_to_moment)
-    expected_moment_forward = partial(sample_expected_moment, f=model.forward, noise=model.forward, approx=approx, mc_size=hyperparam.mc_size)
-    expected_moment_backward = partial(sample_expected_moment, f=model.backward, noise=model.backward, approx=approx, mc_size=hyperparam.mc_size)    
+    expected_moment_forward = partial(
+        sample_expected_moment,
+        f=model.forward,
+        noise=model.forward,
+        approx=approx,
+        mc_size=hyperparam.mc_size,
+    )
+    expected_moment_backward = partial(
+        sample_expected_moment,
+        f=model.backward,
+        noise=model.backward,
+        approx=approx,
+        mc_size=hyperparam.mc_size,
+    )
 
     nature_f_1 = nature_prior + alpha[0]
 
@@ -110,22 +134,31 @@ def bismooth(
     # Forward
     key, forward_key = jrandom.split(key, 2)
     _, (_, _, nature_f) = scan(
-        partial(ff, expected_moment=expected_moment_forward), init=(forward_key, nature_f_1), xs=(alpha[1:], u[:-1], c[:-1])  # t = 2 ... T+1
+        partial(ff, expected_moment=expected_moment_forward),
+        init=(forward_key, nature_f_1),
+        xs=(alpha[1:], u[:-1], c[:-1]),  # t = 2 ... T+1
     )
     nature_f = jnp.vstack((nature_f_1, nature_f))  # 1...T
 
     ## Backward
     key, subkey = jrandom.split(key, 2)
-    (_, nature_b_Tp1), _ = ff((subkey, nature_f[-1]), (jnp.zeros_like(nature_prior), u[-1], c[-1]), expected_moment_forward)
+    (_, nature_b_Tp1), _ = ff(
+        (subkey, nature_f[-1]),
+        (jnp.zeros_like(nature_prior), u[-1], c[-1]),
+        expected_moment_forward,
+    )
 
     key, backward_key = jrandom.split(key, 2)
     _, (_, nature_p_b, _) = scan(
-        partial(ff, expected_moment=expected_moment_backward), init=(backward_key, nature_b_Tp1), xs=(alpha, u, c), reverse=True
+        partial(ff, expected_moment=expected_moment_backward),
+        init=(backward_key, nature_b_Tp1),
+        xs=(alpha, u, c),
+        reverse=True,
     )
 
     nature_s = nature_f + nature_p_b - jnp.expand_dims(nature_prior, axis=0)
     moment_s = natural_to_moment(nature_s)
-    
+
     # expectation should be under smoothing distribution
     keys = jrandom.split(key, jnp.size(moment_s, 0))
     moment_p = jax.vmap(expected_moment_forward)(keys, moment_s, u)

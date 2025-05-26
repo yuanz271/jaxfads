@@ -13,8 +13,9 @@ from . import constraints
 
 
 _MIN_NORM = 1e-6
-MAX_EXP = 5.
+MAX_EXP = 5.0
 EPS = np.finfo(np.float32).eps
+
 
 def make_mlp(
     in_size,
@@ -42,7 +43,7 @@ def make_mlp(
         layers.append(enn.Lambda(activation))
     if dropout is not None:
         layers.append(enn.Dropout(dropout))
-    
+
     return enn.Sequential(layers)
 
 
@@ -74,8 +75,10 @@ class WeightNorm(Module):
         self.axis = axis
 
     def _norm(self, w):
-        return _norm_except_axis(w, norm=partial(jnp.linalg.norm, keepdims=True), axis=self.axis)
-    
+        return _norm_except_axis(
+            w, norm=partial(jnp.linalg.norm, keepdims=True), axis=self.axis
+        )
+
     @property
     def weight(self) -> Array:
         w = getattr(self.layer, self.weight_name)
@@ -176,7 +179,19 @@ class RBFN(Module):
         return self.readout(kernels)
 
 
-class DataMask(Module, strict=True):
+class Param(Module):
+    unconstrained: Array
+    constraint: constraints.AbstractConstraint
+
+    def __init__(self, value: ArrayLike, constraint: constraints.AbstractConstraint):
+        self.constraint = constraint
+        self.unconstrained = constraint.unconstrain(value)
+
+    def __call__(self) -> Array:
+        return self.constraint(self.unconstrained)
+
+
+class DataMasker(eqx.Module, strict=True):
     p: float
     inference: bool
 
@@ -185,11 +200,10 @@ class DataMask(Module, strict=True):
         p: float = 0.5,
         inference: bool = False,
     ):
-
         self.p = p
         self.inference = inference
 
-    @jax.named_scope("xfads.nn.DataMask")
+    @jax.named_scope("xfads.DataMasker")
     def __call__(
         self,
         x: Array,
@@ -197,13 +211,12 @@ class DataMask(Module, strict=True):
         key: PRNGKeyArray | None = None,
         inference: bool | None = None,
     ) -> Array:
-        
         if inference is None:
             inference = self.inference
 
         if isinstance(self.p, (int, float)) and self.p == 0:
             inference = True
-        
+
         shape = x.shape[:2] + (1,)  # broadcast to the last dimension
         if inference:
             return key, jnp.ones(shape)
@@ -213,18 +226,6 @@ class DataMask(Module, strict=True):
             )
         else:
             key, subkey = jrnd.split(key)
-            q  = 1 - jax.lax.stop_gradient(self.p)
-            mask = jrnd.bernoulli(key, q, shape) 
+            q = 1 - jax.lax.stop_gradient(self.p)
+            mask = jrnd.bernoulli(key, q, shape)
             return subkey, mask
-
-
-class Param(Module):
-    unconstrained: Array
-    constraint: constraints.AbstractConstraint
-    
-    def __init__(self, value: ArrayLike, constraint: constraints.AbstractConstraint):
-        self.constraint = constraint
-        self.unconstrained = constraint.unconstrain(value)
-
-    def __call__(self) -> Array:
-        return self.constraint(self.unconstrained)

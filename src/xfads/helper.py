@@ -24,10 +24,10 @@ class SingletonMeta(type):
 #                 name = klass.__name__
 #             if name in self._registry:
 #                 warnings.warn(f"{name} exists")
-#             else:    
+#             else:
 #                 self._registry[name] = klass
 #             return klass
-        
+
 #         return decorate
 
 #     def get_class(self, name):
@@ -36,10 +36,9 @@ class SingletonMeta(type):
 
 
 def newkey(func):
-
     @functools.wraps(func)
     def wrapper(*args, key, **kwargs):
         key, subkey = jrnd.split(key)
         return subkey, func(*args, key=key, **kwargs)
-    
+
     return wrapper
