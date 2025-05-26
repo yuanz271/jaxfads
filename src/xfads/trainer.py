@@ -238,7 +238,7 @@ def train_test_split(arrays, *, rng, test_ratio=None, test_size=None, train_size
     ), tuple(array[perm[:test_size]] for array in arrays)
 
 
-def jaxify(arrays, sharding=None):
+def to_shard(arrays, sharding=None):
     return tuple(jax.device_put(arr, sharding) for arr in arrays)
 
 
@@ -280,8 +280,8 @@ def train_fast(model: eqx.Module, data, *, conf) -> eqx.Module:
         data, rng=rng, test_size=valid_size, train_size=train_size
     )
 
-    train_set = jaxify(train_set, sharding)
-    valid_set = jaxify(valid_set, sharding)
+    train_set = to_shard(train_set, sharding)
+    valid_set = to_shard(valid_set, sharding)
     # <<<
 
     # >>> Prepare optimizer
