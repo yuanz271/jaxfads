@@ -1,11 +1,10 @@
+from collections.abc import Callable
 from functools import partial
 import math
-from typing import Callable, Optional
 
-import numpy as np
 import jax
 from jax import nn as jnn, random as jrnd, numpy as jnp
-from jaxtyping import ArrayLike, PRNGKeyArray, Array, Scalar
+from jaxtyping import PRNGKeyArray, Array, Scalar
 import equinox as eqx
 from equinox import nn as enn, Module
 
@@ -14,7 +13,7 @@ from . import constraints
 
 _MIN_NORM = 1e-6
 MAX_EXP = 5.0
-EPS = np.finfo(np.float32).eps
+EPS = jnp.finfo(jnp.float32).eps
 
 
 def make_mlp(
@@ -47,7 +46,7 @@ def make_mlp(
     return enn.Sequential(layers)
 
 
-def _norm_except_axis(v: Array, norm: Callable[[Array], Scalar], axis: Optional[int]):
+def _norm_except_axis(v: Array, norm: Callable[[Array], Scalar], axis: int | None):
     if axis is None:
         return norm(v)
     else:
@@ -57,13 +56,13 @@ def _norm_except_axis(v: Array, norm: Callable[[Array], Scalar], axis: Optional[
 class WeightNorm(Module):
     layer: enn.Linear
     weight_name: str = eqx.field(static=True)
-    axis: Optional[int] = eqx.field(static=True)
+    axis: int | None = eqx.field(static=True)
 
     def __init__(
         self,
         layer: enn.Linear,
         weight_name: str = "weight",
-        axis: Optional[int] = None,
+        axis: int | None = None,
     ):
         """
         :param layer: The layer to wrap. equinox.nn.Linear
@@ -87,7 +86,7 @@ class WeightNorm(Module):
         return w
 
     @property
-    def bias(self) -> Array:
+    def bias(self) -> Array | None:
         return self.layer.bias
 
     @jax.named_scope("xfads.nn.WeightNorm")
@@ -103,7 +102,7 @@ class WeightNorm(Module):
 
 
 class StationaryLinear(Module):
-    layer: Module
+    layer: enn.Linear | WeightNorm
 
     def __init__(self, state_dim, observation_dim, *, key, norm_readout: bool = False):
         self.layer = enn.Linear(state_dim, observation_dim, key=key, use_bias=True)
@@ -111,17 +110,17 @@ class StationaryLinear(Module):
         if norm_readout:
             self.layer = WeightNorm(self.layer)
 
-    def __call__(self, idx, x):
+    def __call__(self, idx, x) -> Array:
         return self.layer(x)
 
     @property
-    def weight(self):
+    def weight(self) -> Array:
         return self.layer.weight
 
 
 class VariantBiasLinear(Module):
     biases: Array
-    layer: Module
+    layer: enn.Linear | WeightNorm
 
     def __init__(
         self, state_dim, observation_dim, n_biases, *, key, norm_readout: bool = False
@@ -141,12 +140,12 @@ class VariantBiasLinear(Module):
         if norm_readout:
             self.layer = WeightNorm(self.layer)
 
-    def __call__(self, idx, x):
+    def __call__(self, idx, x) -> Array:
         x = self.layer(x)
         return x + self.biases[idx]
 
     @property
-    def weight(self):
+    def weight(self) -> Array:
         return self.layer.weight
 
     def set_static(self, static=True) -> None:
@@ -176,19 +175,19 @@ class RBFN(Module):
         kernels = jax.vmap(gauss_rbf, in_axes=(None, 0, None))(
             x, self.centers, constraints.constrain_positive(self.scale)
         )
-        return self.readout(kernels)
+        return self.readout(kernels)  # type: ignore
 
 
-class Param(Module):
-    unconstrained: Array
-    constraint: constraints.AbstractConstraint
+# class Param(Module):
+#     unconstrained: Array
+#     constraint: constraints.AbstractConstraint
 
-    def __init__(self, value: ArrayLike, constraint: constraints.AbstractConstraint):
-        self.constraint = constraint
-        self.unconstrained = constraint.unconstrain(value)
+#     def __init__(self, value: ArrayLike, constraint: constraints.AbstractConstraint):
+#         self.constraint = constraint
+#         self.unconstrained = constraint.unconstrain(value)
 
-    def __call__(self) -> Array:
-        return self.constraint(self.unconstrained)
+#     def __call__(self) -> Array:
+#         return self.constraint(self.unconstrained)
 
 
 class DataMasker(eqx.Module, strict=True):
@@ -210,7 +209,7 @@ class DataMasker(eqx.Module, strict=True):
         *,
         key: PRNGKeyArray | None = None,
         inference: bool | None = None,
-    ) -> Array:
+    ) -> tuple[Array | None, Array]:
         if inference is None:
             inference = self.inference
 
@@ -227,5 +226,5 @@ class DataMasker(eqx.Module, strict=True):
         else:
             key, subkey = jrnd.split(key)
             q = 1 - jax.lax.stop_gradient(self.p)
-            mask = jrnd.bernoulli(key, q, shape)
+            mask = jrnd.bernoulli(key, q, shape)  # type: ignore
             return subkey, mask

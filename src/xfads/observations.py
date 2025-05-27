@@ -1,4 +1,5 @@
-from typing import ClassVar, Protocol, Type
+from abc import abstractmethod
+from typing import ClassVar, override
 
 from jax import numpy as jnp
 from jaxtyping import Array, PRNGKeyArray
@@ -13,18 +14,6 @@ from .distributions import Approx
 MAX_LOGRATE = 7.0
 
 
-class Observation(Protocol):
-    def eloglik(
-        self, key: PRNGKeyArray, t: Array, moment: Array, y: Array, approx, mc_size: int
-    ): ...
-
-    def set_static(self, static=True): ...
-
-    def initialize(self, *args, **kwargs): ...
-
-    def init(self, *args, **kwargs): ...
-
-
 class Likelihood(eqx.Module):
     registry: ClassVar[dict] = dict()
 
@@ -32,13 +21,18 @@ class Likelihood(eqx.Module):
         super().__init_subclass__(*args, **kwargs)
         Likelihood.registry[cls.__name__] = cls
 
+    @classmethod
+    def get_subclass(cls, name: str) -> type:
+        if name not in Likelihood.registry:
+            raise ValueError(f"Likelihood {name} is not registered.")
+        return Likelihood.registry[name]
 
-def get_class(name) -> Type:
-    return Likelihood.registry[name]
+    @abstractmethod
+    def eloglik(self, *args, **kwargs) -> Array: ...
 
 
 class Poisson(Likelihood):
-    readout: eqx.Module
+    readout: StationaryLinear | VariantBiasLinear
 
     def __init__(
         self, state_dim, observation_dim, *, key, norm_readout: bool = False, **kwargs
@@ -55,8 +49,9 @@ class Poisson(Likelihood):
             )
 
     def set_static(self, static=True) -> None:
-        self.readout.set_static(static)
+        self.readout.set_static(static)  # type: ignore
 
+    @override
     def eloglik(
         self, key: PRNGKeyArray, t: Array, moment: Array, y: Array, approx, mc_size: int
     ) -> Array:
@@ -75,7 +70,7 @@ class Poisson(Likelihood):
 
 class DiagGaussian(Likelihood):
     unconstrained_cov: Array = eqx.field(static=False)
-    readout: eqx.Module
+    readout: StationaryLinear | VariantBiasLinear
 
     def __init__(
         self, state_dim, observation_dim, *, key, norm_readout: bool = False, **kwargs
@@ -97,13 +92,14 @@ class DiagGaussian(Likelihood):
     def cov(self):
         return constrain_positive(self.unconstrained_cov)
 
+    @override
     def eloglik(
         self,
         key: PRNGKeyArray,
         t: Array,
         moment: Array,
         y: Array,
-        approx: Type[Approx],
+        approx: type[Approx],
         mc_size: int,
     ) -> Array:
         mean_z, cov_z = approx.moment_to_canon(moment)
@@ -115,6 +111,3 @@ class DiagGaussian(Likelihood):
 
     def set_static(self, static=True) -> None:
         self.__dataclass_fields__["unconstrained_cov"].metadata = {"static": static}
-
-    def init(self, data):
-        pass

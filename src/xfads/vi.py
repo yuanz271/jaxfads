@@ -1,4 +1,4 @@
-from typing import Callable, Type
+from collections.abc import Callable
 
 from jaxtyping import Array, PRNGKeyArray, Scalar
 
@@ -12,7 +12,7 @@ def elbo(
     moment_p: Array,
     y: Array,
     eloglik: Callable[..., Scalar],
-    approx: Type[Approx],
+    approx: type[Approx],
     *,
     mc_size: int,
 ) -> Scalar:

@@ -259,7 +259,7 @@ def batch_elbo(model, key, ts, moment_s, moment_p, ys) -> Array:
     return _elbo(keys, ts, moment_s, moment_p, ys)
 
 
-def train_fast(model: eqx.Module, data, *, conf) -> eqx.Module:
+def train_fast(model, data, *, conf):
     key = jrnd.key(conf.seed)
     rng = np.random.default_rng(conf.seed)
 

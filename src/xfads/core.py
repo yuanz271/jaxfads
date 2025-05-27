@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 from enum import auto, StrEnum
 from functools import partial
-from typing import Type
 
 import jax
 from jax import numpy as jnp, random as jrandom
@@ -18,9 +17,10 @@ class Mode(StrEnum):
 
 @dataclass
 class Hyperparam:
-    approx: Type
+    approx: type
     state_dim: int
-    input_dim: int
+    iu_dim: int
+    eu_dim: int
     observation_dim: int
     # covariate_dim: int
     mc_size: int
@@ -38,7 +38,8 @@ def filter(
     model,
 ) -> tuple[Array, Array, Array]:
     """
-    :param alpha:
+    :param t: time steps, shape (T,)
+    :param alpha: information update, shape (T, state_dim)
     """
     approx = model.hyperparam.approx
     nature_p_1 = (
@@ -161,7 +162,7 @@ def bismooth(
 
     # expectation should be under smoothing distribution
     keys = jrandom.split(key, jnp.size(moment_s, 0))
-    moment_p = jax.vmap(expected_moment_forward)(keys, moment_s, u)
+    moment_p = jax.vmap(expected_moment_forward)(keys, moment_s, u, c)
     moment_p = jnp.vstack((moment_s[0], moment_p[:-1]))
 
     return nature_s, moment_s, moment_p

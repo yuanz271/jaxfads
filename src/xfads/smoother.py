@@ -1,13 +1,15 @@
+from collections.abc import Callable
 from functools import partial
-from typing import Type, Callable
 
 from jaxtyping import Array
-import jax
-from jax import numpy as jnp, random as jrnd
+from jax import numpy as jnp, random as jrnd, vmap
 import equinox as eqx
 from gearax.models import Model
 
-from . import core, distributions, dynamics, observations, encoders
+from . import core, encoders
+from .distributions import Approx
+from .dynamics import AbstractDynamics
+from .observations import Likelihood
 from .nn import DataMasker
 from .core import Hyperparam, Mode
 
@@ -15,19 +17,18 @@ from .core import Hyperparam, Mode
 class XFADS(Model):
     hyperparam: Hyperparam = eqx.field(init=False, static=True)
     forward: eqx.Module = eqx.field(init=False)
-    backward: eqx.Module = eqx.field(init=False)
+    backward: eqx.Module | None = eqx.field(init=False)
     likelihood: eqx.Module = eqx.field(init=False)
     alpha_encoder: eqx.Module = eqx.field(init=False)
     beta_encoder: eqx.Module = eqx.field(init=False)
-    masker: eqx.Module = eqx.field(init=False)
+    masker: DataMasker = eqx.field(init=False)
     unconstrained_prior_natural: Array = eqx.field(init=False)
 
     def __post_init__(self):
         state_dim = self.conf.state_dim
-        input_dim = self.conf.input_dim
-        ctx_dim = self.conf.ctx_dim
+        iu_dim = self.conf.iu_dim
+        eu_dim = self.conf.eu_dim
         observation_dim = self.conf.observation_dim
-        approx: str = self.conf.approx
         mc_size = self.conf.mc_size
         seed = self.conf.seed
         dropout = self.conf.dropout
@@ -47,12 +48,13 @@ class XFADS(Model):
 
         self.masker: DataMasker = DataMasker(dropout)
 
-        approx: Type[distributions.Approx] = distributions.get_class(approx)
+        approx: type[Approx] = Approx.get_subclass(self.conf.approx)
 
         self.hyperparam = Hyperparam(
             approx=approx,
             state_dim=state_dim,
-            input_dim=input_dim,
+            iu_dim=iu_dim,
+            eu_dim=eu_dim,
             observation_dim=observation_dim,
             mc_size=mc_size,
             fb_penalty=fb_penalty,
@@ -60,34 +62,35 @@ class XFADS(Model):
             mode=mode,
         )
 
-        dynamics_class = dynamics.get_class(forward)
+        dynamics_class = AbstractDynamics.get_subclass(forward)
         key, subkey = jrnd.split(key)
         self.forward = dynamics_class(
             key=subkey,
             state_dim=state_dim,
-            input_dim=input_dim,
-            ctx_dim=ctx_dim,
+            iu_dim=iu_dim,
+            eu_dim=eu_dim,
             cov=state_noise,
             **dyn_kwargs,
         )
 
         if backward is not None:
-            dynamics_class = dynamics.get_class(backward)
+            dynamics_class = AbstractDynamics.get_subclass(backward)
             key, subkey = jrnd.split(key)
             self.backward = dynamics_class(
                 key=subkey,
                 state_dim=state_dim,
-                input_dim=input_dim,
+                iu_dim=iu_dim,
+                eu_dim=eu_dim,
                 cov=state_noise,
                 **dyn_kwargs,
             )
         else:
             self.backward = None
 
-        observation_class = observations.get_class(observation)
+        observation_class: type[Likelihood] = Likelihood.get_subclass(observation)
         key, subkey = jrnd.split(key)
         self.likelihood = observation_class(
-            state_dim,
+            state_dim,  # type: ignore
             observation_dim,
             key=subkey,
             n_steps=n_steps,
@@ -126,17 +129,17 @@ class XFADS(Model):
         )
 
     def __call__(self, t, y, u, c, *, key) -> tuple[Array, Array, Array]:
-        batch_alpha_encode: Callable = jax.vmap(jax.vmap(self.alpha_encoder))
-        batch_constrain_natural: Callable = jax.vmap(
-            jax.vmap(self.hyperparam.approx.constrain_natural)
+        batch_alpha_encode: Callable = vmap(vmap(self.alpha_encoder))  # type: ignore
+        batch_constrain_natural: Callable = vmap(
+            vmap(self.hyperparam.approx.constrain_natural)
         )
-        batch_beta_encode: Callable = jax.vmap(self.beta_encoder)
+        batch_beta_encode: Callable = vmap(self.beta_encoder)  # type: ignore
 
         match self.hyperparam.mode:
             case Mode.BIFILTER:
-                batch_smooth = jax.vmap(partial(core.bismooth, model=self))
+                batch_smooth = vmap(partial(core.bismooth, model=self))
 
-                def batch_encode(y, key) -> Array:
+                def batch_encode(y: Array, key) -> Array:
                     mask_y = jnp.all(
                         jnp.isfinite(y), axis=2, keepdims=True
                     )  # nonfinite are missing values
@@ -147,16 +150,16 @@ class XFADS(Model):
                     a = batch_constrain_natural(
                         batch_alpha_encode(y, key=jrnd.split(subkey, y.shape[:2]))
                     )
-                    a = jnp.where(mask_y, a, 0)
+                    a: Array = jnp.where(mask_y, a, 0)
 
                     key, mask_a = self.masker(a, key=key)
-                    a = jnp.where(mask_a, a, 0)
+                    a = jnp.where(mask_a, a, 0)  # type: ignore
 
                     return a
             case _:
-                batch_smooth = jax.vmap(partial(core.filter, model=self))
+                batch_smooth = vmap(partial(core.filter, model=self))
 
-                def batch_encode(y, key) -> Array:
+                def batch_encode(y: Array, key) -> Array:
                     # handling missing values
                     mask_y = jnp.all(
                         jnp.isfinite(y), axis=2, keepdims=True
@@ -171,10 +174,10 @@ class XFADS(Model):
                     a = jnp.where(mask_y, a, 0)  # miss_values have no updates to state
 
                     key, mask_a = self.masker(y, key=key)
-                    a = jnp.where(mask_a, a, 0)  # pseudo missing values
+                    a = jnp.where(mask_a, a, 0)  # type: ignore # pseudo missing values
 
                     b = batch_constrain_natural(
-                        batch_beta_encode(a, key=jrnd.split(key, a.shape[0]))
+                        batch_beta_encode(a, key=jrnd.split(key, a.shape[0]))  # type: ignore
                     )
                     key, mask_b = self.masker(y, key=key)
                     b = jnp.where(mask_b, b, 0)  # filter only steps
@@ -190,25 +193,3 @@ class XFADS(Model):
         alpha = batch_encode(y, subkey)
 
         return batch_smooth(jrnd.split(key, len(t)), t, alpha, u, c)
-
-
-# @dataclass
-# class ModelConf:
-#     seed: int
-#     observation_dim: int
-#     state_dim: int
-#     input_dim: int = 0
-#     ctx_dim: int = 0
-#     approx: str = "DiagMVN"
-#     mc_size: int = 10
-#     dropout: float = 0.5
-#     mode: str = "pseudo"
-#     forward: str
-#     backward: str | None = None
-#     state_noise: float = 1
-#     observation: str = "Poisson"
-#     n_steps: int = 0
-#     dyn_kwargs: dict
-#     obs_kwargs: dict
-#     enc_kwargs: dict
-#     noise_penalty: float = 0

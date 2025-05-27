@@ -2,9 +2,9 @@
 Exponential-family variational distributions
 """
 
-from abc import ABC
+from abc import ABC, abstractmethod
 import math
-from typing import ClassVar, Protocol, Type
+from typing import ClassVar
 
 from jax import numpy as jnp, random as jrnd
 
@@ -15,70 +15,82 @@ import tensorflow_probability.substrates.jax.distributions as tfp
 from .constraints import constrain_positive, unconstrain_positive
 
 
-MIN_VAR = 1e-6
-EPS = 1e-6
+# MIN_VAR = 1e-6
+# EPS = 1e-6
 
 
-def _inv(a):
-    return jnp.linalg.inv(a + EPS * jnp.eye(a.shape[-1]))
+def damping_inv(a: Array, damping=1e-6) -> Array:
+    return jnp.linalg.inv(a + damping * jnp.eye(a.shape[-1]))
 
 
-class Approx(Protocol):
-    """Interface of MVN distributions
-    The classes should implement class functions performing
-    converion between natural parameter and mean parameter.
-    """
-
-    @classmethod
-    def natural_to_moment(cls, natural) -> Array: ...
-
-    @classmethod
-    def moment_to_natural(cls, moment) -> Array: ...
-
-    @classmethod
-    def sample_by_moment(cls, key, moment, mc_size) -> Array: ...
-
-    @classmethod
-    def param_size(cls, state_dim) -> int: ...
-
-    @classmethod
-    def kl(cls, moment1, moment2) -> Scalar: ...
-
-    @classmethod
-    def moment_to_canon(cls, moment: Array) -> tuple[Array, Array]: ...
-
-    @classmethod
-    def canon_to_moment(cls, mean: Array, cov: Array) -> Array: ...
-
-    @classmethod
-    def full_cov(cls, cov: Array) -> Array: ...
-
-    @classmethod
-    def constrain_moment(cls, unconstrained: Array) -> Array: ...
-
-    @classmethod
-    def constrain_natural(cls, unconstrained: Array) -> Array: ...
-
-    @classmethod
-    def unconstrain_natural(cls, natural: Array) -> Array: ...
-
-    @classmethod
-    def noise_moment(cls, noise_cov) -> Array: ...
-
-
-class Distribution(ABC):
+class Approx(ABC):
     registry: ClassVar[dict] = dict()
 
     def __init_subclass__(cls, *args, **kwargs):
         super().__init_subclass__(*args, **kwargs)
-        Distribution.registry[cls.__name__] = cls
+        Approx.registry[cls.__name__] = cls
+
+    @classmethod
+    def get_subclass(cls, name: str):
+        """Get the class of the distribution by its name."""
+        if name not in Approx.registry:
+            raise ValueError(f"Distribution {name} is not registered.")
+        return Approx.registry[name]
+
+    @classmethod
+    @abstractmethod
+    def natural_to_moment(cls, natural) -> Array: ...
+
+    @classmethod
+    @abstractmethod
+    def moment_to_natural(cls, moment) -> Array: ...
+
+    @classmethod
+    @abstractmethod
+    def sample_by_moment(cls, key, moment, mc_size) -> Array: ...
+
+    @classmethod
+    @abstractmethod
+    def param_size(cls, state_dim) -> int: ...
+
+    @classmethod
+    @abstractmethod
+    def kl(cls, moment1, moment2) -> Scalar: ...
+
+    @classmethod
+    @abstractmethod
+    def moment_to_canon(cls, moment: Array) -> tuple[Array, Array]: ...
+
+    @classmethod
+    @abstractmethod
+    def canon_to_moment(cls, mean: Array, cov: Array) -> Array: ...
+
+    @classmethod
+    @abstractmethod
+    def full_cov(cls, cov: Array) -> Array: ...
+
+    @classmethod
+    @abstractmethod
+    def constrain_moment(cls, unconstrained: Array) -> Array: ...
+
+    @classmethod
+    @abstractmethod
+    def constrain_natural(cls, unconstrained: Array) -> Array: ...
+
+    @classmethod
+    @abstractmethod
+    def unconstrain_natural(cls, natural: Array) -> Array: ...
+
+    @classmethod
+    @abstractmethod
+    def noise_moment(cls, noise_cov) -> Array: ...
+
+    @classmethod
+    @abstractmethod
+    def prior_natural(cls, state_dim) -> Array: ...
 
 
-def get_class(name) -> Type[Approx]:
-    return Distribution.registry[name]
-
-
-class FullMVN(Distribution):
+class FullMVN(Approx):
     @classmethod
     def natural_to_moment(cls, natural: Array) -> Array:
         """Pmu, -P/2 => mu, P"""
@@ -88,7 +100,7 @@ class FullMVN(Distribution):
         p = -2 * nat2  # vectorized precision
         P = jnp.reshape(p, (m, m))  # precision matrix
         loc = jnp.linalg.solve(P, nat1)
-        V = _inv(P)
+        V = damping_inv(P)
         v = V.flatten()
         moment = jnp.concatenate((loc, v))
         return moment
@@ -96,7 +108,7 @@ class FullMVN(Distribution):
     @classmethod
     def moment_to_natural(cls, moment: Array) -> Array:
         loc, V = cls.moment_to_canon(moment)
-        P = _inv(V)
+        P = damping_inv(V)
         Nat2 = -0.5 * P
         nat2 = Nat2.flatten()
         nat1 = P @ loc
@@ -190,7 +202,7 @@ class FullMVN(Distribution):
         return jnp.diag(noise_cov)
 
 
-class LoRaMVN(Distribution):
+class LoRaMVN(Approx):
     @classmethod
     def constrain_moment(cls, unconstrained: Array) -> Array:
         n = jnp.size(unconstrained)
@@ -208,7 +220,7 @@ class LoRaMVN(Distribution):
         return jnp.diag(noise_cov)
 
 
-class DiagMVN(Distribution):
+class DiagMVN(Approx):
     @classmethod
     def natural_to_moment(cls, natural) -> Array:
         nat1, nat2 = jnp.split(natural, 2)
