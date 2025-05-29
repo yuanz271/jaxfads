@@ -3,7 +3,7 @@ from enum import auto, StrEnum
 from functools import partial
 
 import jax
-from jax import numpy as jnp, random as jrandom
+from jax import numpy as jnp, random as jrnd
 from jax.lax import scan
 from jaxtyping import Array, PRNGKeyArray
 
@@ -19,9 +19,9 @@ class Mode(StrEnum):
 class Hyperparam:
     approx: type
     state_dim: int
-    iu_dim: int
-    eu_dim: int
-    observation_dim: int
+    # iu_dim: int
+    # eu_dim: int
+    # observation_dim: int
     # covariate_dim: int
     mc_size: int
     fb_penalty: float
@@ -58,18 +58,18 @@ def filter(
 
     def ff(carry, obs, expected_moment):
         key, nature_tm1 = carry
-        key, subkey = jrandom.split(key)
+        key, ky = jrnd.split(key)
         a_t, u_tm1, c_tm1 = obs
         moment_tm1 = approx.natural_to_moment(nature_tm1)
-        moment_p_t = expected_moment(subkey, moment_tm1, u_tm1, c_tm1)
+        moment_p_t = expected_moment(ky, moment_tm1, u_tm1, c_tm1)
         nature_p_t = approx.moment_to_natural(moment_p_t)
         nature_t = nature_p_t + a_t
         return (key, nature_t), (moment_p_t, nature_p_t, nature_t)
 
-    key, subkey = jrandom.split(key)
+    key, ky = jrnd.split(key)
     _, (moment_p, _, nature_f) = scan(
         partial(ff, expected_moment=expected_moment_forward),
-        init=(subkey, nature_f_1),
+        init=(ky, nature_f_1),
         xs=(alpha[1:], u[:-1], c[:-1]),  # t = 2 ... T+1
     )
     nature_f = jnp.vstack((nature_f_1, nature_f))  # 1...T
@@ -124,7 +124,7 @@ def bismooth(
 
     def ff(carry, obs, expected_moment):
         key, nature_f_tm1 = carry
-        key_tp1, key_t = jrandom.split(key, 2)
+        key_tp1, key_t = jrnd.split(key)
         update_obs_t, u, c = obs
         moment_f_tm1 = approx.natural_to_moment(nature_f_tm1)
         moment_p_t = expected_moment(key_t, moment_f_tm1, u, c)
@@ -133,7 +133,7 @@ def bismooth(
         return (key_tp1, nature_f_t), (moment_p_t, nature_p_t, nature_f_t)
 
     # Forward
-    key, forward_key = jrandom.split(key, 2)
+    key, forward_key = jrnd.split(key)
     _, (_, _, nature_f) = scan(
         partial(ff, expected_moment=expected_moment_forward),
         init=(forward_key, nature_f_1),
@@ -142,14 +142,14 @@ def bismooth(
     nature_f = jnp.vstack((nature_f_1, nature_f))  # 1...T
 
     ## Backward
-    key, subkey = jrandom.split(key, 2)
+    key, ky = jrnd.split(key)
     (_, nature_b_Tp1), _ = ff(
-        (subkey, nature_f[-1]),
+        (ky, nature_f[-1]),
         (jnp.zeros_like(nature_prior), u[-1], c[-1]),
         expected_moment_forward,
     )
 
-    key, backward_key = jrandom.split(key, 2)
+    key, backward_key = jrnd.split(key)
     _, (_, nature_p_b, _) = scan(
         partial(ff, expected_moment=expected_moment_backward),
         init=(backward_key, nature_b_Tp1),
@@ -161,7 +161,7 @@ def bismooth(
     moment_s = natural_to_moment(nature_s)
 
     # expectation should be under smoothing distribution
-    keys = jrandom.split(key, jnp.size(moment_s, 0))
+    keys = jrnd.split(key, jnp.size(moment_s, 0))
     moment_p = jax.vmap(expected_moment_forward)(keys, moment_s, u, c)
     moment_p = jnp.vstack((moment_s[0], moment_p[:-1]))
 

@@ -40,7 +40,7 @@ class Nonlinear(AbstractDynamics):
             dropout=dropout,
         )
 
-    def __call__(self, z: Array, u: Array, *, key=None) -> Array:
+    def __call__(self, z: Array, u: Array, c: Array, *, key=None) -> Array:
         x = jnp.concatenate((z, u), axis=-1)
         return z + self.f(x, key=key)
 
@@ -58,8 +58,9 @@ def test_predict_moment(spec):
 
     z = jrnd.normal(key, (state_dim,))
     u = jrnd.normal(key, (input_dim,))
+    eu = jnp.zeros((0,))  # empty eu for this test
 
-    moment = predict_moment(z, u, f, noise, DiagMVN)
+    moment = predict_moment(z, u, eu, f, noise, DiagMVN)
     chex.assert_shape(moment, (DiagMVN.param_size(state_dim),))
 
 
@@ -73,7 +74,8 @@ def test_sample_expected_moment(spec):
 
     z = jrnd.normal(key, (state_dim,))
     u = jrnd.normal(key, (input_dim,))
+    eu = jnp.zeros((0,))  # empty eu for this test
 
-    moment = predict_moment(z, u, f, noise, DiagMVN)
-    moment = sample_expected_moment(key, moment, u, f, noise, DiagMVN, 10)
+    moment = predict_moment(z, u, eu, f, noise, DiagMVN)
+    moment = sample_expected_moment(key, moment, u, eu, f, noise, DiagMVN, 10)
     chex.assert_shape(moment, (DiagMVN.param_size(state_dim),))

@@ -1,11 +1,9 @@
 import pytest
 
-from xfads.spec import ModelSpec
-
 
 @pytest.fixture
 def spec():
-    spec: ModelSpec = dict(
+    spec = dict(
         observation_dim=10,
         state_dim=2,
         input_dim=0,

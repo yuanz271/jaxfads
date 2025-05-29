@@ -5,10 +5,8 @@ import numpy as np
 import jax
 from jax import numpy as jnp, random as jrnd, lax, NamedSharding
 from jax.sharding import PartitionSpec as P
-from jax.experimental.shard_map import shard_map
-from jaxtyping import Array, Scalar
+from jaxtyping import Array
 import optax
-import chex
 import equinox as eqx
 from rich.progress import (
     MofNCompleteColumn,
@@ -19,7 +17,7 @@ from rich.progress import (
     SpinnerColumn,
 )
 
-from . import vi, smoother
+from . import vi
 
 
 def training_progress():
@@ -57,171 +55,171 @@ class Opt:
     validation_size: int = 80
 
 
-def make_optimizer(model, opt: Opt):
-    optimizer = optax.chain(
-        optax.clip_by_global_norm(opt.clip_norm),
-        optax.add_noise(opt.noise_eta, opt.noise_gamma, opt.seed),
-        optax.scale_by_adam(),
-        optax.add_decayed_weights(opt.weight_decay),
-        optax.scale_by_learning_rate(opt.learning_rate),
-    )
-    opt_state = optimizer.init(eqx.filter(model, eqx.is_inexact_array))
+# def make_optimizer(model, opt: Opt):
+#     optimizer = optax.chain(
+#         optax.clip_by_global_norm(opt.clip_norm),
+#         optax.add_noise(opt.noise_eta, opt.noise_gamma, opt.seed),
+#         optax.scale_by_adam(),
+#         optax.add_decayed_weights(opt.weight_decay),
+#         optax.scale_by_learning_rate(opt.learning_rate),
+#     )
+#     opt_state = optimizer.init(eqx.filter(model, eqx.is_inexact_array))
 
-    return optimizer, opt_state
+#     return optimizer, opt_state
 
 
-def train(
-    model: smoother.XFADS,
-    data,
-    *,
-    seed: int,
-    opt: Opt,
-) -> smoother.XFADS:
-    chex.assert_equal_shape(data, dims=(0, 1))
+# def train(
+#     model: smoother.XFADS,
+#     data,
+#     *,
+#     seed: int,
+#     opt: Opt,
+# ) -> smoother.XFADS:
+#     chex.assert_equal_shape(data, dims=(0, 1))
 
-    def batch_elbo(model, key, ts, moment_s, moment_p, ys) -> Array:
-        _elbo = jax.vmap(
-            jax.vmap(
-                partial(
-                    vi.elbo,
-                    eloglik=model.likelihood.eloglik,
-                    approx=model.hyperparam.approx,
-                    mc_size=model.hyperparam.mc_size,
-                )
-            )
-        )  # (batch, seq)
+#     def batch_elbo(model, key, ts, moment_s, moment_p, ys) -> Array:
+#         _elbo = jax.vmap(
+#             jax.vmap(
+#                 partial(
+#                     vi.elbo,
+#                     eloglik=model.likelihood.eloglik,
+#                     approx=model.hyperparam.approx,
+#                     mc_size=model.hyperparam.mc_size,
+#                 )
+#             )
+#         )  # (batch, seq)
 
-        keys = jrnd.split(key, ys.shape[:2])  # ys.shape[:2] + (2,)
+#         keys = jrnd.split(key, ys.shape[:2])  # ys.shape[:2] + (2,)
 
-        return _elbo(keys, ts, moment_s, moment_p, ys)
+#         return _elbo(keys, ts, moment_s, moment_p, ys)
 
-    def batch_loss(model, key, tb, yb, ub, cb) -> Scalar:
-        key, subkey = jrnd.split(key)
-        chex.assert_equal_shape((tb, yb, ub, cb), dims=(0, 1))
+#     def batch_loss(model, key, tb, yb, ub, cb) -> Scalar:
+#         key, subkey = jrnd.split(key)
+#         chex.assert_equal_shape((tb, yb, ub, cb), dims=(0, 1))
 
-        key, subkey = jrnd.split(key)
-        _, moment, moment_p = model(tb, yb, ub, cb, key=subkey)
+#         key, subkey = jrnd.split(key)
+#         _, moment, moment_p = model(tb, yb, ub, cb, key=subkey)
 
-        key, subkey = jrnd.split(key)
-        free_energy = -batch_elbo(model, subkey, tb, moment, moment_p, yb)
+#         key, subkey = jrnd.split(key)
+#         free_energy = -batch_elbo(model, subkey, tb, moment, moment_p, yb)
 
-        loss = (
-            jnp.mean(free_energy)
-            + model.hyperparam.noise_penalty * model.forward.loss()
-            # + hyperparam.noise_penalty * model.backward.loss()
-        )
+#         loss = (
+#             jnp.mean(free_energy)
+#             + model.hyperparam.noise_penalty * model.forward.loss()
+#             # + hyperparam.noise_penalty * model.backward.loss()
+#         )
 
-        return loss
+#         return loss
 
-    def optimize(model, seed, batch_loss_func, *data):
-        rng = np.random.default_rng(seed)
-        key = jrnd.key(seed)
+#     def optimize(model, seed, batch_loss_func, *data):
+#         rng = np.random.default_rng(seed)
+#         key = jrnd.key(seed)
 
-        n_devices = len(jax.devices())
+#         n_devices = len(jax.devices())
 
-        n: int = np.size(data[0], 0)
-        perm = rng.permutation(n)
-        n_samples_per_device = int(n * opt.valid_ratio / n_devices)
-        n_valid = n_samples_per_device * n_devices  # n_devices-dividible for sharding
+#         n: int = np.size(data[0], 0)
+#         perm = rng.permutation(n)
+#         n_samples_per_device = int(n * opt.valid_ratio / n_devices)
+#         n_valid = n_samples_per_device * n_devices  # n_devices-dividible for sharding
 
-        indices_valid, indices_training = perm[:n_valid], perm[n_valid:]
-        valid_set = tuple(jnp.asarray(arr[indices_valid]) for arr in data)
-        training_set = tuple(jnp.asarray(arr[indices_training]) for arr in data)
+#         indices_valid, indices_training = perm[:n_valid], perm[n_valid:]
+#         valid_set = tuple(jnp.asarray(arr[indices_valid]) for arr in data)
+#         training_set = tuple(jnp.asarray(arr[indices_training]) for arr in data)
 
-        mesh = jax.make_mesh((n_devices,), ("batch",))
+#         mesh = jax.make_mesh((n_devices,), ("batch",))
 
-        optimizer, opt_state = make_optimizer(model, opt)
+#         optimizer, opt_state = make_optimizer(model, opt)
 
-        @eqx.filter_jit
-        def evaluate(model, key, data):
-            model = eqx.nn.inference_mode(model)
-            return shard_map(
-                lambda *d: batch_loss(model, key, *d),
-                mesh,
-                in_specs=(
-                    P("batch", None),
-                    P("batch", None, None),
-                    P("batch", None, None),
-                    P("batch", None, None),
-                ),
-                out_specs=P(),
-                check_rep=False,
-            )(*data)
+#         @eqx.filter_jit
+#         def evaluate(model, key, data):
+#             model = eqx.nn.inference_mode(model)
+#             return shard_map(
+#                 lambda *d: batch_loss(model, key, *d),
+#                 mesh,
+#                 in_specs=(
+#                     P("batch", None),
+#                     P("batch", None, None),
+#                     P("batch", None, None),
+#                     P("batch", None, None),
+#                 ),
+#                 out_specs=P(),
+#                 check_rep=False,
+#             )(*data)
 
-        key, eval_key = jrnd.split(key)
-        batch_size = opt.batch_size
-        min_iter = opt.min_iter
-        max_iter = opt.max_iter
-        valid_loss = evaluate(model, eval_key, valid_set)
+#         key, eval_key = jrnd.split(key)
+#         batch_size = opt.batch_size
+#         min_iter = opt.min_iter
+#         max_iter = opt.max_iter
+#         valid_loss = evaluate(model, eval_key, valid_set)
 
-        with training_progress() as pbar:
-            task_id = pbar.add_task("Fitting", total=opt.max_iter, loss=valid_loss)
+#         with training_progress() as pbar:
+#             task_id = pbar.add_task("Fitting", total=opt.max_iter, loss=valid_loss)
 
-            # lax.scan cannot handle equinox Module. see https://docs.kidger.site/equinox/faq/
-            params, static = eqx.partition(model, eqx.is_inexact_array)
+#             # lax.scan cannot handle equinox Module. see https://docs.kidger.site/equinox/faq/
+#             params, static = eqx.partition(model, eqx.is_inexact_array)
 
-            def should_continue(carry):
-                i, converged, mean_loss, params, opt_state, key = carry
-                return jnp.logical_and(i < max_iter, jnp.logical_not(converged))
+#             def should_continue(carry):
+#                 i, converged, mean_loss, params, opt_state, key = carry
+#                 return jnp.logical_and(i < max_iter, jnp.logical_not(converged))
 
-            def do_epoch(carry):
-                i, converged, mean_loss, params, opt_state, key = carry
-                key, subkey = jrnd.split(key)
-                N = jnp.size(training_set[0], 0)
-                perm = jax.random.permutation(subkey, N)
+#             def do_epoch(carry):
+#                 i, converged, mean_loss, params, opt_state, key = carry
+#                 key, subkey = jrnd.split(key)
+#                 N = jnp.size(training_set[0], 0)
+#                 perm = jax.random.permutation(subkey, N)
 
-                def batch_step(carry, batch_idx):
-                    params, opt_state, key = carry
-                    model = eqx.combine(params, static)
-                    batch_indices = jax.lax.dynamic_slice_in_dim(
-                        perm, batch_idx * batch_size, batch_size
-                    )
-                    batch = tuple(arr[batch_indices] for arr in training_set)
+#                 def batch_step(carry, batch_idx):
+#                     params, opt_state, key = carry
+#                     model = eqx.combine(params, static)
+#                     batch_indices = jax.lax.dynamic_slice_in_dim(
+#                         perm, batch_idx * batch_size, batch_size
+#                     )
+#                     batch = tuple(arr[batch_indices] for arr in training_set)
 
-                    # compute gradients
-                    key, subkey = jrnd.split(key)
-                    loss, grads = eqx.filter_value_and_grad(batch_loss_func)(
-                        model, subkey, *batch
-                    )
+#                     # compute gradients
+#                     key, subkey = jrnd.split(key)
+#                     loss, grads = eqx.filter_value_and_grad(batch_loss_func)(
+#                         model, subkey, *batch
+#                     )
 
-                    # update parameters
-                    updates, opt_state = optimizer.update(grads, opt_state, model)
-                    model = eqx.apply_updates(model, updates)
-                    params, _ = eqx.partition(model, eqx.is_inexact_array)
+#                     # update parameters
+#                     updates, opt_state = optimizer.update(grads, opt_state, model)
+#                     model = eqx.apply_updates(model, updates)
+#                     params, _ = eqx.partition(model, eqx.is_inexact_array)
 
-                    return (params, opt_state, key), None
+#                     return (params, opt_state, key), None
 
-                (params, opt_state, key), _ = jax.lax.scan(
-                    batch_step, (params, opt_state, key), jnp.arange(N // batch_size)
-                )
-                model = eqx.combine(params, static)
+#                 (params, opt_state, key), _ = jax.lax.scan(
+#                     batch_step, (params, opt_state, key), jnp.arange(N // batch_size)
+#                 )
+#                 model = eqx.combine(params, static)
 
-                key, subkey = jrnd.split(key)
-                valid_loss = evaluate(model, subkey, valid_set)
-                jax.debug.callback(
-                    lambda x: pbar.update(task_id, advance=1, loss=x), valid_loss
-                )
+#                 key, subkey = jrnd.split(key)
+#                 valid_loss = evaluate(model, subkey, valid_set)
+#                 jax.debug.callback(
+#                     lambda x: pbar.update(task_id, advance=1, loss=x), valid_loss
+#                 )
 
-                converged = jnp.logical_and(
-                    i > min_iter, jnp.isclose(valid_loss, mean_loss)
-                )
-                mean_loss = ((mean_loss * i + 1) + valid_loss) / (i + 2)
+#                 converged = jnp.logical_and(
+#                     i > min_iter, jnp.isclose(valid_loss, mean_loss)
+#                 )
+#                 mean_loss = ((mean_loss * i + 1) + valid_loss) / (i + 2)
 
-                return i + 1, converged, mean_loss, params, opt_state, key
+#                 return i + 1, converged, mean_loss, params, opt_state, key
 
-            i, converged, mean_loss, params, opt_state, key = lax.while_loop(
-                should_continue,
-                do_epoch,
-                (0, False, valid_loss, params, opt_state, key),
-            )
+#             i, converged, mean_loss, params, opt_state, key = lax.while_loop(
+#                 should_continue,
+#                 do_epoch,
+#                 (0, False, valid_loss, params, opt_state, key),
+#             )
 
-            model = eqx.combine(params, static)
+#             model = eqx.combine(params, static)
 
-        return model
+#         return model
 
-    model = optimize(model, seed, batch_loss, *data)
+#     model = optimize(model, seed, batch_loss, *data)
 
-    return model
+#     return model
 
 
 # >>> Full JAX
@@ -300,11 +298,11 @@ def train_fast(model, data, *, conf):
     def batch_loss(model, batch, key):
         tb, yb, ub, cb = batch
 
-        key, cey = jrnd.split(key)
-        _, moment, moment_p = model(tb, yb, ub, cb, key=cey)
+        key, ky = jrnd.split(key)
+        _, moment, moment_p = model(tb, yb, ub, cb, key=ky)
 
-        key, cey = jrnd.split(key)
-        free_energy = -batch_elbo(model, cey, tb, moment, moment_p, yb)
+        key, ky = jrnd.split(key)
+        free_energy = -batch_elbo(model, ky, tb, moment, moment_p, yb)
 
         loss = (
             jnp.mean(free_energy)

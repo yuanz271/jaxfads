@@ -1,12 +1,12 @@
 from collections.abc import Callable
 
-from jaxtyping import Array, PRNGKeyArray, Scalar
+from jaxtyping import Array, Scalar
 
 from .distributions import Approx
 
 
 def elbo(
-    key: PRNGKeyArray,
+    key: Array,
     t: Array,
     moment: Array,
     moment_p: Array,
@@ -19,7 +19,4 @@ def elbo(
     """Single time point"""
     ell: Scalar = eloglik(key, t, moment, y, approx, mc_size)
     kl: Scalar = approx.kl(moment, moment_p)
-
-    lval: Scalar = ell - kl
-
-    return lval
+    return ell - kl

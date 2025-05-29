@@ -1,10 +1,12 @@
 from collections.abc import Callable
 from functools import partial
+from pathlib import Path
+from typing import Self
 
 from jaxtyping import Array
 from jax import numpy as jnp, random as jrnd, vmap
 import equinox as eqx
-from gearax.models import Model
+from gearax.modules import ConfModule, load_model, save_model
 
 from . import core, encoders
 from .distributions import Approx
@@ -14,33 +16,25 @@ from .nn import DataMasker
 from .core import Hyperparam, Mode
 
 
-class XFADS(Model):
+class XFADS(ConfModule):
     hyperparam: Hyperparam = eqx.field(init=False, static=True)
     forward: eqx.Module = eqx.field(init=False)
-    backward: eqx.Module | None = eqx.field(init=False)
+    # backward: eqx.Module | None = eqx.field(init=False)
     likelihood: eqx.Module = eqx.field(init=False)
     alpha_encoder: eqx.Module = eqx.field(init=False)
     beta_encoder: eqx.Module = eqx.field(init=False)
     masker: DataMasker = eqx.field(init=False)
     unconstrained_prior_natural: Array = eqx.field(init=False)
 
-    def __post_init__(self):
+    def __post_init__(self, key):
         state_dim = self.conf.state_dim
-        iu_dim = self.conf.iu_dim
-        eu_dim = self.conf.eu_dim
-        observation_dim = self.conf.observation_dim
+        # observation_dim = self.conf.observation_dim
         mc_size = self.conf.mc_size
         seed = self.conf.seed
         dropout = self.conf.dropout
         mode = self.conf.mode
         forward = self.conf.forward
-        backward = self.conf.backward
-        state_noise = self.conf.state_noise
-        dyn_kwargs = self.conf.dyn_kwargs
         observation = self.conf.observation
-        n_steps = self.conf.n_steps
-        obs_kwargs = self.conf.obs_kwargs
-        enc_kwargs = self.conf.enc_kwargs
         fb_penalty = self.conf.fb_penalty
         noise_penalty = self.conf.noise_penalty
 
@@ -53,59 +47,62 @@ class XFADS(Model):
         self.hyperparam = Hyperparam(
             approx=approx,
             state_dim=state_dim,
-            iu_dim=iu_dim,
-            eu_dim=eu_dim,
-            observation_dim=observation_dim,
+            # iu_dim=iu_dim,
+            # eu_dim=eu_dim,
+            # observation_dim=observation_dim,
             mc_size=mc_size,
             fb_penalty=fb_penalty,
             noise_penalty=noise_penalty,
             mode=mode,
         )
 
-        dynamics_class = AbstractDynamics.get_subclass(forward)
-        key, subkey = jrnd.split(key)
-        self.forward = dynamics_class(
-            key=subkey,
-            state_dim=state_dim,
-            iu_dim=iu_dim,
-            eu_dim=eu_dim,
-            cov=state_noise,
-            **dyn_kwargs,
+        key, ky = jrnd.split(key)
+        self.forward = AbstractDynamics.get_subclass(forward)(
+            self.conf.dyn_conf,
+            key=ky,
+            # state_dim=state_dim,
+            # iu_dim=iu_dim,
+            # eu_dim=eu_dim,
+            # cov=state_noise,
+            # **dyn_kwargs,
         )
 
-        if backward is not None:
-            dynamics_class = AbstractDynamics.get_subclass(backward)
-            key, subkey = jrnd.split(key)
-            self.backward = dynamics_class(
-                key=subkey,
-                state_dim=state_dim,
-                iu_dim=iu_dim,
-                eu_dim=eu_dim,
-                cov=state_noise,
-                **dyn_kwargs,
-            )
-        else:
-            self.backward = None
+        # if backward is not None:
+        #     key, ky = jrnd.split(key)
+        #     self.backward = AbstractDynamics.get_subclass(backward)(
+        #         key=ky,
+        #         state_dim=state_dim,
+        #         iu_dim=iu_dim,
+        #         eu_dim=eu_dim,
+        #         cov=state_noise,
+        #         **dyn_kwargs,
+        #     )
+        # else:
+        #     self.backward = None
 
-        observation_class: type[Likelihood] = Likelihood.get_subclass(observation)
-        key, subkey = jrnd.split(key)
-        self.likelihood = observation_class(
-            state_dim,  # type: ignore
-            observation_dim,
-            key=subkey,
-            n_steps=n_steps,
-            **obs_kwargs,
+        key, ky = jrnd.split(key)
+        self.likelihood = Likelihood.get_subclass(observation)(
+            self.conf.obs_conf,
+            key=ky,
+            # state_dim,  # type: ignore
+            # observation_dim,
+            # n_steps=n_steps,
+            # **obs_kwargs,
         )
 
         #####
-        key, subkey = jrnd.split(key)
+        key, ky = jrnd.split(key)
         self.alpha_encoder = encoders.AlphaEncoder(
-            state_dim, observation_dim, approx=approx, key=subkey, **enc_kwargs
+            self.conf.enc_conf,
+            ky,
+            # state_dim, observation_dim, approx, key=ky, **enc_kwargs
         )
 
-        key, subkey = jrnd.split(key)
+        key, ky = jrnd.split(key)
         self.beta_encoder = encoders.BetaEncoder(
-            state_dim, approx=approx, key=subkey, **enc_kwargs
+            self.conf.enc_conf,
+            ky,
+            # state_dim, approx, key=ky, **enc_kwargs
         )
         #####
 
@@ -123,6 +120,14 @@ class XFADS(Model):
         biases = jnp.log(jnp.maximum(mean_y, 1e-6))
         return eqx.tree_at(lambda model: model.likelihood.readout.biases, self, biases)
 
+    @classmethod
+    def load(cls, path: str | Path):
+        return load_model(path, cls)
+
+    @classmethod
+    def save(cls, model: Self, path: str | Path):
+        save_model(path, model)
+
     def prior_natural(self) -> Array:
         return self.hyperparam.approx.constrain_natural(
             self.unconstrained_prior_natural
@@ -137,25 +142,26 @@ class XFADS(Model):
 
         match self.hyperparam.mode:
             case Mode.BIFILTER:
-                batch_smooth = vmap(partial(core.bismooth, model=self))
+                raise NotImplementedError("BIFILTER mode is not implemented.")
+                # batch_smooth = vmap(partial(core.bismooth, model=self))
 
-                def batch_encode(y: Array, key) -> Array:
-                    mask_y = jnp.all(
-                        jnp.isfinite(y), axis=2, keepdims=True
-                    )  # nonfinite are missing values
-                    # chex.assert_equal_shape((y, valid_mask), dims=(0,1))
-                    y = jnp.where(mask_y, y, 0)
+                # def batch_encode(y: Array, key) -> Array:
+                #     mask_y = jnp.all(
+                #         jnp.isfinite(y), axis=2, keepdims=True
+                #     )  # nonfinite are missing values
+                #     # chex.assert_equal_shape((y, valid_mask), dims=(0,1))
+                #     y = jnp.where(mask_y, y, 0)
 
-                    key, subkey = jrnd.split(key)
-                    a = batch_constrain_natural(
-                        batch_alpha_encode(y, key=jrnd.split(subkey, y.shape[:2]))
-                    )
-                    a: Array = jnp.where(mask_y, a, 0)
+                #     key, ky = jrnd.split(key)
+                #     a = batch_constrain_natural(
+                #         batch_alpha_encode(y, key=jrnd.split(ky, y.shape[:2]))
+                #     )
+                #     a: Array = jnp.where(mask_y, a, 0)
 
-                    key, mask_a = self.masker(a, key=key)
-                    a = jnp.where(mask_a, a, 0)  # type: ignore
+                #     key, mask_a = self.masker(a, key=key)
+                #     a = jnp.where(mask_a, a, 0)  # type: ignore
 
-                    return a
+                #     return a
             case _:
                 batch_smooth = vmap(partial(core.filter, model=self))
 
@@ -167,9 +173,9 @@ class XFADS(Model):
                     # chex.assert_equal_shape((y, mask_y), dims=(0, 1))
                     y = jnp.where(mask_y, y, 0)
 
-                    key, subkey = jrnd.split(key)
+                    key, ky = jrnd.split(key)
                     a = batch_constrain_natural(
-                        batch_alpha_encode(y, key=jrnd.split(subkey, y.shape[:2]))
+                        batch_alpha_encode(y, key=jrnd.split(ky, y.shape[:2]))
                     )
                     a = jnp.where(mask_y, a, 0)  # miss_values have no updates to state
 
@@ -189,7 +195,7 @@ class XFADS(Model):
 
                     return ab
 
-        key, subkey = jrnd.split(key)
-        alpha = batch_encode(y, subkey)
+        key, ky = jrnd.split(key)
+        alpha = batch_encode(y, ky)
 
         return batch_smooth(jrnd.split(key, len(t)), t, alpha, u, c)

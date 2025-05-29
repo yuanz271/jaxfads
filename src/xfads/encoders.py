@@ -1,60 +1,59 @@
 import math
-import jax
-from jax import random as jrnd
-from jaxtyping import Array, Float
+from jax import lax, random as jrnd, vmap
+from jaxtyping import Array
 import equinox as eqx
+from omegaconf import DictConfig
+from gearax.modules import ConfModule
 
+from .distributions import Approx
 from .nn import make_mlp
 
 
-class AlphaEncoder(eqx.Module):
-    # approx: Type = eqx.field(static=True)
+class AlphaEncoder(ConfModule):
     layer: eqx.Module
 
-    def __init__(
-        self, state_dim, observation_dim, depth, width, approx, *, key, dropout=None
-    ):
-        # self.approx = approx
-
+    def __init__(self, conf: DictConfig, key: Array):
+        self.conf = conf
+        approx = Approx.get_subclass(conf.approx)
         self.layer = make_mlp(
-            observation_dim,
-            approx.param_size(state_dim),
-            width,
-            depth,
+            conf.observation_dim,
+            approx.param_size(conf.state_dim),
+            conf.width,
+            conf.depth,
             key=key,
-            dropout=dropout,
+            dropout=conf.dropout,
         )
 
-    def __call__(self, y, *, key=None):
+    def __call__(self, y: Array, *, key=None) -> Array:
         return self.layer(y, key=key)
 
 
-class BetaEncoder(eqx.Module):
-    # approx: Type = eqx.field(static=True)
+class BetaEncoder(ConfModule):
     h0: Array
     cell: eqx.Module
     output: eqx.Module
-    dropout: eqx.nn.Dropout | None
+    dropout: eqx.nn.Dropout | None = None
 
-    def __init__(self, state_dim, depth, width, approx, *, key, dropout=None):
-        # self.approx = approx
+    def __init__(self, conf: DictConfig, key: Array):
+        self.conf = conf
+        approx = Approx.get_subclass(conf.approx)
 
-        param_size = approx.param_size(state_dim)
+        param_size = approx.param_size(conf.state_dim)
 
-        key, subkey = jrnd.split(key)
-        lim = 1 / math.sqrt(width)
-        self.h0 = jrnd.uniform(subkey, (width,), minval=-lim, maxval=lim)
+        key, ky = jrnd.split(key)
+        lim = 1 / math.sqrt(conf.width)
+        self.h0 = jrnd.uniform(ky, (conf.width,), minval=-lim, maxval=lim)
 
-        key, subkey = jrnd.split(key)
-        self.cell = eqx.nn.GRUCell(param_size, width, key=subkey)
+        key, ky = jrnd.split(key)
+        self.cell = eqx.nn.GRUCell(param_size, conf.width, key=ky)
 
-        key, subkey = jrnd.split(key)
-        self.output = eqx.nn.Linear(width, param_size, key=subkey)
+        key, ky = jrnd.split(key)
+        self.output = eqx.nn.Linear(conf.width, param_size, key=ky)
 
-        if dropout is not None:
-            self.dropout = eqx.nn.Dropout(dropout)
+        if conf.dropout is not None:
+            self.dropout = eqx.nn.Dropout(conf.dropout)
 
-    def __call__(self, a: Float[Array, "t h"], *, key):
+    def __call__(self, a: Array, *, key: Array) -> Array:
         """
         :param a: natural form observation information
         """
@@ -63,11 +62,11 @@ class BetaEncoder(eqx.Module):
             h = self.cell(inp, h)
             return h, h
 
-        _, hs = jax.lax.scan(step, init=self.h0, xs=a, reverse=True)
+        _, hs = lax.scan(step, init=self.h0, xs=a, reverse=True)
 
         if self.dropout is not None:
             hs = self.dropout(hs, key=key)
 
-        ab = jax.vmap(self.output)(hs)
+        b = vmap(self.output)(hs)
 
-        return ab
+        return b

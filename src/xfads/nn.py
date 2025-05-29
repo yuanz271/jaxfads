@@ -1,33 +1,34 @@
 from collections.abc import Callable
 from functools import partial
 import math
+from typing import Literal
 
 import jax
 from jax import nn as jnn, random as jrnd, numpy as jnp
-from jaxtyping import PRNGKeyArray, Array, Scalar
+from jaxtyping import Array, Scalar
 import equinox as eqx
 from equinox import nn as enn, Module
 
 from . import constraints
 
 
-_MIN_NORM = 1e-6
-MAX_EXP = 5.0
-EPS = jnp.finfo(jnp.float32).eps
+_MIN_NORM: float = 1e-6
+MAX_EXP: float = 5.0
+EPS: float = jnp.finfo(jnp.float32).eps
 
 
 def make_mlp(
-    in_size,
-    out_size,
-    width,
-    depth,
+    in_size: int | Literal["scalar"],
+    out_size: int | Literal["scalar"],
+    width: int,
+    depth: int,
     *,
-    key: PRNGKeyArray,
+    key: Array,
     activation: Callable = jnn.swish,
     final_bias: bool = True,
     final_activation: Callable | None = None,
     dropout: float | None = None,
-) -> Module:
+) -> enn.Sequential:
     key, layer_key = jrnd.split(key)
     layers = [enn.Linear(in_size, width, key=layer_key), enn.Lambda(activation)]
     for i in range(depth - 1):
@@ -46,7 +47,9 @@ def make_mlp(
     return enn.Sequential(layers)
 
 
-def _norm_except_axis(v: Array, norm: Callable[[Array], Scalar], axis: int | None):
+def _norm_except_axis(
+    v: Array, norm: Callable[[Array], Scalar], axis: int | None
+) -> Array:
     if axis is None:
         return norm(v)
     else:
@@ -94,8 +97,8 @@ class WeightNorm(Module):
         """
         :param x: JAX Array
         """
-        weight = self.weight
-        layer = eqx.tree_at(
+        weight: Array = self.weight
+        layer: Callable = eqx.tree_at(
             lambda layer: getattr(layer, self.weight_name), self.layer, weight
         )
         return layer(x)
@@ -207,7 +210,7 @@ class DataMasker(eqx.Module, strict=True):
         self,
         x: Array,
         *,
-        key: PRNGKeyArray | None = None,
+        key: Array | None = None,
         inference: bool | None = None,
     ) -> tuple[Array | None, Array]:
         if inference is None:
@@ -221,7 +224,7 @@ class DataMasker(eqx.Module, strict=True):
             return key, jnp.ones(shape)
         elif key is None:
             raise RuntimeError(
-                f"{self.__name__} requires a key when running in non-deterministic mode."
+                f"{DataMasker.__name__} requires a key when running in non-deterministic mode."
             )
         else:
             key, subkey = jrnd.split(key)

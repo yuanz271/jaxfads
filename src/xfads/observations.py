@@ -1,10 +1,12 @@
 from abc import abstractmethod
-from typing import ClassVar, override
+from typing import ClassVar, Unpack
 
 from jax import numpy as jnp
 from jaxtyping import Array, PRNGKeyArray
 import tensorflow_probability.substrates.jax.distributions as tfp
 import equinox as eqx
+
+from gearax.modules import ConfModule
 
 from .nn import VariantBiasLinear, StationaryLinear
 from .constraints import constrain_positive, unconstrain_positive
@@ -14,7 +16,7 @@ from .distributions import Approx
 MAX_LOGRATE = 7.0
 
 
-class Likelihood(eqx.Module):
+class Likelihood(ConfModule):
     registry: ClassVar[dict] = dict()
 
     def __init_subclass__(cls, *args, **kwargs):
@@ -28,30 +30,35 @@ class Likelihood(eqx.Module):
         return Likelihood.registry[name]
 
     @abstractmethod
-    def eloglik(self, *args, **kwargs) -> Array: ...
+    def eloglik(self, *args: Unpack[tuple], **kwargs: Unpack[dict]) -> Array: ...
 
 
 class Poisson(Likelihood):
     readout: StationaryLinear | VariantBiasLinear
 
-    def __init__(
-        self, state_dim, observation_dim, *, key, norm_readout: bool = False, **kwargs
-    ):
-        n_steps = kwargs.get("n_steps", 0)
+    def __init__(self, conf, key):
+        self.conf = conf
+        n_steps = conf.get("n_steps", 0)
 
         if n_steps > 0:
             self.readout = VariantBiasLinear(
-                state_dim, observation_dim, n_steps, key=key, norm_readout=norm_readout
+                conf.state_dim,
+                conf.observation_dim,
+                n_steps,
+                key=key,
+                norm_readout=conf.norm_readout,
             )
         else:
             self.readout = StationaryLinear(
-                state_dim, observation_dim, key=key, norm_readout=norm_readout
+                conf.state_dim,
+                conf.observation_dim,
+                key=key,
+                norm_readout=conf.norm_readout,
             )
 
     def set_static(self, static=True) -> None:
         self.readout.set_static(static)  # type: ignore
 
-    @override
     def eloglik(
         self, key: PRNGKeyArray, t: Array, moment: Array, y: Array, approx, mc_size: int
     ) -> Array:
@@ -72,27 +79,32 @@ class DiagGaussian(Likelihood):
     unconstrained_cov: Array = eqx.field(static=False)
     readout: StationaryLinear | VariantBiasLinear
 
-    def __init__(
-        self, state_dim, observation_dim, *, key, norm_readout: bool = False, **kwargs
-    ):
-        cov = kwargs.get("cov", jnp.ones(observation_dim))
+    def __init__(self, conf, key):
+        self.conf = conf
+        cov = conf.get("cov", jnp.ones(conf.observation_dim))
         self.unconstrained_cov = unconstrain_positive(cov)
 
-        n_steps = kwargs.get("n_steps", 0)
+        n_steps = conf.get("n_steps", 0)
 
         if n_steps > 0:
             self.readout = VariantBiasLinear(
-                state_dim, observation_dim, n_steps, key=key, norm_readout=norm_readout
+                conf.state_dim,
+                conf.observation_dim,
+                n_steps,
+                key=key,
+                norm_readout=conf.norm_readout,
             )
         else:
             self.readout = StationaryLinear(
-                state_dim, observation_dim, key=key, norm_readout=norm_readout
+                conf.state_dim,
+                conf.observation_dim,
+                key=key,
+                norm_readout=conf.norm_readout,
             )
 
     def cov(self):
         return constrain_positive(self.unconstrained_cov)
 
-    @override
     def eloglik(
         self,
         key: PRNGKeyArray,

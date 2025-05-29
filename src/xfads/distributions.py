@@ -8,18 +8,13 @@ from typing import ClassVar
 
 from jax import numpy as jnp, random as jrnd
 
-# from jax.nn import softplus  # this version is overflow safe
-from jaxtyping import Array, Scalar, PRNGKeyArray
+from jaxtyping import Array, Scalar
 import tensorflow_probability.substrates.jax.distributions as tfp
 
 from .constraints import constrain_positive, unconstrain_positive
 
 
-# MIN_VAR = 1e-6
-# EPS = 1e-6
-
-
-def damping_inv(a: Array, damping=1e-6) -> Array:
+def damping_inv(a: Array, damping: float = 1e-6) -> Array:
     return jnp.linalg.inv(a + damping * jnp.eye(a.shape[-1]))
 
 
@@ -31,7 +26,7 @@ class Approx(ABC):
         Approx.registry[cls.__name__] = cls
 
     @classmethod
-    def get_subclass(cls, name: str):
+    def get_subclass(cls, name: str) -> type["Approx"]:
         """Get the class of the distribution by its name."""
         if name not in Approx.registry:
             raise ValueError(f"Distribution {name} is not registered.")
@@ -116,7 +111,7 @@ class FullMVN(Approx):
         return natural
 
     @classmethod
-    def sample_by_moment(cls, key: PRNGKeyArray, moment: Array, mc_size: int) -> Array:
+    def sample_by_moment(cls, key: Array, moment: Array, mc_size: int) -> Array:
         loc, V = cls.moment_to_canon(moment)
         return jrnd.multivariate_normal(
             key, loc, V, shape=(mc_size,)
@@ -143,8 +138,8 @@ class FullMVN(Approx):
         return int(math.sqrt(param_size))
 
     @classmethod
-    def canon_to_moment(cls, mean: Array, V: Array) -> Array:
-        v = V.flatten()
+    def canon_to_moment(cls, mean: Array, cov: Array) -> Array:
+        v = cov.flatten()
         moment = jnp.concatenate((mean, v))
         return moment
 
@@ -168,8 +163,8 @@ class FullMVN(Approx):
         return cls.moment_to_natural(moment)
 
     @classmethod
-    def full_cov(cls, V: Array) -> Array:
-        return V
+    def full_cov(cls, cov: Array) -> Array:
+        return cov
 
     @classmethod
     def constrain_moment(cls, unconstrained: Array) -> Array:

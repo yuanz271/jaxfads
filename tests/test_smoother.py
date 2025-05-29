@@ -1,5 +1,8 @@
+from typing import override
 from pathlib import Path
 from tempfile import TemporaryDirectory
+
+from jax import Array, random as jrnd
 from omegaconf import OmegaConf
 import equinox as eqx
 from xfads.dynamics import AbstractDynamics
@@ -10,23 +13,14 @@ class Mock(AbstractDynamics):
     noise: eqx.Module
     layer: eqx.Module
 
-    def __init__(
-        self,
-        state_dim: int,
-        input_dim: int,
-        width: int,
-        depth: int,
-        cov,
-        *,
-        key,
-        dropout: float | None = None,
-        **kwargs,
-    ):
+    def __init__(self, conf, key):
+        self.conf = conf
         self.noise = None
         self.layer = None
 
-    def __call__(self, z, u, *, key=None):
-        pass
+    @override
+    def forward(self, z, u, c, *, key=None) -> Array:
+        return z
 
     def loss(self):
         return 0.0
@@ -52,11 +46,8 @@ def test_constructor():
             mode="pseudo",
             observation_dim=y_size,
             state_dim=z_size,
-            input_dim=u_size,
             forward="Mock",
-            backward=None,
             approx="DiagMVN",
-            state_noise=state_noise,
             mc_size=mc_size,
             seed=seed,
             observation=observation,
@@ -64,22 +55,42 @@ def test_constructor():
             fb_penalty=0,
             noise_penalty=0,
             dropout=dropout,
-            dyn_kwargs=dict(
-                width=width,
-                depth=depth,
-                linear_input_size=1,
-                dropout=dropout,
+            dyn_conf=OmegaConf.create(
+                dict(
+                    width=width,
+                    depth=depth,
+                    linear_input_size=1,
+                    dropout=dropout,
+                    observation_dim=y_size,
+                    state_dim=z_size,
+                    input_dim=u_size,
+                    context_dim=0,
+                    state_noise=state_noise,
+                )
             ),
-            enc_kwargs=dict(width=width, depth=depth, dropout=dropout),
-            obs_kwargs=dict(
-                emission_noise=emission_noise,
-                norm_readout=normed_readout,
-                dropout=dropout,
+            enc_conf=OmegaConf.create(
+                dict(
+                    width=width,
+                    depth=depth,
+                    dropout=dropout,
+                    observation_dim=y_size,
+                    state_dim=z_size,
+                    approx="DiagMVN",
+                )
+            ),
+            obs_conf=OmegaConf.create(
+                dict(
+                    observation_dim=y_size,
+                    state_dim=z_size,
+                    emission_noise=emission_noise,
+                    norm_readout=normed_readout,
+                    dropout=dropout,
+                )
             ),
         )
     )
 
-    model = XFADS(model_conf)
+    model = XFADS(model_conf, jrnd.key(seed))
 
     with TemporaryDirectory() as tmp_dir:
         path = Path(tmp_dir) / "model.zip"
