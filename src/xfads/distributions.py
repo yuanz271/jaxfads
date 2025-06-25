@@ -10,7 +10,7 @@ from jax import numpy as jnp, random as jrnd
 from jaxtyping import Array, Scalar
 import tensorflow_probability.substrates.jax.distributions as tfp
 
-from gearax.decorators import with_subclass_registry
+from gearax.mixin import SubclassRegistryMixin
 
 from .constraints import constrain_positive, unconstrain_positive
 
@@ -19,8 +19,7 @@ def damping_inv(a: Array, damping: float = 1e-6) -> Array:
     return jnp.linalg.inv(a + damping * jnp.eye(a.shape[-1]))
 
 
-@with_subclass_registry
-class Approx(ABC):
+class Approx(SubclassRegistryMixin, ABC):
     @classmethod
     @abstractmethod
     def natural_to_moment(cls, natural) -> Array: ...

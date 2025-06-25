@@ -8,7 +8,7 @@ from jax import numpy as jnp, random as jrnd
 from jaxtyping import Array, PRNGKeyArray, ScalarLike
 import equinox as eqx
 from gearax.modules import ConfModule
-from gearax.decorators import with_subclass_registry
+from gearax.mixin import SubclassRegistryMixin
 
 from .constraints import constrain_positive, unconstrain_positive
 from .distributions import Approx
@@ -64,8 +64,7 @@ class DiagGaussian(eqx.Module, strict=True):
     #     self.__dataclass_fields__['unconstrained_cov'].metadata = {'static': static}
 
 
-@with_subclass_registry
-class AbstractDynamics(ConfModule):
+class AbstractDynamics(SubclassRegistryMixin, ConfModule):
     noise: eqx.AbstractVar[Noise]
 
     @abstractmethod
