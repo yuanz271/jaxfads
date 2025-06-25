@@ -4,12 +4,13 @@ Exponential-family variational distributions
 
 from abc import ABC, abstractmethod
 import math
-from typing import ClassVar
 
 from jax import numpy as jnp, random as jrnd
 
 from jaxtyping import Array, Scalar
 import tensorflow_probability.substrates.jax.distributions as tfp
+
+from gearax.decorators import with_subclass_registry
 
 from .constraints import constrain_positive, unconstrain_positive
 
@@ -18,20 +19,8 @@ def damping_inv(a: Array, damping: float = 1e-6) -> Array:
     return jnp.linalg.inv(a + damping * jnp.eye(a.shape[-1]))
 
 
+@with_subclass_registry
 class Approx(ABC):
-    registry: ClassVar[dict] = dict()
-
-    def __init_subclass__(cls, *args, **kwargs):
-        super().__init_subclass__(*args, **kwargs)
-        Approx.registry[cls.__name__] = cls
-
-    @classmethod
-    def get_subclass(cls, name: str) -> type["Approx"]:
-        """Get the class of the distribution by its name."""
-        if name not in Approx.registry:
-            raise ValueError(f"Distribution {name} is not registered.")
-        return Approx.registry[name]
-
     @classmethod
     @abstractmethod
     def natural_to_moment(cls, natural) -> Array: ...

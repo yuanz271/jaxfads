@@ -26,7 +26,7 @@ class XFADS(ConfModule):
     masker: DataMasker = eqx.field(init=False)
     unconstrained_prior_natural: Array = eqx.field(init=False)
 
-    def __post_init__(self, key):
+    def __post_init__(self, key):  # type: ignore
         state_dim = self.conf.state_dim
         # observation_dim = self.conf.observation_dim
         mc_size = self.conf.mc_size

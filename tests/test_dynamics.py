@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from jax import numpy as jnp, random as jrnd
 import equinox as eqx
 import chex
@@ -15,7 +16,7 @@ from xfads.nn import make_mlp
 
 class Nonlinear(AbstractDynamics):
     noise: eqx.Module
-    f: eqx.Module
+    f: Callable
 
     def __init__(
         self,
@@ -40,7 +41,7 @@ class Nonlinear(AbstractDynamics):
             dropout=dropout,
         )
 
-    def __call__(self, z: Array, u: Array, c: Array, *, key=None) -> Array:
+    def forward(self, z: Array, u: Array, c: Array, *, key=None) -> Array:
         x = jnp.concatenate((z, u), axis=-1)
         return z + self.f(x, key=key)
 

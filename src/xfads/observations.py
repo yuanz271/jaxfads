@@ -1,5 +1,5 @@
 from abc import abstractmethod
-from typing import ClassVar, Unpack
+from typing import Unpack
 
 from jax import numpy as jnp
 from jaxtyping import Array, PRNGKeyArray
@@ -7,6 +7,7 @@ import tensorflow_probability.substrates.jax.distributions as tfp
 import equinox as eqx
 
 from gearax.modules import ConfModule
+from gearax.decorators import with_subclass_registry
 
 from .nn import VariantBiasLinear, StationaryLinear
 from .constraints import constrain_positive, unconstrain_positive
@@ -16,21 +17,10 @@ from .distributions import Approx
 MAX_LOGRATE = 7.0
 
 
+@with_subclass_registry
 class Likelihood(ConfModule):
-    registry: ClassVar[dict] = dict()
-
-    def __init_subclass__(cls, *args, **kwargs):
-        super().__init_subclass__(*args, **kwargs)
-        Likelihood.registry[cls.__name__] = cls
-
-    @classmethod
-    def get_subclass(cls, name: str) -> type:
-        if name not in Likelihood.registry:
-            raise ValueError(f"Likelihood {name} is not registered.")
-        return Likelihood.registry[name]
-
     @abstractmethod
-    def eloglik(self, *args: Unpack[tuple], **kwargs: Unpack[dict]) -> Array: ...
+    def eloglik(self, *args: Unpack[tuple], **kwargs) -> Array: ...
 
 
 class Poisson(Likelihood):

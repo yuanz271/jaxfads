@@ -1,13 +1,14 @@
 from abc import abstractmethod
 from collections.abc import Callable
 from functools import partial
-from typing import ClassVar, Protocol
+from typing import Protocol
 
 import jax
 from jax import numpy as jnp, random as jrnd
 from jaxtyping import Array, PRNGKeyArray, ScalarLike
 import equinox as eqx
 from gearax.modules import ConfModule
+from gearax.decorators import with_subclass_registry
 
 from .constraints import constrain_positive, unconstrain_positive
 from .distributions import Approx
@@ -63,19 +64,9 @@ class DiagGaussian(eqx.Module, strict=True):
     #     self.__dataclass_fields__['unconstrained_cov'].metadata = {'static': static}
 
 
+@with_subclass_registry
 class AbstractDynamics(ConfModule):
-    registry: ClassVar[dict] = dict()
     noise: eqx.AbstractVar[Noise]
-
-    def __init_subclass__(cls, *args, **kwargs):
-        super().__init_subclass__(*args, **kwargs)
-        AbstractDynamics.registry[cls.__name__] = cls
-
-    @classmethod
-    def get_subclass(cls, name: str) -> type:
-        if name not in AbstractDynamics.registry:
-            raise ValueError(f"Dynamics {name} is not registered.")
-        return AbstractDynamics.registry[name]
 
     @abstractmethod
     def forward(self, z: Array, u: Array, c: Array, *, key=None) -> Array: ...
