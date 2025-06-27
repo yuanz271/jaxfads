@@ -1,3 +1,4 @@
+from collections.abc import Callable
 import math
 from jax import lax, random as jrnd, vmap
 from jaxtyping import Array
@@ -10,7 +11,7 @@ from .nn import make_mlp
 
 
 class AlphaEncoder(ConfModule):
-    layer: eqx.Module
+    layer: Callable
 
     def __init__(self, conf: DictConfig, key: Array):
         self.conf = conf
@@ -30,8 +31,8 @@ class AlphaEncoder(ConfModule):
 
 class BetaEncoder(ConfModule):
     h0: Array
-    cell: eqx.Module
-    output: eqx.Module
+    cell: Callable
+    output: Callable
     dropout: eqx.nn.Dropout | None = None
 
     def __init__(self, conf: DictConfig, key: Array):
