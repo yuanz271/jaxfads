@@ -47,7 +47,7 @@ def test_ilqr():
 
     # u_opt, x_opt = pilqr(x0[1], u_init[1])
 
-    u_opt, x_opt = vilqr(x0, u_init)
+    u_opt, x_opt, _ = vilqr(x0, u_init)
 
     # Plotting position tracking
     # time = np.linspace(0, T * dt, T + 1)
