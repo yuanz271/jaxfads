@@ -3,10 +3,11 @@ from jax import numpy as jnp, random as jrnd
 import equinox as eqx
 import chex
 from jaxtyping import Array
+from omegaconf import OmegaConf
 
 from xfads.distributions import DiagMVN
 from xfads.dynamics import (
-    AbstractDynamics,
+    Dynamics,
     predict_moment,
     sample_expected_moment,
     DiagGaussian,
@@ -14,22 +15,23 @@ from xfads.dynamics import (
 from xfads.nn import make_mlp
 
 
-class Nonlinear(AbstractDynamics):
-    noise: eqx.Module
-    f: Callable
+class Nonlinear(Dynamics):
+    noise: eqx.Module = eqx.field(init=False)
+    f: Callable = eqx.field(init=False)
 
     def __init__(
         self,
-        state_dim: int,
-        input_dim: int,
-        width: int,
-        depth: int,
-        cov,
-        *,
+        conf,
         key,
-        dropout: float | None = None,
-        **kwargs,
     ):
+        self.conf = conf
+        state_dim = self.conf.state_dim
+        input_dim = self.conf.input_dim
+        width = self.conf.width
+        depth = self.conf.depth
+        cov = self.conf.cov
+        dropout = self.conf.dropout
+
         self.noise = DiagGaussian(cov, state_dim)
         self.f = make_mlp(
             state_dim + input_dim,
@@ -54,7 +56,19 @@ def test_predict_moment(spec):
     state_dim = spec["state_dim"]
     input_dim = spec["input_dim"]
 
-    f = Nonlinear(state_dim, input_dim, spec["width"], spec["depth"], key=key, cov=1.0)
+    f = Dynamics.get_subclass(Nonlinear.__name__)(
+        OmegaConf.create(
+            dict(
+                state_dim=state_dim,
+                input_dim=input_dim,
+                width=spec["width"],
+                depth=spec["depth"],
+                cov=1.0,
+                dropout=None,
+            )
+        ),
+        key=key,
+    )
     noise = DiagGaussian(1, state_dim)
 
     z = jrnd.normal(key, (state_dim,))
@@ -70,7 +84,19 @@ def test_sample_expected_moment(spec):
     state_dim = spec["state_dim"]
     input_dim = spec["input_dim"]
 
-    f = Nonlinear(state_dim, input_dim, spec["width"], spec["depth"], key=key, cov=1.0)
+    f = Dynamics.get_subclass(Nonlinear.__name__)(
+        OmegaConf.create(
+            dict(
+                state_dim=state_dim,
+                input_dim=input_dim,
+                width=spec["width"],
+                depth=spec["depth"],
+                cov=1.0,
+                dropout=None,
+            )
+        ),
+        key=key,
+    )
     noise = DiagGaussian(1, state_dim)
 
     z = jrnd.normal(key, (state_dim,))

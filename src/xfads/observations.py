@@ -7,7 +7,7 @@ import tensorflow_probability.substrates.jax.distributions as tfp
 import equinox as eqx
 
 from gearax.modules import ConfModule
-from gearax.mixin import SubclassRegistryMixin
+from gearax.meta import ModuleRegistry
 
 from .nn import VariantBiasLinear, StationaryLinear
 from .constraints import constrain_positive, unconstrain_positive
@@ -17,7 +17,7 @@ from .distributions import Approx
 MAX_LOGRATE = 7.0
 
 
-class Likelihood(SubclassRegistryMixin, ConfModule):
+class Likelihood(ConfModule, metaclass=ModuleRegistry):
     @abstractmethod
     def eloglik(self, *args: Unpack[tuple], **kwargs) -> Array: ...
 

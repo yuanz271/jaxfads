@@ -2,7 +2,7 @@
 Exponential-family variational distributions
 """
 
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 import math
 
 from jax import numpy as jnp, random as jrnd
@@ -10,7 +10,7 @@ from jax import numpy as jnp, random as jrnd
 from jaxtyping import Array, Scalar
 import tensorflow_probability.substrates.jax.distributions as tfp
 
-from gearax.mixin import SubclassRegistryMixin
+from gearax.meta import SubClassRegistry
 
 from .constraints import constrain_positive, unconstrain_positive
 
@@ -19,7 +19,7 @@ def damping_inv(a: Array, damping: float = 1e-6) -> Array:
     return jnp.linalg.inv(a + damping * jnp.eye(a.shape[-1]))
 
 
-class Approx(SubclassRegistryMixin, ABC):
+class Approx(metaclass=SubClassRegistry):
     @classmethod
     @abstractmethod
     def natural_to_moment(cls, natural) -> Array: ...

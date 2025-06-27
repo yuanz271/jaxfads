@@ -10,7 +10,7 @@ from gearax.modules import ConfModule, load_model, save_model
 
 from . import core, encoders
 from .distributions import Approx
-from .dynamics import AbstractDynamics
+from .dynamics import Dynamics
 from .observations import Likelihood
 from .nn import DataMasker
 from .core import Hyperparam, Mode
@@ -57,7 +57,7 @@ class XFADS(ConfModule):
         )
 
         key, ky = jrnd.split(key)
-        self.forward = AbstractDynamics.get_subclass(forward)(
+        self.forward = Dynamics.get_subclass(forward)(
             self.conf.dyn_conf,
             key=ky,
             # state_dim=state_dim,
