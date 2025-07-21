@@ -349,16 +349,16 @@ def train_fast(model, data, *, conf):
         def train_step(carry):
             params, opt_state, i, converged, mean_loss, key, idx, perm = carry
 
-            def new_perm(key, perm):
+            def new_perm(key, perm, idx):
                 perm = jrnd.permutation(key, train_size)
-                return perm
+                return perm, 0
 
-            def old_perm(key, perm):
-                return perm
+            def old_perm(key, perm, idx):
+                return perm, idx
 
             key, cey = jrnd.split(key)
-            perm = lax.cond(
-                idx + batch_size >= train_size, new_perm, old_perm, cey, perm
+            perm, idx = lax.cond(
+                idx + batch_size >= train_size, new_perm, old_perm, cey, perm, idx
             )
 
             model = eqx.combine(params, static)
