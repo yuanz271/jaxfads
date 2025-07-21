@@ -16,21 +16,58 @@ from .constraints import constrain_positive, unconstrain_positive
 
 
 def damping_inv(a: Array, damping: float = 1e-6) -> Array:
+    """Compute the inverse of a matrix with an optional damping term for numerical stability.
+
+    :param a: Input square matrix of shape (..., D, D) to be inverted.
+    :type a: Array
+    :param damping: Damping factor added to the diagonal (default: 1e-6).
+    :type damping: float
+    :returns: Inverse of (a + damping * I).
+    :rtype: Array
+    """
     return jnp.linalg.inv(a + damping * jnp.eye(a.shape[-1]))
 
 
 class Approx(SubclassRegistryMixin, ABC):
     @classmethod
     @abstractmethod
-    def natural_to_moment(cls, natural) -> Array: ...
+    def natural_to_moment(cls, natural) -> Array:
+        """Convert natural parameters to moment parameters.
+
+        :param natural: Natural parameter vector of the exponential-family distribution.
+        :type natural: Array
+        :returns: Corresponding moment parameter vector.
+        :rtype: Array
+        """
+        ...
 
     @classmethod
     @abstractmethod
-    def moment_to_natural(cls, moment) -> Array: ...
+    def moment_to_natural(cls, moment) -> Array:
+        """Convert moment parameters to natural parameters.
+
+        :param moment: Moment parameter vector of the exponential-family distribution.
+        :type moment: Array
+        :returns: Corresponding natural parameter vector.
+        :rtype: Array
+        """
+        ...
 
     @classmethod
     @abstractmethod
-    def sample_by_moment(cls, key, moment, mc_size) -> Array: ...
+    def sample_by_moment(cls, key, moment, mc_size) -> Array:
+        """Generate samples from the distribution using moment parameters.
+
+        :param key: JAX PRNG key for randomness.
+        :type key: Array
+        :param moment: Moment parameter vector defining the distribution.
+        :type moment: Array
+        :param mc_size: Number of Monte Carlo samples to draw.
+        :type mc_size: int
+        :returns: Samples drawn from the distribution, shape (mc_size, D).
+        :rtype: Array
+        """
+        ...
 
     @classmethod
     @abstractmethod
