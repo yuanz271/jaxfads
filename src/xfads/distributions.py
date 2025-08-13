@@ -1,5 +1,10 @@
 """
-Exponential-family variational distributions
+Exponential-family variational distributions for XFADS.
+
+This module provides implementations of exponential family distributions
+with natural and moment parameterizations for variational inference in
+XFADS. Supports various approximations including full covariance, low-rank,
+and diagonal multivariate normal distributions.
 """
 
 from abc import abstractmethod, ABC
@@ -16,78 +21,208 @@ from .constraints import constrain_positive, unconstrain_positive
 
 
 def damping_inv(a: Array, damping: float = 1e-6) -> Array:
-    """Compute the inverse of a matrix with an optional damping term for numerical stability.
+    """
+    Compute the inverse of a matrix with damping for numerical stability.
 
-    :param a: Input square matrix of shape (..., D, D) to be inverted.
-    :type a: Array
-    :param damping: Damping factor added to the diagonal (default: 1e-6).
-    :type damping: float
-    :returns: Inverse of (a + damping * I).
-    :rtype: Array
+    Parameters
+    ----------
+    a : Array, shape (..., D, D)
+        Input square matrix to be inverted.
+    damping : float, default=1e-6
+        Damping factor added to the diagonal for numerical stability.
+
+    Returns
+    -------
+    Array, shape (..., D, D)
+        Inverse of (a + damping * I).
+
+    Notes
+    -----
+    The damping term prevents singular matrices and improves numerical
+    stability by adding a small positive value to the diagonal elements.
     """
     return jnp.linalg.inv(a + damping * jnp.eye(a.shape[-1]))
 
 
 class Approx(SubclassRegistryMixin, ABC):
+    """
+    Abstract base class for exponential family approximations in XFADS.
+
+    This class defines the interface for exponential family distributions
+    used in variational inference, providing conversions between natural
+    and moment parameterizations, sampling methods, and other utilities.
+    """
+
     @classmethod
     @abstractmethod
     def natural_to_moment(cls, natural) -> Array:
-        """Convert natural parameters to moment parameters.
+        """
+        Convert natural parameters to moment parameters.
 
-        :param natural: Natural parameter vector of the exponential-family distribution.
-        :type natural: Array
-        :returns: Corresponding moment parameter vector.
-        :rtype: Array
+        Parameters
+        ----------
+        natural : Array
+            Natural parameter vector of the exponential-family distribution.
+
+        Returns
+        -------
+        Array
+            Corresponding moment parameter vector.
+
+        Notes
+        -----
+        For exponential families, the moment parameters are the expected
+        values of the sufficient statistics under the distribution.
         """
         ...
 
     @classmethod
     @abstractmethod
     def moment_to_natural(cls, moment) -> Array:
-        """Convert moment parameters to natural parameters.
+        """
+        Convert moment parameters to natural parameters.
 
-        :param moment: Moment parameter vector of the exponential-family distribution.
-        :type moment: Array
-        :returns: Corresponding natural parameter vector.
-        :rtype: Array
+        Parameters
+        ----------
+        moment : Array
+            Moment parameter vector of the exponential-family distribution.
+
+        Returns
+        -------
+        Array
+            Corresponding natural parameter vector.
+
+        Notes
+        -----
+        The natural parameters are the canonical parameterization for
+        exponential families, often providing better numerical properties
+        for optimization and inference.
         """
         ...
 
     @classmethod
     @abstractmethod
     def sample_by_moment(cls, key, moment, mc_size) -> Array:
-        """Generate samples from the distribution using moment parameters.
+        """
+        Generate samples from the distribution using moment parameters.
 
-        :param key: JAX PRNG key for randomness.
-        :type key: Array
-        :param moment: Moment parameter vector defining the distribution.
-        :type moment: Array
-        :param mc_size: Number of Monte Carlo samples to draw.
-        :type mc_size: int
-        :returns: Samples drawn from the distribution, shape (mc_size, D).
-        :rtype: Array
+        Parameters
+        ----------
+        key : Array
+            JAX PRNG key for randomness.
+        moment : Array
+            Moment parameter vector defining the distribution.
+        mc_size : int
+            Number of Monte Carlo samples to draw.
+
+        Returns
+        -------
+        Array, shape (mc_size, D)
+            Samples drawn from the distribution.
+
+        Notes
+        -----
+        Uses reparameterization trick when possible for gradient estimation
+        compatibility in variational inference.
         """
         ...
 
     @classmethod
     @abstractmethod
-    def param_size(cls, state_dim) -> int: ...
+    def param_size(cls, state_dim) -> int:
+        """
+        Get the total parameter size for given state dimension.
+
+        Parameters
+        ----------
+        state_dim : int
+            Dimensionality of the state space.
+
+        Returns
+        -------
+        int
+            Total number of parameters needed to parameterize the distribution.
+        """
+        ...
 
     @classmethod
     @abstractmethod
-    def kl(cls, moment1, moment2) -> Scalar: ...
+    def kl(cls, moment1, moment2) -> Scalar:
+        """
+        Compute KL divergence between two distributions.
+
+        Parameters
+        ----------
+        moment1 : Array
+            Moment parameters of the first distribution.
+        moment2 : Array
+            Moment parameters of the second distribution.
+
+        Returns
+        -------
+        Scalar
+            KL divergence KL(p1 || p2) where p1 and p2 are parameterized
+            by moment1 and moment2 respectively.
+        """
+        ...
 
     @classmethod
     @abstractmethod
-    def moment_to_canon(cls, moment: Array) -> tuple[Array, Array]: ...
+    def moment_to_canon(cls, moment: Array) -> tuple[Array, Array]:
+        """
+        Convert moment parameters to canonical mean and covariance.
+
+        Parameters
+        ----------
+        moment : Array
+            Moment parameter vector.
+
+        Returns
+        -------
+        mean : Array
+            Mean vector.
+        cov : Array
+            Covariance matrix or parameters.
+        """
+        ...
 
     @classmethod
     @abstractmethod
-    def canon_to_moment(cls, mean: Array, cov: Array) -> Array: ...
+    def canon_to_moment(cls, mean: Array, cov: Array) -> Array:
+        """
+        Convert canonical mean and covariance to moment parameters.
+
+        Parameters
+        ----------
+        mean : Array
+            Mean vector.
+        cov : Array
+            Covariance matrix or parameters.
+
+        Returns
+        -------
+        Array
+            Moment parameter vector.
+        """
+        ...
 
     @classmethod
     @abstractmethod
-    def full_cov(cls, cov: Array) -> Array: ...
+    def full_cov(cls, cov: Array) -> Array:
+        """
+        Convert covariance parameterization to full covariance matrix.
+
+        Parameters
+        ----------
+        cov : Array
+            Covariance parameters (may be diagonal, low-rank, etc.).
+
+        Returns
+        -------
+        Array
+            Full covariance matrix.
+        """
+        ...
 
     @classmethod
     @abstractmethod
@@ -111,9 +246,38 @@ class Approx(SubclassRegistryMixin, ABC):
 
 
 class FullMVN(Approx):
+    """
+    Full covariance multivariate normal approximation.
+
+    Implements exponential family operations for multivariate normal
+    distributions with full covariance matrices. Uses natural parameters
+    η = (Σ^{-1}μ, -½Σ^{-1}) where μ is mean and Σ is covariance.
+
+    Notes
+    -----
+    Parameter layout: [mean_vec, cov_matrix_flattened]
+    Total parameters: D + D²
+    """
     @classmethod
     def natural_to_moment(cls, natural: Array) -> Array:
-        """Pmu, -P/2 => mu, P"""
+        """
+        Convert natural parameters to moment parameters.
+
+        Parameters
+        ----------
+        natural : Array
+            Natural parameters [Σ^{-1}μ, -½Σ^{-1}].
+
+        Returns
+        -------
+        Array
+            Moment parameters [μ, Σ].
+
+        Notes
+        -----
+        Transforms from natural parameterization (Σ^{-1}μ, -½Σ^{-1})
+        to moment parameterization (μ, Σ).
+        """
         n = jnp.size(natural)
         m = cls.variable_size(n)
         nat1, nat2 = jnp.split(natural, [m])
@@ -153,7 +317,22 @@ class FullMVN(Approx):
     @classmethod
     def variable_size(cls, param_size: int) -> int:
         """
-        Get the variable size given a parameter vector size
+        Get the variable size given a parameter vector size.
+
+        Parameters
+        ----------
+        param_size : int
+            Total size of the parameter vector.
+
+        Returns
+        -------
+        int
+            Dimensionality of the random variable.
+
+        Notes
+        -----
+        For full MVN: param_size = D + D² where D is variable dimension.
+        Solves: D² + D - param_size = 0 for D.
         """
         # n: size of vectorized mean param
         # m: size of random variable
@@ -241,6 +420,18 @@ class LoRaMVN(Approx):
 
 
 class DiagMVN(Approx):
+    """
+    Diagonal covariance multivariate normal approximation.
+
+    Implements exponential family operations for multivariate normal
+    distributions with diagonal covariance matrices. More efficient
+    than full covariance but less expressive.
+
+    Notes
+    -----
+    Parameter layout: [mean_vec, diag_cov_vec]
+    Total parameters: 2D
+    """
     @classmethod
     def natural_to_moment(cls, natural) -> Array:
         nat1, nat2 = jnp.split(natural, 2)

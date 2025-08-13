@@ -1,3 +1,12 @@
+"""
+XFADS smoother module.
+
+This module implements the main XFADS
+class that orchestrates the complete variational inference pipeline for Bayesian
+state-space modeling. It combines neural encoders, dynamics models, observation
+models, and filtering/smoothing algorithms.
+"""
+
 from collections.abc import Callable
 from functools import partial
 from pathlib import Path
@@ -17,6 +26,78 @@ from .core import Hyperparam, Mode
 
 
 class XFADS(ConfModule):
+    """
+    XFADS for Bayesian state-space modeling.
+
+    XFADS implements variational inference for nonlinear dynamical systems using
+    neural networks to parameterize variational distributions. It supports both
+    forward filtering and bidirectional smoothing with various exponential family
+    approximations.
+
+    Parameters
+    ----------
+    conf : DictConfig
+        Configuration object containing all model hyperparameters including:
+        - state_dim: Dimensionality of latent state
+        - observation_dim: Dimensionality of observations
+        - mc_size: Number of Monte Carlo samples
+        - approx: Exponential family approximation type
+        - forward: Forward dynamics model type
+        - observation: Observation model type
+        - mode: Inference mode ('pseudo' or 'bifilter')
+
+    Attributes
+    ----------
+    hyperparam : Hyperparam
+        Compiled hyperparameters for the model.
+    forward : Dynamics
+        Forward dynamics model for state transitions.
+    likelihood : Likelihood
+        Observation/emission model.
+    alpha_encoder : AlphaEncoder
+        Neural encoder for observation information updates.
+    beta_encoder : BetaEncoder
+        Neural encoder for temporal dependencies.
+    masker : DataMasker
+        Dropout masker for pseudo-observations during training.
+    unconstrained_prior_natural : Array
+        Unconstrained prior natural parameters.
+
+    Notes
+    -----
+    The model follows the state-space formulation:
+
+    z_t = f(z_{t-1}, u_t, c_t) + ε_t    (dynamics)
+    y_t = g(z_t, u_t, c_t) + δ_t        (observations)
+
+    where z_t is the latent state, y_t are observations, u_t are controls,
+    c_t are covariates, and ε_t, δ_t are noise terms.
+
+    Examples
+    --------
+    >>> import jax.random as jrnd
+    >>> from omegaconf import DictConfig
+    >>>
+    >>> conf = DictConfig({
+    ...     'state_dim': 10,
+    ...     'observation_dim': 50,
+    ...     'mc_size': 100,
+    ...     'approx': 'DiagMVN',
+    ...     'forward': 'Linear',
+    ...     'observation': 'Poisson'
+    ... })
+    >>>
+    >>> key = jrnd.key(42)
+    >>> model = XFADS(conf, key)
+    >>>
+    >>> # Run inference
+    >>> t = jnp.arange(100)
+    >>> y = jrnd.normal(key, (32, 100, 50))  # batch x time x obs
+    >>> u = jnp.zeros((32, 100, 1))         # controls
+    >>> c = jnp.zeros((32, 100, 1))         # covariates
+    >>>
+    >>> natural, moment, prediction = model(t, y, u, c, key=key)
+    """
     hyperparam: Hyperparam = eqx.field(init=False, static=True)
     forward: eqx.Module = eqx.field(init=False)
     # backward: eqx.Module | None = eqx.field(init=False)
@@ -27,6 +108,20 @@ class XFADS(ConfModule):
     unconstrained_prior_natural: Array = eqx.field(init=False)
 
     def __post_init__(self, key):  # type: ignore
+        """
+        Initialize XFADS model components after configuration.
+
+        Parameters
+        ----------
+        key : PRNGKeyArray
+            JAX random key for parameter initialization.
+
+        Notes
+        -----
+        This method is automatically called after __init__ by the ConfModule
+        framework. It initializes all neural networks, dynamics models, and
+        observation models based on the provided configuration.
+        """
         state_dim = self.conf.state_dim
         # observation_dim = self.conf.observation_dim
         mc_size = self.conf.mc_size
@@ -116,24 +211,151 @@ class XFADS(ConfModule):
         )
 
     def init(self, t, y, u, c):
+        """
+        Initialize model parameters based on data statistics.
+
+        Parameters
+        ----------
+        t : Array, shape (T,)
+            Time steps.
+        y : Array, shape (N, T, D_obs)
+            Observation sequences.
+        u : Array, shape (N, T, D_u)
+            Control input sequences.
+        c : Array, shape (N, T, D_c)
+            Covariate sequences.
+
+        Returns
+        -------
+        XFADS
+            Model with initialized parameters.
+
+        Notes
+        -----
+        Initializes observation model biases based on empirical mean of
+        observations. Particularly useful for Poisson observations where
+        biases are set to log-mean rates.
+        """
         mean_y = jnp.mean(y, axis=0)
         biases = jnp.log(jnp.maximum(mean_y, 1e-6))
         return eqx.tree_at(lambda model: model.likelihood.readout.biases, self, biases)
 
     @classmethod
     def load(cls, path: str | Path):
+        """
+        Load a trained XFADS model from disk.
+
+        Parameters
+        ----------
+        path : str or Path
+            Path to the saved model file.
+
+        Returns
+        -------
+        XFADS
+            Loaded model instance.
+        """
         return load_model(path, cls)
 
     @classmethod
     def save(cls, model: Self, path: str | Path):
+        """
+        Save a trained XFADS model to disk.
+
+        Parameters
+        ----------
+        model : XFADS
+            Model instance to save.
+        path : str or Path
+            Path where to save the model.
+        """
         save_model(path, model)
 
     def prior_natural(self) -> Array:
+        """
+        Get the prior distribution in natural parameter form.
+
+        Returns
+        -------
+        Array
+            Prior natural parameters for the initial state distribution.
+
+        Notes
+        -----
+        Applies constraints to ensure parameters are in valid range
+        for the chosen exponential family approximation.
+        """
         return self.hyperparam.approx.constrain_natural(
             self.unconstrained_prior_natural
         )
 
     def __call__(self, t, y, u, c, *, key) -> tuple[Array, Array, Array]:
+        """
+        Perform variational inference for state-space model.
+
+        This is the main inference method that processes observation sequences
+        through neural encoders and applies filtering/smoothing algorithms to
+        estimate posterior distributions over latent states.
+
+        Parameters
+        ----------
+        t : Array, shape (T,)
+            Time steps for the sequence.
+        y : Array, shape (N, T, D_obs)
+            Observation sequences where N is batch size, T is sequence length,
+            and D_obs is observation dimensionality.
+        u : Array, shape (N, T, D_u)
+            Control/input sequences.
+        c : Array, shape (N, T, D_c)
+            Covariate sequences.
+        key : PRNGKeyArray
+            JAX random key for stochastic operations.
+
+        Returns
+        -------
+        natural_params : Array, shape (N, T, param_dim)
+            Natural parameters of posterior distributions over states.
+        moment_params : Array, shape (N, T, param_dim)
+            Moment parameters of posterior distributions over states.
+        predictions : Array, shape (N, T, param_dim)
+            Predicted moment parameters from dynamics model.
+
+        Notes
+        -----
+        The inference pipeline consists of:
+
+        1. **Encoding**: Neural networks convert observations to natural parameter
+           updates (alpha encoder) and temporal dependencies (beta encoder).
+
+        2. **Missing Value Handling**: Non-finite observations are treated as
+           missing and their updates are zeroed out.
+
+        3. **Pseudo-Observations**: During training, the masker applies dropout
+           to create pseudo-missing observations for regularization.
+
+        4. **Filtering/Smoothing**: Applies either forward filtering (PSEUDO mode)
+           or bidirectional smoothing (BIFILTER mode) to estimate posterior states.
+
+        The method handles batched sequences efficiently using JAX transformations
+        and supports both training and inference modes.
+
+        Examples
+        --------
+        >>> # Single sequence inference
+        >>> t = jnp.arange(100)
+        >>> y = jrnd.normal(key, (1, 100, 50))
+        >>> u = jnp.zeros((1, 100, 5))
+        >>> c = jnp.zeros((1, 100, 3))
+        >>>
+        >>> natural, moment, pred = model(t, y, u, c, key=key)
+        >>>
+        >>> # Batch inference
+        >>> y_batch = jrnd.normal(key, (32, 100, 50))
+        >>> u_batch = jnp.zeros((32, 100, 5))
+        >>> c_batch = jnp.zeros((32, 100, 3))
+        >>>
+        >>> natural, moment, pred = model(t, y_batch, u_batch, c_batch, key=key)
+        """
         batch_alpha_encode: Callable = vmap(vmap(self.alpha_encoder))  # type: ignore
         batch_constrain_natural: Callable = vmap(
             vmap(self.hyperparam.approx.constrain_natural)

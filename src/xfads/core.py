@@ -1,3 +1,11 @@
+"""
+Core filtering and smoothing algorithms for XFADS.
+
+This module implements the fundamental algorithms for XFADS,
+including forward filtering and bidirectional smoothing
+using variational inference in exponential family approximations.
+"""
+
 from dataclasses import dataclass
 from enum import auto, StrEnum
 from functools import partial
@@ -11,12 +19,40 @@ from .dynamics import sample_expected_moment
 
 
 class Mode(StrEnum):
+    """
+    Enumeration of inference modes for XFADS.
+
+    Attributes
+    ----------
+    PSEUDO : str
+        Pseudo-observation mode using forward filtering only.
+    BIFILTER : str
+        Bidirectional filtering mode for improved smoothing.
+    """
     PSEUDO = auto()
     BIFILTER = auto()
 
 
 @dataclass
 class Hyperparam:
+    """
+    Hyperparameters for XFADS configuration.
+
+    Parameters
+    ----------
+    approx : type
+        The exponential family approximation class to use.
+    state_dim : int
+        Dimensionality of the latent state space.
+    mc_size : int
+        Number of Monte Carlo samples for expectation approximation.
+    fb_penalty : float
+        Forward-backward penalty weight for regularization.
+    noise_penalty : float
+        Noise penalty weight for dynamics regularization.
+    mode : str
+        Inference mode, one of Mode enum values.
+    """
     approx: type
     state_dim: int
     # iu_dim: int
@@ -38,8 +74,44 @@ def filter(
     model,
 ) -> tuple[Array, Array, Array]:
     """
-    :param t: time steps, shape (T,)
-    :param alpha: information update, shape (T, state_dim)
+    Forward filtering for state estimation in XFADS.
+
+    Performs sequential Bayesian filtering to estimate latent states given
+    observations. Uses variational inference with exponential family
+    approximations and Monte Carlo sampling for intractable expectations.
+
+    Parameters
+    ----------
+    key : PRNGKeyArray
+        JAX random number generator key for stochastic operations.
+    t : Array, shape (T,)
+        Time steps for the sequence.
+    alpha : Array, shape (T, param_dim)
+        Information updates from observations in natural parameter form.
+    u : Array, shape (T, input_dim)
+        External control/input signals.
+    c : Array, shape (T, covariate_dim)
+        Time-varying covariates.
+    model : XFADS
+        The XFADS model containing dynamics and hyperparameters.
+
+    Returns
+    -------
+    nature_f : Array, shape (T, param_dim)
+        Filtered natural parameters for each time step.
+    moment_f : Array, shape (T, param_dim)
+        Filtered moment parameters for each time step.
+    moment_p : Array, shape (T, param_dim)
+        Predicted moment parameters from dynamics.
+
+    Notes
+    -----
+    The filtering recursion follows:
+
+    1. Prediction: p(z_t | y_{1:t-1}) from dynamics
+    2. Update: p(z_t | y_{1:t}) ∝ p(z_t | y_{1:t-1}) p(y_t | z_t)
+
+    Uses natural parameter representation for numerical stability.
     """
     approx = model.hyperparam.approx
     nature_p_1 = (
@@ -91,14 +163,51 @@ def bismooth(
     model,
 ) -> tuple[Array, Array, Array]:
     """
-    Bidirectional filtering
-    Parameterize inverse dynamics
-    q(z[t]|y[1:T]) = q(z[y]|y[1:t])q(z[t]|y[t+1:T])/p(z[t])
-    P[t] = Pf[t] + Pb[t] - P0
-    Pm = Pfmf + Pbmb
-    See Dowling23 Eq.(21-23)
+    Bidirectional filtering for improved state smoothing in XFADS.
 
-    :param alpha: information update
+    Implements bidirectional variational inference by combining forward
+    and backward information. Uses parameterized inverse dynamics to
+    propagate information backward in time, resulting in better posterior
+    approximations compared to forward filtering alone.
+
+    Parameters
+    ----------
+    key : PRNGKeyArray
+        JAX random number generator key for stochastic operations.
+    t : Array, shape (T,)
+        Time steps for the sequence.
+    alpha : Array, shape (T, param_dim)
+        Information updates from observations in natural parameter form.
+    u : Array, shape (T, input_dim)
+        External control/input signals.
+    c : Array, shape (T, covariate_dim)
+        Time-varying covariates.
+    model : XFADS
+        The XFADS model containing forward/backward dynamics.
+
+    Returns
+    -------
+    nature_s : Array, shape (T, param_dim)
+        Smoothed natural parameters combining forward and backward passes.
+    moment_s : Array, shape (T, param_dim)
+        Smoothed moment parameters.
+    moment_p : Array, shape (T, param_dim)
+        Predicted moment parameters under smoothing distribution.
+
+    Notes
+    -----
+    The bidirectional combination follows:
+
+    q(z_t|y_{1:T}) = q(z_t|y_{1:t}) q(z_t|y_{t+1:T}) / p(z_t)
+
+    In natural parameters:
+    η_s[t] = η_f[t] + η_b[t] - η_0
+
+    where η_f, η_b, η_0 are forward, backward, and prior natural parameters.
+
+    References
+    ----------
+    Dowling et al. (2023). Linear Time GPs for Inferring Latent Trajectories from Neural Spike Trains. https://arxiv.org/abs/2306.01802. Equations (21-23).
     """
     hyperparam = model.hyperparam
     approx = hyperparam.approx

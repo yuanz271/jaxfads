@@ -14,7 +14,7 @@ from . import constraints
 
 _MIN_NORM: float = 1e-6
 MAX_EXP: float = 5.0
-EPS: float = jnp.finfo(jnp.float32).eps
+EPS = jnp.finfo(jnp.float32).eps
 
 
 def make_mlp(

@@ -5,7 +5,7 @@ import equinox as eqx
 from jaxtyping import ArrayLike
 
 
-_MIN_NORM = 1e-6
+# _MIN_NORM = 1e-6
 MAX_EXP = 5.0
 EPS = np.finfo(np.float32).eps
 
