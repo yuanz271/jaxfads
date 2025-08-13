@@ -67,7 +67,7 @@ class Hyperparam:
 
 def filter(
     key: PRNGKeyArray,
-    t: Array,
+    _t: Array,
     alpha: Array,
     u: Array,
     c: Array,
@@ -156,7 +156,7 @@ def filter(
 
 def bismooth(
     key: PRNGKeyArray,
-    t: Array,
+    _t: Array,
     alpha: Array,
     u: Array,
     c: Array,
