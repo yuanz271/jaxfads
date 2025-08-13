@@ -3,7 +3,7 @@ from functools import partial
 import numpy as np
 import jax
 from jax import numpy as jnp, vmap
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 
 from xfads.ilqr import ilqr
 
@@ -51,15 +51,15 @@ def test_ilqr():
 
     # Plotting position tracking
     # time = np.linspace(0, T * dt, T + 1)
-    plt.figure(figsize=(10, 5))
-    plt.plot(*target.T, label="Target Trajectory", linewidth=1)
-    for x in x_opt:
-        plt.plot(*x.T, label="Optimized Trajectory", linewidth=1)
-    # plt.plot(*x_opt.T, label="Optimized Trajectory", linewidth=1)
-    plt.xlim(-2, 2)
-    plt.ylim(-2, 2)
-    plt.title("Trajectory Tracking (Higher-Dimensional System)")
-    plt.legend()
-    plt.grid(True)
-    plt.savefig("test_copilot.pdf")
-    plt.close()
+    # plt.figure(figsize=(10, 5))
+    # plt.plot(*target.T, label="Target Trajectory", linewidth=1)
+    # for x in x_opt:
+    #     plt.plot(*x.T, label="Optimized Trajectory", linewidth=1)
+    # # plt.plot(*x_opt.T, label="Optimized Trajectory", linewidth=1)
+    # plt.xlim(-2, 2)
+    # plt.ylim(-2, 2)
+    # plt.title("Trajectory Tracking (Higher-Dimensional System)")
+    # plt.legend()
+    # plt.grid(True)
+    # plt.savefig("test_copilot.pdf")
+    # plt.close()

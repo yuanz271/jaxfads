@@ -5,17 +5,17 @@ from tempfile import TemporaryDirectory
 from jax import Array, random as jrnd
 from omegaconf import OmegaConf
 import equinox as eqx
-from xfads.dynamics import Dynamics
+from xfads.dynamics import Dynamics, Noise
 from xfads.smoother import XFADS
 
 
 class Mock(Dynamics):
-    noise: eqx.Module | None
+    noise: Noise | None
     layer: eqx.Module | None
 
     def __init__(self, conf, key):
         self.conf = conf
-        self.noise = None
+        self.noise = None  # type: ignore
         self.layer = None
 
     @override

@@ -13,10 +13,11 @@ from xfads.dynamics import (
     DiagGaussian,
 )
 from xfads.nn import make_mlp
+from xfads.dynamics import Noise
 
 
 class Nonlinear(Dynamics):
-    noise: eqx.Module = eqx.field(init=False)
+    noise: Noise = eqx.field(init=False)
     f: Callable = eqx.field(init=False)
 
     def __init__(
