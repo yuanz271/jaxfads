@@ -189,7 +189,7 @@ def to_shard(arrays, sharding=None):
     return tuple(jax.device_put(arr, sharding) for arr in arrays)
 
 
-def batch_elbo(model, key, ts, moment_s, moment_p, ys) -> Array:
+def batch_elbo(model, key, times, posterior_moments, predicted_moments, observations) -> Array:
     """
     Compute Evidence Lower Bound (ELBO) for batched sequences.
 
@@ -202,13 +202,13 @@ def batch_elbo(model, key, ts, moment_s, moment_p, ys) -> Array:
         The XFADS model containing likelihood and hyperparameters.
     key : PRNGKeyArray
         Random key for stochastic computations.
-    ts : Array, shape (T,)
+    times : Array, shape (T,)
         Time indices for the sequences.
-    moment_s : Array, shape (N, T, param_dim)
+    posterior_moments : Array, shape (N, T, param_dim)
         Posterior moment parameters for N sequences of length T.
-    moment_p : Array, shape (N, T, param_dim)
+    predicted_moments : Array, shape (N, T, param_dim)
         Prior/predictive moment parameters.
-    ys : Array, shape (N, T, observation_dim)
+    observations : Array, shape (N, T, observation_dim)
         Observed data sequences.
 
     Returns
@@ -233,9 +233,9 @@ def batch_elbo(model, key, ts, moment_s, moment_p, ys) -> Array:
         )
     )  # (batch, seq)
 
-    keys = jrnd.split(key, ys.shape[:2])  # ys.shape[:2] + (2,)
+    keys = jrnd.split(key, observations.shape[:2])  # observations.shape[:2] + (2,)
 
-    return _elbo(keys, ts, moment_s, moment_p, ys)
+    return _elbo(keys, times, posterior_moments, predicted_moments, observations)
 
 
 def train_fast(model, data, *, conf):
@@ -338,13 +338,13 @@ def train_fast(model, data, *, conf):
     @eqx.filter_jit
     def batch_loss(model, batch, key):
         """Compute negative ELBO loss for a batch of sequences."""
-        tb, yb, ub, cb = batch
+        times, observations, controls, covariates = batch
 
-        key, ky = jrnd.split(key)
-        _, moment, moment_p = model(tb, yb, ub, cb, key=ky)
+        key, model_key = jrnd.split(key)
+        _, posterior_moments, prior_moments = model(times, observations, controls, covariates, key=model_key)
 
-        key, ky = jrnd.split(key)
-        free_energy = -batch_elbo(model, ky, tb, moment, moment_p, yb)
+        key, elbo_key = jrnd.split(key)
+        free_energy = -batch_elbo(model, elbo_key, times, posterior_moments, prior_moments, observations)
 
         loss = (
             jnp.mean(free_energy)
@@ -357,25 +357,25 @@ def train_fast(model, data, *, conf):
     @eqx.filter_jit
     def batch_grad_step(model, opt_state, batch, key):
         """Perform one gradient update step."""
-        lss, grads = eqx.filter_value_and_grad(batch_loss)(
+        vals, grads = eqx.filter_value_and_grad(batch_loss)(
             model, batch, key
         )  # The gradient will be computed with respect to all floating-point JAX/NumPy arrays in the first argument
         updates, opt_state = optimizer.update(grads, opt_state, model)
         model = eqx.apply_updates(model, updates)
 
-        return lss, model, opt_state
+        return vals, model, opt_state
 
     # Main loop
-    key, cey = jrnd.split(key)
-    perm = jrnd.permutation(cey, train_size)
+    key, perm_key = jrnd.split(key)
+    perm = jrnd.permutation(perm_key, train_size)
     min_iter = conf.min_iter
     max_iter = conf.max_iter
     beta = conf.beta
 
     with training_progress() as pbar:
-        key, cey = jrnd.split(key)
+        key, valid_key = jrnd.split(key)
         valid_loss = lax.stop_gradient(
-            batch_loss(eqx.nn.inference_mode(model), valid_set, cey)
+            batch_loss(eqx.nn.inference_mode(model), valid_set, valid_key)
         )
         task_id = pbar.add_task(
             "Training", total=max_iter, loss=valid_loss, mean=valid_loss
@@ -394,27 +394,27 @@ def train_fast(model, data, *, conf):
             """Single training step with validation."""
             params, opt_state, i, converged, mean_loss, key, idx, perm = carry
 
-            def new_perm(key, perm, idx):
-                perm = jrnd.permutation(key, train_size)
-                return perm, 0
+            def new_permutation(key, permutation, _batch_index):
+                permutation = jrnd.permutation(key, train_size)
+                return permutation, 0
 
-            def old_perm(key, perm, idx):
-                return perm, idx
+            def old_permutation(key, permutation, batch_index):
+                return permutation, batch_index
 
-            key, cey = jrnd.split(key)
+            key, perm_key = jrnd.split(key)
             perm, idx = lax.cond(
-                idx + batch_size >= train_size, new_perm, old_perm, cey, perm, idx
+                idx + batch_size >= train_size, new_permutation, old_permutation, perm_key, perm, idx
             )
 
             model = eqx.combine(params, static)
             batch_idx = lax.dynamic_slice_in_dim(perm, idx, batch_size)
             batch = tuple(arr[batch_idx] for arr in train_set)
-            key, cey = jrnd.split(key)
-            _, model, opt_state = batch_grad_step(model, opt_state, batch, cey)
+            key, step_key = jrnd.split(key)
+            _, model, opt_state = batch_grad_step(model, opt_state, batch, step_key)
 
-            key, cey = jrnd.split(key)
+            key, valid_key = jrnd.split(key)
             valid_loss = lax.stop_gradient(
-                batch_loss(eqx.nn.inference_mode(model), valid_set, cey)
+                batch_loss(eqx.nn.inference_mode(model), valid_set, valid_key)
             )
             jax.debug.callback(
                 lambda vl, ml: pbar.update(task_id, advance=1, loss=vl, mean=ml),
@@ -439,11 +439,11 @@ def train_fast(model, data, *, conf):
                 perm,
             )
 
-        key, cey = jrnd.split(key)
+        key, loop_key = jrnd.split(key)
         params, *_ = lax.while_loop(
             train_cond,
             train_step,
-            (params, opt_state, 0, False, valid_loss, cey, 0, perm),
+            (params, opt_state, 0, False, valid_loss, loop_key, 0, perm),
         )
         model = eqx.combine(params, static)
 
