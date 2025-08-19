@@ -9,8 +9,7 @@ different data types including count data (Poisson) and continuous data
 
 from abc import abstractmethod
 
-from jax import numpy as jnp
-from jaxtyping import Array, PRNGKeyArray
+from jax import Array, numpy as jnp
 import tensorflow_probability.substrates.jax.distributions as tfp
 import equinox as eqx
 
@@ -27,7 +26,7 @@ MAX_LOGRATE = 7.0
 
 class Likelihood(SubclassRegistryMixin, ConfModule):
     @abstractmethod
-    def eloglik(self, key: PRNGKeyArray, t: Array, moment: Array, y: Array, approx, mc_size: int) -> Array: ...
+    def eloglik(self, key: Array, t: Array, moment: Array, y: Array, approx, mc_size: int) -> Array: ...
 
 
 class Poisson(Likelihood):
@@ -46,7 +45,7 @@ class Poisson(Likelihood):
         - observation_dim: Number of observed count variables
         - n_steps: Number of time steps (>0 for time-varying biases)
         - norm_readout: Whether to use weight normalization
-    key : PRNGKeyArray
+    key : Array
         Random key for parameter initialization.
 
     Attributes
@@ -97,14 +96,14 @@ class Poisson(Likelihood):
         self.readout.set_static(static)  # type: ignore
 
     def eloglik(
-        self, key: PRNGKeyArray, t: Array, moment: Array, y: Array, approx, mc_size: int
+        self, key: Array, t: Array, moment: Array, y: Array, approx, mc_size: int
     ) -> Array:
         """
         Compute expected log-likelihood for Poisson observations.
 
         Parameters
         ----------
-        key : PRNGKeyArray
+        key : Array
             Random key (unused in this implementation).
         t : Array
             Time index for time-varying parameters.
@@ -160,7 +159,7 @@ class DiagGaussian(Likelihood):
         - cov: Initial observation noise variance (scalar or vector)
         - n_steps: Number of time steps (>0 for time-varying biases)
         - norm_readout: Whether to use weight normalization
-    key : PRNGKeyArray
+    key : Array
         Random key for parameter initialization.
 
     Attributes
@@ -223,7 +222,7 @@ class DiagGaussian(Likelihood):
 
     def eloglik(
         self,
-        key: PRNGKeyArray,
+        key: Array,
         t: Array,
         moment: Array,
         y: Array,
@@ -235,7 +234,7 @@ class DiagGaussian(Likelihood):
 
         Parameters
         ----------
-        key : PRNGKeyArray
+        key : Array
             Random key (unused in this implementation).
         t : Array
             Time index for time-varying parameters.

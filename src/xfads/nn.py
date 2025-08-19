@@ -20,8 +20,7 @@ import math
 from typing import Literal
 
 import jax
-from jax import nn as jnn, random as jrnd, numpy as jnp
-from jaxtyping import Array, Scalar
+from jax import Array, nn as jnn, numpy as jnp, random as jrnd
 import equinox as eqx
 from equinox import nn as enn, Module
 
@@ -106,7 +105,7 @@ def make_mlp(
 
 
 def _norm_except_axis(
-    v: Array, norm: Callable[[Array], Scalar], axis: int | None
+    v: Array, norm: Callable[[Array], Array], axis: int | None
 ) -> Array:
     """
     Compute norm along all axes except the specified one.

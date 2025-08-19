@@ -9,8 +9,7 @@ structured updates for the posterior distributions over latent states.
 
 from collections.abc import Callable
 import math
-from jax import lax, random as jrnd, vmap
-from jaxtyping import Array
+from jax import Array, lax, random as jrnd, vmap
 import equinox as eqx
 from omegaconf import DictConfig
 from gearax.modules import ConfModule

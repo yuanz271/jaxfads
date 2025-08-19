@@ -12,9 +12,8 @@ from functools import partial
 
 import numpy as np
 import jax
-from jax import numpy as jnp, random as jrnd, lax, NamedSharding
+from jax import Array, lax, numpy as jnp, random as jrnd, NamedSharding
 from jax.sharding import PartitionSpec as P
-from jaxtyping import Array
 import optax
 import equinox as eqx
 from gearax.trainer import train_epoch

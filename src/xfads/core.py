@@ -11,9 +11,8 @@ from enum import auto, StrEnum
 from functools import partial
 
 import jax
-from jax import numpy as jnp, random as jrnd
+from jax import Array, numpy as jnp, random as jrnd
 from jax.lax import scan
-from jaxtyping import Array, PRNGKeyArray
 
 from .dynamics import sample_expected_moment
 
@@ -66,7 +65,7 @@ class Hyperparam:
 
 
 def filter(
-    key: PRNGKeyArray,
+    key: Array,
     _t: Array,
     alpha: Array,
     u: Array,
@@ -82,7 +81,7 @@ def filter(
 
     Parameters
     ----------
-    key : PRNGKeyArray
+    key : Array
         JAX random number generator key for stochastic operations.
     t : Array, shape (T,)
         Time steps for the sequence.
@@ -155,7 +154,7 @@ def filter(
 
 
 def bismooth(
-    key: PRNGKeyArray,
+    key: Array,
     _t: Array,
     alpha: Array,
     u: Array,

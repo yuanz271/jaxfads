@@ -12,8 +12,7 @@ from functools import partial
 from typing import Protocol
 
 import jax
-from jax import numpy as jnp, random as jrnd
-from jaxtyping import Array, PRNGKeyArray, ScalarLike
+from jax import Array, numpy as jnp, random as jrnd
 import equinox as eqx
 from gearax.modules import ConfModule
 from gearax.mixin import SubclassRegistryMixin
@@ -86,7 +85,7 @@ def predict_moment(
 
 
 def sample_expected_moment(
-    key: PRNGKeyArray,
+    key: Array,
     moment: Array,
     u: Array,
     c: Array,
@@ -156,8 +155,8 @@ class DiagGaussian(eqx.Module, strict=True):
 
     Parameters
     ----------
-    cov : ScalarLike
-        Initial covariance value (scalar applied to all dimensions).
+    cov : ArrayLike
+        Initial covariance value (Array applied to all dimensions).
     size : int
         Dimensionality of the noise (should match state dimension).
 
@@ -174,7 +173,7 @@ class DiagGaussian(eqx.Module, strict=True):
     """
     unconstrained_cov: Array
 
-    def __init__(self, cov: ScalarLike, size: int):
+    def __init__(self, cov: Array, size: int):
         self.unconstrained_cov = jnp.full(size, fill_value=unconstrain_positive(cov))
 
     def cov(self) -> Array:
@@ -270,13 +269,13 @@ class Dynamics(SubclassRegistryMixin, ConfModule):
         """
         return self.noise.cov()  # type: ignore
 
-    def loss(self) -> ScalarLike:
+    def loss(self) -> Array | float:
         """
         Compute regularization loss for the dynamics.
 
         Returns
         -------
-        ScalarLike
+        ArrayLike
             Regularization loss (default: 0.0).
 
         Notes

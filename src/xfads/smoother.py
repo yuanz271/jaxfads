@@ -12,8 +12,7 @@ from functools import partial
 from pathlib import Path
 from typing import Self
 
-from jaxtyping import Array
-from jax import numpy as jnp, random as jrnd, vmap
+from jax import Array, numpy as jnp, random as jrnd, vmap
 import equinox as eqx
 from gearax.modules import ConfModule, load_model, save_model
 

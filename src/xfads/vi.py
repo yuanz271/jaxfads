@@ -8,8 +8,7 @@ lower bound on the log marginal likelihood that can be optimized during training
 
 from collections.abc import Callable
 
-from jaxtyping import Array, Scalar
-
+from jax import Array
 from .distributions import Approx
 
 
@@ -19,11 +18,11 @@ def elbo(
     moment: Array,
     moment_p: Array,
     y: Array,
-    eloglik: Callable[..., Scalar],
+    eloglik: Callable[..., Array],
     approx: type[Approx],
     *,
     mc_size: int,
-) -> Scalar:
+) -> Array:
     """
     Compute Evidence Lower Bound (ELBO) for a single time point.
 
@@ -52,7 +51,7 @@ def elbo(
 
     Returns
     -------
-    Scalar
+    Array
         ELBO value for the single time point.
 
     Notes
@@ -90,6 +89,6 @@ def elbo(
     ...     mc_size=100
     ... )
     """
-    ell: Scalar = eloglik(key, t, moment, y, approx, mc_size)
-    kl: Scalar = approx.kl(moment, moment_p)
+    ell: Array = eloglik(key, t, moment, y, approx, mc_size)
+    kl: Array = approx.kl(moment, moment_p)
     return ell - kl

@@ -10,9 +10,8 @@ and diagonal multivariate normal distributions.
 from abc import abstractmethod, ABC
 import math
 
-from jax import numpy as jnp, random as jrnd
+from jax import Array, numpy as jnp, random as jrnd
 
-from jaxtyping import Array, Scalar
 import tensorflow_probability.substrates.jax.distributions as tfp
 
 from gearax.mixin import SubclassRegistryMixin
@@ -147,7 +146,7 @@ class Approx(SubclassRegistryMixin, ABC):
 
     @classmethod
     @abstractmethod
-    def kl(cls, moment1, moment2) -> Scalar:
+    def kl(cls, moment1, moment2) -> Array:
         """
         Compute KL divergence between two distributions.
 
@@ -160,7 +159,7 @@ class Approx(SubclassRegistryMixin, ABC):
 
         Returns
         -------
-        Scalar
+        Array
             KL divergence KL(p1 || p2) where p1 and p2 are parameterized
             by moment1 and moment2 respectively.
         """
@@ -348,7 +347,7 @@ class FullMVN(Approx):
         return moment
 
     @classmethod
-    def kl(cls, moment1: Array, moment2: Array) -> Scalar:
+    def kl(cls, moment1: Array, moment2: Array) -> Array:
         m1, V1 = cls.moment_to_canon(moment1)
         m2, V2 = cls.moment_to_canon(moment2)
         return tfp.kl_divergence(
@@ -475,7 +474,7 @@ class DiagMVN(Approx):
         return param_size // 2
 
     @classmethod
-    def kl(cls, moment1, moment2) -> Scalar:
+    def kl(cls, moment1, moment2) -> Array:
         m1, cov1 = cls.moment_to_canon(moment1)
         m2, cov2 = cls.moment_to_canon(moment2)
         return tfp.kl_divergence(
