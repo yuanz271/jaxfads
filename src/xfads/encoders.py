@@ -5,6 +5,13 @@ This module implements neural network encoders that convert observations and
 temporal information into natural parameter updates for variational inference
 in XFADS. The encoders learn to map raw observations to
 structured updates for the posterior distributions over latent states.
+
+Classes
+-------
+AlphaEncoder
+    Alpha encoder for observation-driven information updates in XFADS.
+BetaEncoder
+    Beta encoder for temporal dependency modeling in XFADS.
 """
 
 from collections.abc import Callable

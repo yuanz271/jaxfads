@@ -4,6 +4,20 @@ Core filtering and smoothing algorithms for XFADS.
 This module implements the fundamental algorithms for XFADS,
 including forward filtering and bidirectional smoothing
 using variational inference in exponential family approximations.
+
+Functions
+---------
+filter
+    Forward filtering for state estimation using variational inference.
+bismooth
+    Bidirectional filtering for improved state smoothing.
+
+Classes
+-------
+Mode
+    Enumeration of inference modes for XFADS.
+Hyperparam
+    Hyperparameters for XFADS configuration.
 """
 
 from dataclasses import dataclass
@@ -37,7 +51,7 @@ class Hyperparam:
     """
     Hyperparameters for XFADS configuration.
 
-    Parameters
+    Attributes
     ----------
     approx : type
         The exponential family approximation class to use.
@@ -83,8 +97,8 @@ def filter(
     ----------
     key : Array
         JAX random number generator key for stochastic operations.
-    t : Array, shape (T,)
-        Time steps for the sequence.
+    _t : Array, shape (T,)
+        Time steps for the sequence (unused in current implementation).
     alpha : Array, shape (T, param_dim)
         Information updates from observations in natural parameter form.
     u : Array, shape (T, input_dim)
@@ -171,10 +185,10 @@ def bismooth(
 
     Parameters
     ----------
-    key : PRNGKeyArray
+    key : Array
         JAX random number generator key for stochastic operations.
-    t : Array, shape (T,)
-        Time steps for the sequence.
+    _t : Array, shape (T,)
+        Time steps for the sequence (unused in current implementation).
     alpha : Array, shape (T, param_dim)
         Information updates from observations in natural parameter form.
     u : Array, shape (T, input_dim)
@@ -206,7 +220,9 @@ def bismooth(
 
     References
     ----------
-    Dowling et al. (2023). Linear Time GPs for Inferring Latent Trajectories from Neural Spike Trains. https://arxiv.org/abs/2306.01802. Equations (21-23).
+    Dowling et al. (2023). Linear Time GPs for Inferring Latent Trajectories 
+        from Neural Spike Trains. https://arxiv.org/abs/2306.01802. 
+        Equations (21-23).
     """
     hyperparam = model.hyperparam
     approx = hyperparam.approx

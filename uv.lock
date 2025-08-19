@@ -339,6 +339,9 @@ requires-dist = [
     { name = "rich", specifier = ">=14.0.0" },
 ]
 
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=8.4.1" }]
+
 [[package]]
 name = "humanize"
 version = "4.12.3"
@@ -1436,7 +1439,6 @@ dependencies = [
     { name = "equinox" },
     { name = "gearax" },
     { name = "jax" },
-    { name = "jaxtyping" },
     { name = "numpy" },
     { name = "optax" },
     { name = "orbax-checkpoint" },
@@ -1460,7 +1462,6 @@ requires-dist = [
     { name = "equinox", specifier = ">=0.11.11" },
     { name = "gearax", editable = "gearax" },
     { name = "jax", specifier = "<0.7" },
-    { name = "jaxtyping", specifier = ">=0.2.19" },
     { name = "numpy", specifier = ">=1.24.4" },
     { name = "optax", specifier = ">=0.1.7" },
     { name = "orbax-checkpoint", specifier = ">=0.11.5" },

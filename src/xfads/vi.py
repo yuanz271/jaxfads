@@ -4,6 +4,11 @@ Variational inference utilities for XFADS.
 This module implements the Evidence Lower Bound (ELBO) computation for
 variational inference in XFADS. The ELBO provides a tractable
 lower bound on the log marginal likelihood that can be optimized during training.
+
+Functions
+---------
+elbo
+    Compute Evidence Lower Bound (ELBO) for a single time point.
 """
 
 from collections.abc import Callable

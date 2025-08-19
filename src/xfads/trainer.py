@@ -5,6 +5,26 @@ This module provides training routines for XFADS models using JAX and Optax.
 It implements efficient batch training with multi-device support, progress
 tracking, and validation-based early stopping. The training is based on
 maximizing the Evidence Lower Bound (ELBO) objective.
+
+Functions
+---------
+training_progress
+    Create a Rich progress bar for training visualization.
+train_test_split
+    Split arrays into training and test sets with random permutation.
+to_shard
+    Place arrays on specified devices with optional sharding.
+batch_elbo
+    Compute Evidence Lower Bound (ELBO) for batched sequences.
+train_fast
+    Fast training routine for XFADS models with multi-device support.
+train
+    Training routine for XFADS models with multi-device support.
+
+Classes
+-------
+Opt
+    Configuration dataclass for XFADS training hyperparameters.
 """
 
 from dataclasses import dataclass

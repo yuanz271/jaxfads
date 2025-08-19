@@ -5,6 +5,22 @@ This module provides implementations of exponential family distributions
 with natural and moment parameterizations for variational inference in
 XFADS. Supports various approximations including full covariance, low-rank,
 and diagonal multivariate normal distributions.
+
+Functions
+---------
+damping_inv
+    Compute matrix inverse with damping for numerical stability.
+
+Classes
+-------
+Approx
+    Abstract base class for exponential family approximations.
+FullMVN
+    Full covariance multivariate normal approximation.
+LoRaMVN
+    Low-rank multivariate normal approximation.
+DiagMVN
+    Diagonal covariance multivariate normal approximation.
 """
 
 from abc import abstractmethod, ABC

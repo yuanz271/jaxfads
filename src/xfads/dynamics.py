@@ -4,6 +4,22 @@ Dynamics models for XFADS.
 This module implements various dynamics models for state transitions in
 XFADS. It provides abstract interfaces for dynamics and noise models,
 along with concrete implementations for common cases.
+
+Functions
+---------
+predict_moment
+    Predict moment parameters for next state given current state.
+sample_expected_moment
+    Compute expected moment parameters via Monte Carlo sampling.
+
+Classes
+-------
+Noise
+    Protocol for noise models in dynamics systems.
+DiagGaussian
+    Diagonal Gaussian noise model for dynamics systems.
+Dynamics
+    Abstract base class for dynamics models in XFADS.
 """
 
 from abc import abstractmethod

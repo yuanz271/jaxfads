@@ -12,6 +12,26 @@ XFADS (eXtended Filtered Approximate Dynamical Systems), including:
 
 All components are built using JAX and Equinox for high performance and
 clean functional programming patterns.
+
+Functions
+---------
+make_mlp
+    Create a multi-layer perceptron (MLP) with configurable architecture.
+gauss_rbf
+    Gaussian radial basis function kernel.
+
+Classes
+-------
+WeightNorm
+    Weight normalization wrapper for linear layers.
+StationaryLinear
+    Linear layer with time-invariant parameters for state-space models.
+VariantBiasLinear
+    Linear layer with time-variant bias terms for non-stationary observations.
+RBFN
+    Radial Basis Function Network (RBFN).
+DataMasker
+    Data masking module for regularization and robustness.
 """
 
 from collections.abc import Callable

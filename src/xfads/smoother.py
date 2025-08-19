@@ -1,10 +1,15 @@
 """
 XFADS smoother module.
 
-This module implements the main XFADS
-class that orchestrates the complete variational inference pipeline for Bayesian
-state-space modeling. It combines neural encoders, dynamics models, observation
-models, and filtering/smoothing algorithms.
+This module implements the main XFADS class that orchestrates the complete 
+variational inference pipeline for Bayesian state-space modeling. It combines 
+neural encoders, dynamics models, observation models, and filtering/smoothing 
+algorithms.
+
+Classes
+-------
+XFADS
+    Main class for Bayesian state-space modeling with variational inference.
 """
 
 from collections.abc import Callable
@@ -112,7 +117,7 @@ class XFADS(ConfModule):
 
         Parameters
         ----------
-        key : PRNGKeyArray
+        key : Array
             JAX random key for parameter initialization.
 
         Notes
@@ -307,7 +312,7 @@ class XFADS(ConfModule):
             Control/input sequences.
         c : Array, shape (N, T, D_c)
             Covariate sequences.
-        key : PRNGKeyArray
+        key : Array
             JAX random key for stochastic operations.
 
         Returns

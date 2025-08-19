@@ -5,6 +5,15 @@ This module implements various observation models that define the relationship
 between latent states and observed data. It provides likelihood functions for
 different data types including count data (Poisson) and continuous data
 (Gaussian) with support for time-varying parameters.
+
+Classes
+-------
+Likelihood
+    Abstract base class for observation models.
+Poisson
+    Poisson observation model for count data in XFADS.
+DiagGaussian
+    Diagonal Gaussian observation model for continuous data in XFADS.
 """
 
 from abc import abstractmethod
