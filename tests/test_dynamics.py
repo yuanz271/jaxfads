@@ -1,19 +1,17 @@
 from collections.abc import Callable
-from jax import numpy as jnp, random as jrnd
-import equinox as eqx
+from jax import Array, numpy as jnp, random as jrnd
 import chex
-from jaxtyping import Array
 from omegaconf import OmegaConf
 
-from xfads.distributions import DiagMVN
-from xfads.dynamics import (
+from jaxfads.distributions import DiagMVN
+from jaxfads.dynamics import (
     Dynamics,
     predict_moment,
     sample_expected_moment,
     DiagGaussian,
 )
-from xfads.nn import make_mlp
-from xfads.dynamics import Noise
+from jaxfads.nn import make_mlp
+from jaxfads.dynamics import Noise
 
 
 class Nonlinear(Dynamics):
@@ -70,7 +68,7 @@ def test_predict_moment(spec):
         ),
         key=key,
     )
-    noise = DiagGaussian(1, state_dim)
+    noise = DiagGaussian(jnp.array(1.), state_dim)
 
     z = jrnd.normal(key, (state_dim,))
     u = jrnd.normal(key, (input_dim,))
@@ -98,7 +96,7 @@ def test_sample_expected_moment(spec):
         ),
         key=key,
     )
-    noise = DiagGaussian(1, state_dim)
+    noise = DiagGaussian(jnp.array(1.), state_dim)
 
     z = jrnd.normal(key, (state_dim,))
     u = jrnd.normal(key, (input_dim,))

@@ -1,6 +1,6 @@
 from jax import numpy as jnp, random as jrnd
 import equinox as eqx
-from xfads.nn import VariantBiasLinear
+from jaxfads.nn import VariantBiasLinear
 
 
 def test_VariantBiasLinear():

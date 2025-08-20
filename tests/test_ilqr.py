@@ -5,7 +5,7 @@ import jax
 from jax import numpy as jnp, vmap
 # import matplotlib.pyplot as plt
 
-from xfads.ilqr import ilqr
+from jaxfads.ilqr import ilqr
 
 
 def test_ilqr():

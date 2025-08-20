@@ -1,5 +1,5 @@
 [project]
-name = "xfads"
+name = "jaxfads"
 version = "0.1.0"
 description = "eXponential FAmily Dynamical System"
 authors = [{ name = "yuanz", email = "yuanz271@gmail.com" }]
@@ -25,8 +25,11 @@ dependencies = [
     "gearax",
 ]
 
+[tool.hatch.build.targets.wheel]
+packages = ["src/jaxfads"]
+
 [project.urls]
-Repository = "https://github.com/yuanz271/xfads"
+Repository = "https://github.com/yuanz271/jaxfads"
 
 [build-system]
 requires = ["hatchling"]

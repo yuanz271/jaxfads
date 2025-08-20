@@ -5,8 +5,8 @@ from tempfile import TemporaryDirectory
 from jax import Array, random as jrnd
 from omegaconf import OmegaConf
 import equinox as eqx
-from xfads.dynamics import Dynamics, Noise
-from xfads.smoother import XFADS
+from jaxfads.dynamics import Dynamics, Noise
+from jaxfads.smoother import XFADS
 
 
 class Mock(Dynamics):
