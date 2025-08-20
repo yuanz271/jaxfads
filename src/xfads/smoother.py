@@ -1,9 +1,9 @@
 """
 XFADS smoother module.
 
-This module implements the main XFADS class that orchestrates the complete 
-variational inference pipeline for Bayesian state-space modeling. It combines 
-neural encoders, dynamics models, observation models, and filtering/smoothing 
+This module implements the main XFADS class that orchestrates the complete
+variational inference pipeline for Bayesian state-space modeling. It combines
+neural encoders, dynamics models, observation models, and filtering/smoothing
 algorithms.
 
 Classes
@@ -103,29 +103,33 @@ class XFADS(ConfModule):
     >>> natural, moment, prediction = model(t, y, u, c, key=key)
     """
     hyperparam: Hyperparam = eqx.field(init=False, static=True)
-    forward: eqx.Module = eqx.field(init=False)
-    # backward: eqx.Module | None = eqx.field(init=False)
-    likelihood: eqx.Module = eqx.field(init=False)
-    alpha_encoder: eqx.Module = eqx.field(init=False)
-    beta_encoder: eqx.Module = eqx.field(init=False)
-    masker: DataMasker = eqx.field(init=False)
-    unconstrained_prior_natural: Array = eqx.field(init=False)
+    forward: eqx.Module
+    # backward: eqx.Module | None
+    likelihood: eqx.Module
+    alpha_encoder: eqx.Module
+    beta_encoder: eqx.Module
+    masker: DataMasker
+    unconstrained_prior_natural: Array
 
-    def __post_init__(self, key):  # type: ignore
+    def __init__(self, conf, key):
         """
-        Initialize XFADS model components after configuration.
+        Initialize XFADS model components.
 
         Parameters
         ----------
+        conf : DictConfig
+            Configuration object containing model hyperparameters.
         key : Array
             JAX random key for parameter initialization.
 
         Notes
         -----
-        This method is automatically called after __init__ by the ConfModule
-        framework. It initializes all neural networks, dynamics models, and
-        observation models based on the provided configuration.
+        Initializes all neural networks, dynamics models, and observation models
+        based on the provided configuration. This method is automatically called
+        by the ConfModule framework.
         """
+        self.conf = conf
+
         state_dim = self.conf.state_dim
         # observation_dim = self.conf.observation_dim
         mc_size = self.conf.mc_size
@@ -189,7 +193,6 @@ class XFADS(ConfModule):
             # **obs_kwargs,
         )
 
-        #####
         key, ky = jrnd.split(key)
         self.alpha_encoder = encoders.AlphaEncoder(
             self.conf.enc_conf,
@@ -203,7 +206,6 @@ class XFADS(ConfModule):
             ky,
             # state_dim, approx, key=ky, **enc_kwargs
         )
-        #####
 
         # if "l" in static_params:
         #     self.likelihood.set_static()
@@ -214,14 +216,14 @@ class XFADS(ConfModule):
             approx.prior_natural(state_dim)
         )
 
-    def init(self, t, y, u, c):
+    def initialize(self, t, y, u, c):
         """
         Initialize model parameters based on data statistics.
 
         Parameters
         ----------
         t : Array, shape (T,)
-            Time steps.
+            Time steps for the sequences.
         y : Array, shape (N, T, D_obs)
             Observation sequences.
         u : Array, shape (N, T, D_u)
@@ -232,7 +234,7 @@ class XFADS(ConfModule):
         Returns
         -------
         XFADS
-            Model with initialized parameters.
+            Model instance with initialized parameters.
 
         Notes
         -----

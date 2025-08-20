@@ -17,8 +17,8 @@ from xfads.dynamics import Noise
 
 
 class Nonlinear(Dynamics):
-    noise: Noise = eqx.field(init=False)
-    f: Callable = eqx.field(init=False)
+    noise: Noise
+    f: Callable
 
     def __init__(
         self,
