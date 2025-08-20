@@ -1,13 +1,11 @@
-import numpy as np
 import jax
 from jax import numpy as jnp
 import equinox as eqx
 from jaxtyping import ArrayLike
 
 
-# _MIN_NORM = 1e-6
 MAX_EXP = 5.0
-EPS = np.finfo(np.float32).eps
+EPS = jnp.finfo(jnp.float32).eps
 
 
 def constrain_positive(x):
