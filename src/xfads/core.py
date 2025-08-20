@@ -16,8 +16,6 @@ Classes
 -------
 Mode
     Enumeration of inference modes for XFADS.
-Hyperparam
-    Hyperparameters for XFADS configuration.
 """
 
 from dataclasses import dataclass
@@ -44,38 +42,6 @@ class Mode(StrEnum):
     """
     PSEUDO = auto()
     BIFILTER = auto()
-
-
-@dataclass
-class Hyperparam:
-    """
-    Hyperparameters for XFADS configuration.
-
-    Attributes
-    ----------
-    approx : type
-        The exponential family approximation class to use.
-    state_dim : int
-        Dimensionality of the latent state space.
-    mc_size : int
-        Number of Monte Carlo samples for expectation approximation.
-    fb_penalty : float
-        Forward-backward penalty weight for regularization.
-    noise_penalty : float
-        Noise penalty weight for dynamics regularization.
-    mode : str
-        Inference mode, one of Mode enum values.
-    """
-    approx: type
-    state_dim: int
-    # iu_dim: int
-    # eu_dim: int
-    # observation_dim: int
-    # covariate_dim: int
-    mc_size: int
-    fb_penalty: float
-    noise_penalty: float
-    mode: str
 
 
 def filter(
@@ -126,7 +92,7 @@ def filter(
 
     Uses natural parameter representation for numerical stability.
     """
-    approx = model.hyperparam.approx
+    approx = model.approx
     nature_p_1 = (
         model.prior_natural()
     )  # TODO: where should prior belongs, approx or dynamics?
@@ -136,7 +102,7 @@ def filter(
         f=model.forward,
         noise=model.forward,
         approx=approx,
-        mc_size=model.hyperparam.mc_size,
+        mc_size=model.conf.mc_size,
     )
 
     nature_f_1 = nature_p_1 + alpha[0]
@@ -224,8 +190,8 @@ def bismooth(
         from Neural Spike Trains. https://arxiv.org/abs/2306.01802. 
         Equations (21-23).
     """
-    hyperparam = model.hyperparam
-    approx = hyperparam.approx
+    mc_size = model.conf.mc_size
+    approx = model.approx
     nature_prior = model.prior_natural()
 
     natural_to_moment = jax.vmap(approx.natural_to_moment)
@@ -234,14 +200,14 @@ def bismooth(
         f=model.forward,
         noise=model.forward,
         approx=approx,
-        mc_size=hyperparam.mc_size,
+        mc_size=mc_size,
     )
     expected_moment_backward = partial(
         sample_expected_moment,
         f=model.backward,
         noise=model.backward,
         approx=approx,
-        mc_size=hyperparam.mc_size,
+        mc_size=mc_size,
     )
 
     nature_f_1 = nature_prior + alpha[0]

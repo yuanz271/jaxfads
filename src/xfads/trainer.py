@@ -252,8 +252,8 @@ def batch_elbo(
             partial(
                 vi.elbo,
                 eloglik=model.likelihood.eloglik,
-                approx=model.hyperparam.approx,
-                mc_size=model.hyperparam.mc_size,
+                approx=model.approx,
+                mc_size=model.conf.mc_size,
             )
         )
     )  # (batch, seq)
@@ -377,8 +377,8 @@ def train_fast(model, data, *, conf):
 
         loss = (
             jnp.mean(free_energy)
-            + model.hyperparam.noise_penalty * model.forward.loss()
-            # + hyperparam.noise_penalty * model.backward.loss()
+            + model.conf.noise_penalty * model.forward.loss()
+            # + model.conf.noise_penalty * model.backward.loss()
         )
 
         return loss
@@ -598,8 +598,8 @@ def train(model, data, *, conf):
 
         loss = (
             jnp.mean(free_energy)
-            + model.hyperparam.noise_penalty * model.forward.loss()
-            # + hyperparam.noise_penalty * model.backward.loss()
+            + model.conf.noise_penalty * model.forward.loss()
+            # + model.conf.noise_penalty * model.backward.loss()
         )
 
         return loss
