@@ -330,7 +330,7 @@ class XFADS(ConfModule):
             case Mode.BIFILTER:
                 raise NotImplementedError("BIFILTER mode is not implemented.")
             case _:
-                batch_smooth = vmap(partial(core.filter, model=self))
+                batch_smooth = vmap(partial(core.filter, self))
 
                 def batch_encode(y: Array, key) -> Array:
                     # handling missing values

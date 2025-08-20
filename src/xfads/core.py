@@ -18,7 +18,6 @@ Mode
     Enumeration of inference modes for XFADS.
 """
 
-from dataclasses import dataclass
 from enum import auto, StrEnum
 from functools import partial
 
@@ -45,12 +44,12 @@ class Mode(StrEnum):
 
 
 def filter(
+    model,
     key: Array,
     _t: Array,
     alpha: Array,
     u: Array,
     c: Array,
-    model,
 ) -> tuple[Array, Array, Array]:
     """
     Forward filtering for state estimation in XFADS.
@@ -61,6 +60,8 @@ def filter(
 
     Parameters
     ----------
+    model : XFADS
+        The XFADS model containing dynamics and hyperparameters.
     key : Array
         JAX random number generator key for stochastic operations.
     _t : Array, shape (T,)
@@ -71,8 +72,6 @@ def filter(
         External control/input signals.
     c : Array, shape (T, covariate_dim)
         Time-varying covariates.
-    model : XFADS
-        The XFADS model containing dynamics and hyperparameters.
 
     Returns
     -------
@@ -134,12 +133,12 @@ def filter(
 
 
 def bismooth(
+    model,
     key: Array,
     _t: Array,
     alpha: Array,
     u: Array,
     c: Array,
-    model,
 ) -> tuple[Array, Array, Array]:
     """
     Bidirectional filtering for improved state smoothing in XFADS.
@@ -151,6 +150,8 @@ def bismooth(
 
     Parameters
     ----------
+    model : XFADS
+        The XFADS model containing forward/backward dynamics.
     key : Array
         JAX random number generator key for stochastic operations.
     _t : Array, shape (T,)
@@ -161,8 +162,6 @@ def bismooth(
         External control/input signals.
     c : Array, shape (T, covariate_dim)
         Time-varying covariates.
-    model : XFADS
-        The XFADS model containing forward/backward dynamics.
 
     Returns
     -------
