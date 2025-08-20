@@ -2,8 +2,8 @@
 # from equinox import nn as enn
 # import chex
 
-# from xfads.distributions import MVN, DiagMVN
-# from xfads.vi import DiagMVNLik, elbo
+# from jaxfads.distributions import MVN, DiagMVN
+# from jaxfads.vi import DiagMVNLik, elbo
 
 
 # def test_poisson(spec):

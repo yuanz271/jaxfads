@@ -28,7 +28,7 @@ The library implements advanced variational inference techniques with support fo
 ### Install from Source
 
 ```bash
-git clone --recursive https://github.com/yuanz271/xfads.git
-cd xfads
+git clone --recursive https://github.com/yuanz271/jaxfads.git
+cd jaxfads
 pip install -e ".[dev]"
 ```
