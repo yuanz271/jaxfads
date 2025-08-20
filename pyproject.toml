@@ -46,9 +46,4 @@ lint.ignore = ["E501", "F722"]
 gearax = { path = "gearax", editable = true }
 
 [dependency-groups]
-dev = [
-    "matplotlib>=3.10.1",
-    "pre-commit>=4.1.0",
-    "pytest>=8.3.4",
-    "ruff>=0.9.4",
-]
+dev = ["matplotlib>=3.10.1", "pytest>=8.3.4", "ruff>=0.9.4"]
