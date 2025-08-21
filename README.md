@@ -3,7 +3,7 @@
 **eXponential FAmily Dynamical Systems**
 
 XFADS, built on JAX and Equinox.
-For more information, see the [paper](https://arxiv.org/abs/2403.01371) and [original implementation](https://github.com/catniplab/xfads).
+For more information, see the [paper](https://arxiv.org/abs/2403.01371) and [PyTorch implementation](https://github.com/catniplab/xfads).
 
 ## Overview
 
