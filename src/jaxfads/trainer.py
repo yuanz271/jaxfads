@@ -21,13 +21,15 @@ train_fast
 train
     Training routine for XFADS models with multi-device support.
 
-Classes
--------
-Opt
-    Configuration dataclass for XFADS training hyperparameters.
+Variables
+---------
+DEFAULT_TRAINER_CONFIG : DictConfig
+    Default training configuration for XFADS models with comprehensive
+    hyperparameter settings including optimization, regularization, and
+    early stopping parameters.
+
 """
 
-from dataclasses import dataclass
 from functools import partial
 
 import numpy as np
@@ -37,6 +39,7 @@ from jax.sharding import PartitionSpec as P
 import optax
 import equinox as eqx
 from gearax.trainer import train_epoch
+from omegaconf import DictConfig, OmegaConf
 from rich.progress import (
     MofNCompleteColumn,
     Progress,
@@ -88,61 +91,63 @@ def training_progress():
     )
 
 
-@dataclass
-class Opt:
-    """
-    Configuration dataclass for XFADS training hyperparameters.
+# Default configuration as DictConfig
+"""
+Configuration dataclass for XFADS training hyperparameters.
 
-    Parameters
-    ----------
-    min_iter : int, default=50
-        Minimum number of training iterations before early stopping.
-    max_iter : int, default=50
-        Maximum number of training iterations.
-    learning_rate : float, default=1e-3
-        Learning rate for the optimizer.
-    clip_norm : float, default=5.0
-        Maximum gradient norm for gradient clipping.
-    batch_size : int, default=1
-        Batch size for training (will be adjusted for multi-device).
-    weight_decay : float, default=1e-3
-        L2 regularization coefficient.
-    beta : float, default=0.95
-        Exponential moving average coefficient for loss smoothing.
-    seed : int, default=0
-        Random seed for reproducibility.
-    noise_eta : float, default=0.5
-        Noise scale parameter for gradient noise injection.
-    noise_gamma : float, default=0.8
-        Noise decay parameter for gradient noise injection.
-    valid_ratio : float, default=0.2
-        Fraction of data to use for validation.
-    validation_size : int, default=80
-        Fixed validation set size (overrides valid_ratio if specified).
+Parameters
+----------
+min_iter : int, default=50
+    Minimum number of training iterations before early stopping.
+max_iter : int, default=50
+    Maximum number of training iterations.
+learning_rate : float, default=1e-3
+    Learning rate for the optimizer.
+clip_norm : float, default=5.0
+    Maximum gradient norm for gradient clipping.
+batch_size : int, default=1
+    Batch size for training (will be adjusted for multi-device).
+weight_decay : float, default=1e-3
+    L2 regularization coefficient.
+beta : float, default=0.95
+    Exponential moving average coefficient for loss smoothing.
+seed : int, default=0
+    Random seed for reproducibility.
+noise_eta : float, default=0.5
+    Noise scale parameter for gradient noise injection.
+noise_gamma : float, default=0.8
+    Noise decay parameter for gradient noise injection.
+valid_ratio : float, default=0.2
+    Fraction of data to use for validation.
+validation_size : int, default=80
+    Fixed validation set size (overrides valid_ratio if specified).
 
-    Notes
-    -----
-    The configuration supports various regularization techniques:
-    - Gradient clipping for training stability
-    - Weight decay for parameter regularization
-    - Gradient noise injection for better generalization
-    - Validation-based early stopping
-    """
-
-    min_iter: int = 0
-    max_iter: int = 50
-    min_epoch: int = 0
-    max_epoch: int = 50
-    learning_rate: float = 1e-3
-    clip_norm: float = 5.0
-    batch_size: int = 1
-    weight_decay: float = 1e-3
-    beta: float = 0.95
-    seed: int = 0
-    noise_eta: float = 0.5
-    noise_gamma: float = 0.8
-    valid_ratio: float = 0.2
-    validation_size: int = 80
+Notes
+-----
+The configuration supports various regularization techniques:
+- Gradient clipping for training stability
+- Weight decay for parameter regularization
+- Gradient noise injection for better generalization
+- Validation-based early stopping
+"""
+DEFAULT_TRAINER_CONFIG = DictConfig(
+    {
+        "min_iter": 0,
+        "max_iter": 50,
+        "min_epoch": 0,
+        "max_epoch": 50,
+        "learning_rate": 1e-3,
+        "clip_norm": 5.0,
+        "batch_size": 1,
+        "weight_decay": 1e-3,
+        "beta": 0.95,
+        "seed": 0,
+        "noise_eta": 0.5,
+        "noise_gamma": 0.8,
+        "valid_ratio": 0.2,
+        "validation_size": 80,
+    }
+)
 
 
 # >>> Full JAX
@@ -282,8 +287,9 @@ def train_fast(model, data, *, conf):
         - y: observations, shape (N, T, observation_dim)
         - u: control inputs, shape (N, T, input_dim)
         - c: covariates, shape (N, T, covariate_dim)
-    conf : Opt
-        Training configuration with hyperparameters.
+    conf : dict or DictConfig
+        Training configuration with hyperparameters. If dict or partial config,
+        missing values will be filled with defaults from DEFAULT_TRAINER_CONFIG.
 
     Returns
     -------
@@ -321,9 +327,15 @@ def train_fast(model, data, *, conf):
     Examples
     --------
     >>> from omegaconf import DictConfig
-    >>> conf = Opt(max_iter=1000, learning_rate=1e-3, batch_size=32)
+    >>> user_conf = {"max_iter": 1000, "learning_rate": 1e-4}
+    >>> trained_model = train_fast(model, (t, y, u, c), conf=user_conf)
+    >>> # Or with DictConfig
+    >>> conf = DictConfig({"max_iter": 1000, "learning_rate": 1e-4})
     >>> trained_model = train_fast(model, (t, y, u, c), conf=conf)
     """
+    # Merge with defaults - user config takes precedence
+    conf = OmegaConf.merge(DEFAULT_TRAINER_CONFIG, conf)
+
     key = jrnd.key(conf.seed)
     rng = np.random.default_rng(conf.seed)
 
@@ -376,8 +388,7 @@ def train_fast(model, data, *, conf):
         )
 
         loss = (
-            jnp.mean(free_energy)
-            + model.conf.noise_penalty * model.forward.loss()
+            jnp.mean(free_energy) + model.conf.noise_penalty * model.forward.loss()
             # + model.conf.noise_penalty * model.backward.loss()
         )
 
@@ -486,7 +497,7 @@ def train_fast(model, data, *, conf):
 
 def train(model, data, *, conf):
     """
-    Fast training routine for XFADS models with multi-device support.
+    Training routine for XFADS models with multi-device support.
 
     Implements efficient training using JAX transformations, automatic
     differentiation, and multi-device data parallelism. Features include
@@ -503,8 +514,9 @@ def train(model, data, *, conf):
         - y: observations, shape (N, T, observation_dim)
         - u: control inputs, shape (N, T, input_dim)
         - c: covariates, shape (N, T, covariate_dim)
-    conf : Opt
-        Training configuration with hyperparameters.
+    conf : dict or DictConfig
+        Training configuration with hyperparameters. If dict or partial config,
+        missing values will be filled with defaults from DEFAULT_TRAINER_CONFIG.
 
     Returns
     -------
@@ -542,9 +554,15 @@ def train(model, data, *, conf):
     Examples
     --------
     >>> from omegaconf import DictConfig
-    >>> conf = Opt(max_iter=1000, learning_rate=1e-3, batch_size=32)
-    >>> trained_model = train_fast(model, (t, y, u, c), conf=conf)
+    >>> user_conf = {"max_epoch": 100, "learning_rate": 1e-4}
+    >>> trained_model = train(model, (t, y, u, c), conf=user_conf)
+    >>> # Or with DictConfig
+    >>> conf = DictConfig({"max_epoch": 100, "learning_rate": 1e-4})
+    >>> trained_model = train(model, (t, y, u, c), conf=conf)
     """
+    # Merge with defaults - user config takes precedence
+    conf = OmegaConf.merge(DEFAULT_TRAINER_CONFIG, conf)
+
     key = jrnd.key(conf.seed)
     rng = np.random.default_rng(conf.seed)
 
@@ -597,8 +615,7 @@ def train(model, data, *, conf):
         )
 
         loss = (
-            jnp.mean(free_energy)
-            + model.conf.noise_penalty * model.forward.loss()
+            jnp.mean(free_energy) + model.conf.noise_penalty * model.forward.loss()
             # + model.conf.noise_penalty * model.backward.loss()
         )
 
