@@ -150,7 +150,6 @@ DEFAULT_TRAINER_CONFIG = DictConfig(
 )
 
 
-# >>> Full JAX
 def train_test_split(arrays, *, rng, test_ratio=None, test_size=None, train_size=None):
     """
     Split arrays into training and test sets with random permutation.
@@ -193,7 +192,7 @@ def train_test_split(arrays, *, rng, test_ratio=None, test_size=None, train_size
     ), tuple(array[perm[:test_size]] for array in arrays)
 
 
-def to_shard(arrays, sharding=None):
+def shard(arrays, sharding=None):
     """
     Place arrays on specified devices with optional sharding.
 
@@ -356,8 +355,8 @@ def train_fast(model, data, *, conf):
         data, rng=rng, test_size=valid_size, train_size=train_size
     )
 
-    train_set = to_shard(train_set, sharding)
-    valid_set = to_shard(valid_set, sharding)
+    train_set = shard(train_set, sharding)
+    valid_set = shard(valid_set, sharding)
     # <<<
 
     # >>> Prepare optimizer
@@ -583,8 +582,8 @@ def train(model, data, *, conf):
         data, rng=rng, test_size=valid_size, train_size=train_size
     )
 
-    train_set = to_shard(train_set, sharding)
-    valid_set = to_shard(valid_set, sharding)
+    train_set = shard(train_set, sharding)
+    valid_set = shard(valid_set, sharding)
     # <<<
 
     # >>> Prepare optimizer
