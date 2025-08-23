@@ -120,8 +120,7 @@ def model_conf():
     )
 
 
-# Test the main training functions - the most important part!
-def test_train_fast_basic_functionality(model_conf, trainer_config, sample_data):
+def test_train_fast(model_conf, trainer_config, sample_data):
     """Test that train_fast can run without errors on simple data."""
     # Create model and minimal config for fast test
     model = XFADS(model_conf, jrnd.key(0))
@@ -138,7 +137,7 @@ def test_train_fast_basic_functionality(model_conf, trainer_config, sample_data)
     assert hasattr(trained_model, "forward")
 
 
-def test_train_basic_functionality(model_conf, trainer_config, sample_data):
+def test_train(model_conf, trainer_config, sample_data):
     """Test that train can run without errors on simple data."""
     # Create model and minimal config for fast test
     model = XFADS(model_conf, jrnd.key(0))
