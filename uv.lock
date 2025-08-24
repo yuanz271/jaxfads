@@ -309,10 +309,10 @@ dependencies = [
     { name = "gearax" },
     { name = "jax" },
     { name = "numpy" },
+    { name = "omegaconf" },
     { name = "optax" },
     { name = "rich" },
-    { name = "scipy" },
-    { name = "tensorflow-probability" },
+    { name = "tfp-nightly", extra = ["jax"] },
 ]
 
 [package.dev-dependencies]
@@ -325,14 +325,14 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "equinox", specifier = ">=0.11.11" },
+    { name = "equinox", specifier = ">=0.11.12" },
     { name = "gearax", editable = "gearax" },
     { name = "jax", specifier = ">=0.4.38" },
     { name = "numpy", specifier = ">=1.24.4" },
+    { name = "omegaconf", specifier = ">=2.3.0" },
     { name = "optax", specifier = ">=0.1.7" },
     { name = "rich", specifier = ">=14.0.0" },
-    { name = "scipy", specifier = ">=1.10.1" },
-    { name = "tensorflow-probability", specifier = ">=0.25.0" },
+    { name = "tfp-nightly", extras = ["jax"], specifier = ">=0.25" },
 ]
 
 [package.metadata.requires-dev]
@@ -1017,8 +1017,8 @@ wheels = [
 ]
 
 [[package]]
-name = "tensorflow-probability"
-version = "0.25.0"
+name = "tfp-nightly"
+version = "0.26.0.dev20250821"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "absl-py" },
@@ -1030,7 +1030,13 @@ dependencies = [
     { name = "six" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/fe/b6/e116761ceeb880b7ad4c6a7e1203538754dd7dda42538f08d6daaf8dfa4d/tensorflow_probability-0.25.0-py2.py3-none-any.whl", hash = "sha256:f3f4d6431656c0122906888afe1b67b4400e82bd7f254b45b92e6c5b84ea8e3e", size = 6979403, upload-time = "2024-11-08T16:25:57.238Z" },
+    { url = "https://files.pythonhosted.org/packages/29/ce/390175fdaf81f72e5f11b27c1d6ad265f20b79cd21b38c1016ebbb77c60c/tfp_nightly-0.26.0.dev20250821-py2.py3-none-any.whl", hash = "sha256:d651a5d319dd138f0c085f77c1e6b3210cfbc5e2719fb17ea7c4e9ff3e39c6a7", size = 6975548, upload-time = "2025-08-21T08:45:24.717Z" },
+]
+
+[package.optional-dependencies]
+jax = [
+    { name = "jax" },
+    { name = "jaxlib" },
 ]
 
 [[package]]
