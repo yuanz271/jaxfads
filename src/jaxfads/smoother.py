@@ -17,16 +17,19 @@ from functools import partial
 from pathlib import Path
 from typing import Self
 
-from jax import Array, numpy as jnp, random as jrnd, vmap
 import equinox as eqx
+from jax import Array, vmap
+from jax import numpy as jnp
+from jax import random as jrnd
+
 from gearax.modules import ConfModule, load_model, save_model
 
 from . import core, encoders
+from .core import Mode
 from .distributions import Approx
 from .dynamics import Dynamics
-from .observations import Likelihood
 from .nn import DataMasker
-from .core import Mode
+from .observations import Likelihood
 
 
 class XFADS(ConfModule):
@@ -230,7 +233,7 @@ class XFADS(ConfModule):
             Path where to save the model.
         """
         save_model(path, model)
-    
+
     @property
     def approx(self):
         return Approx.get_subclass(self.conf.approx)

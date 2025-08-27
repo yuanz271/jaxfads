@@ -23,7 +23,7 @@ Examples
 --------
 >>> import jax.random as jrnd
 >>> from omegaconf import DictConfig
->>> 
+>>>
 >>> # Create model configuration
 >>> conf = DictConfig({
 ...     'state_dim': 10,
@@ -33,13 +33,12 @@ Examples
 ...     'forward': 'Linear',
 ...     'observation': 'Poisson'
 ... })
->>> 
+>>>
 >>> # Initialize model
 >>> key = jrnd.key(42)
 >>> model = XFADS(conf, key)
 """
 
 from .smoother import XFADS
-
 
 __all__ = ["XFADS"]

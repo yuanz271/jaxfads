@@ -14,11 +14,14 @@ BetaEncoder
     Beta encoder for temporal dependency modeling in XFADS.
 """
 
-from collections.abc import Callable
 import math
-from jax import Array, lax, random as jrnd, vmap
+from collections.abc import Callable
+
 import equinox as eqx
+from jax import Array, lax, vmap
+from jax import random as jrnd
 from omegaconf import DictConfig
+
 from gearax.modules import ConfModule
 
 from .distributions import Approx

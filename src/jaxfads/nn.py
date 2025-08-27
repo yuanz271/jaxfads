@@ -34,18 +34,20 @@ DataMasker
     Data masking module for regularization and robustness.
 """
 
+import math
 from collections.abc import Callable
 from functools import partial
-import math
-from typing import Literal
 
-import jax
-from jax import Array, nn as jnn, numpy as jnp, random as jrnd
 import equinox as eqx
-from equinox import nn as enn, Module
+import jax
+from equinox import Module
+from equinox import nn as enn
+from jax import Array
+from jax import nn as jnn
+from jax import numpy as jnp
+from jax import random as jrnd
 
 from . import constraints
-
 
 _MIN_NORM: float = 1e-6
 MAX_EXP: float = 5.0
@@ -53,8 +55,8 @@ EPS = jnp.finfo(jnp.float32).eps
 
 
 def make_mlp(
-    in_size: int | Literal["scalar"],
-    out_size: int | Literal["scalar"],
+    in_size: int,
+    out_size: int,
     width: int,
     depth: int,
     *,

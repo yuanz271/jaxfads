@@ -23,11 +23,14 @@ DiagMVN
     Diagonal covariance multivariate normal approximation.
 """
 
-from abc import abstractmethod, ABC
 import math
+from abc import ABC, abstractmethod
 
-from jax import Array, numpy as jnp, random as jrnd
+from jax import Array
+from jax import numpy as jnp
+from jax import random as jrnd
 from tensorflow_probability.substrates.jax import distributions as tfd
+
 from gearax.mixin import SubclassRegistryMixin
 
 from .constraints import constrain_positive, unconstrain_positive
