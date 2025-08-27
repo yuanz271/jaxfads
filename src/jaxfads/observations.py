@@ -18,17 +18,17 @@ DiagGaussian
 
 from abc import abstractmethod
 
-from jax import Array, numpy as jnp
-import tensorflow_probability.substrates.jax.distributions as tfp
 import equinox as eqx
+import tensorflow_probability.substrates.jax.distributions as tfp
+from jax import Array
+from jax import numpy as jnp
 
-from gearax.modules import ConfModule
 from gearax.mixin import SubclassRegistryMixin
+from gearax.modules import ConfModule
 
-from .nn import VariantBiasLinear, StationaryLinear
 from .constraints import constrain_positive, unconstrain_positive
 from .distributions import Approx
-
+from .nn import StationaryLinear, VariantBiasLinear
 
 MAX_LOGRATE = 7.0
 

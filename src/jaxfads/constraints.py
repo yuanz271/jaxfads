@@ -1,8 +1,7 @@
-import jax
-from jax import numpy as jnp
 import equinox as eqx
-from jaxtyping import ArrayLike
-
+import jax
+from jax import Array
+from jax import numpy as jnp
 
 MAX_EXP = 5.0
 EPS = jnp.finfo(jnp.float32).eps
@@ -59,25 +58,25 @@ def unconstrain_positive(x):
     return jnp.sqrt(x)
 
 
-def softplus_inverse(x: ArrayLike):
+def softplus_inverse(x: Array):
     """
     Compute the inverse of the softplus function.
 
     Parameters
     ----------
-    x : ArrayLike
+    x : Array
         Input values (should be positive).
 
     Returns
     -------
-    ArrayLike
+    Array
         Inverse softplus values.
 
     Notes
     -----
     The softplus function is softplus(y) = log(1 + exp(y)).
     This function computes y given softplus(y) = x.
-    
+
     For numerical stability, special handling is applied for very small
     and very large input values to avoid overflow/underflow issues.
     """
@@ -111,11 +110,11 @@ class AbstractConstraint(eqx.Module):
     __call__(unconstrained)
         Convenience method that calls constrain().
     """
-    def constrain(self, unconstrained: ArrayLike) -> ArrayLike: ...
+    def constrain(self, unconstrained: Array) -> Array: ...
 
-    def unconstrain(self, constrained: ArrayLike) -> ArrayLike: ...
+    def unconstrain(self, constrained: Array) -> Array: ...
 
-    def __call__(self, unconstrained: ArrayLike) -> ArrayLike:
+    def __call__(self, unconstrained: Array) -> Array:
         return self.constrain(unconstrained)
 
 
@@ -139,8 +138,8 @@ class Positivity(AbstractConstraint):
     making it suitable for gradient-based optimization while ensuring
     all outputs are strictly positive.
     """
-    def constrain(self, unconstrained: ArrayLike) -> ArrayLike:
+    def constrain(self, unconstrained: Array) -> Array:
         return jax.nn.softplus(unconstrained)
 
-    def unconstrain(self, constrained: ArrayLike) -> ArrayLike:
+    def unconstrain(self, constrained: Array) -> Array:
         return softplus_inverse(constrained)

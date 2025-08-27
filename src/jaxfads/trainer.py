@@ -32,25 +32,27 @@ DEFAULT_TRAINER_CONFIG : DictConfig
 
 from functools import partial
 
-import numpy as np
-import jax
-from jax import Array, lax, numpy as jnp, random as jrnd, NamedSharding
-from jax.sharding import PartitionSpec as P
-import optax
 import equinox as eqx
-from gearax.trainer import train_epoch
+import jax
+import numpy as np
+import optax
+from jax import Array, NamedSharding, lax
+from jax import numpy as jnp
+from jax import random as jrnd
+from jax.sharding import PartitionSpec as P
 from omegaconf import DictConfig, OmegaConf
 from rich.progress import (
     MofNCompleteColumn,
     Progress,
+    SpinnerColumn,
     TextColumn,
     TimeElapsedColumn,
     TimeRemainingColumn,
-    SpinnerColumn,
 )
 
-from . import vi
+from gearax.trainer import train_epoch
 
+from . import vi
 
 train_epoch = eqx.filter_jit(train_epoch)
 
@@ -634,7 +636,7 @@ def train2(model, data, *, conf):
                         )
             stop = jnp.logical_and(converged, epoch > conf.min_epoch)
             return jnp.logical_and(epoch < conf.max_epoch, jnp.logical_not(stop))
-        
+
         def train_step(carry):
             params, opt_state, key, epoch, running_loss, valid_loss = carry
             key, epoch_key = jrnd.split(key)

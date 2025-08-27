@@ -27,11 +27,14 @@ from collections.abc import Callable
 from functools import partial
 from typing import Protocol
 
-import jax
-from jax import Array, numpy as jnp, random as jrnd
 import equinox as eqx
-from gearax.modules import ConfModule
+import jax
+from jax import Array
+from jax import numpy as jnp
+from jax import random as jrnd
+
 from gearax.mixin import SubclassRegistryMixin
+from gearax.modules import ConfModule
 
 from .constraints import constrain_positive, unconstrain_positive
 from .distributions import Approx

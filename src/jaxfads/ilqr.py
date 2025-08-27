@@ -1,7 +1,8 @@
 from functools import partial
 
 import jax
-from jax import lax, numpy as jnp, vmap
+from jax import lax, vmap
+from jax import numpy as jnp
 from jax.scipy.linalg import cho_factor, cho_solve
 
 

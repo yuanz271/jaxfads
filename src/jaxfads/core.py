@@ -18,11 +18,13 @@ Mode
     Enumeration of inference modes for XFADS.
 """
 
-from enum import auto, StrEnum
+from enum import StrEnum, auto
 from functools import partial
 
 import jax
-from jax import Array, numpy as jnp, random as jrnd
+from jax import Array
+from jax import numpy as jnp
+from jax import random as jrnd
 from jax.lax import scan
 
 from .dynamics import sample_expected_moment
@@ -185,8 +187,8 @@ def bismooth(
 
     References
     ----------
-    Dowling et al. (2023). Linear Time GPs for Inferring Latent Trajectories 
-        from Neural Spike Trains. https://arxiv.org/abs/2306.01802. 
+    Dowling et al. (2023). Linear Time GPs for Inferring Latent Trajectories
+        from Neural Spike Trains. https://arxiv.org/abs/2306.01802.
         Equations (21-23).
     """
     mc_size = model.conf.mc_size
