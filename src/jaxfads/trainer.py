@@ -633,15 +633,23 @@ def train(model, data, *, conf):
             """Training continuation condition."""
             params, opt_state, key, epoch, running_loss, valid_loss = carry
             converged = jnp.logical_and(
-                            jnp.isclose(running_loss, valid_loss), valid_loss < running_loss
-                        )
+                jnp.isclose(running_loss, valid_loss), valid_loss < running_loss
+            )
             stop = jnp.logical_and(converged, epoch > conf.min_epoch)
             return jnp.logical_and(epoch < conf.max_epoch, jnp.logical_not(stop))
 
         def train_step(carry):
             params, opt_state, key, epoch, running_loss, valid_loss = carry
             key, epoch_key = jr.split(key)
-            model, opt_state = train_epoch(eqx.combine(params, static), train_set, batch_loss, optimizer, opt_state, batch_size, epoch_key)
+            model, opt_state = train_epoch(
+                eqx.combine(params, static),
+                train_set,
+                batch_loss,
+                optimizer,
+                opt_state,
+                batch_size,
+                epoch_key,
+            )
             params, _ = eqx.partition(model, eqx.is_inexact_array)
             key, valid_key = jr.split(key)
             valid_loss = lax.stop_gradient(
@@ -719,7 +727,6 @@ def compute_patience(max_epoch, data_size, batch_size, scale=0.1):
 
 def train_xfads(model, data, *, conf):
     conf = OmegaConf.merge(DEFAULT_TRAINER_CONFIG, conf)
-    # Prepare loss
 
     key = jr.key(conf.seed)
     rng = np.random.default_rng(conf.seed)
@@ -727,17 +734,19 @@ def train_xfads(model, data, *, conf):
     # >>> Prepare sharding
     n_devices = len(jax.devices())
     mesh = jax.make_mesh((n_devices,), ("batch",))
-    data_sharding = jshd.NamedSharding(mesh, jshd.PartitionSpec('batch'))
+    data_sharding = jshd.NamedSharding(mesh, jshd.PartitionSpec("batch"))
     model_sharding = jshd.NamedSharding(mesh, jshd.PartitionSpec())
 
     # Prepare data
     # batch size is required to be multiple of the number of devices
     # validation size is required to be multile of batch_size
     data_size = len(data[0])
-    batch_size = int(conf.batch_size / n_devices) * n_devices
-    conf.batch_size = batch_size
-    valid_size = int(conf.validation_size / batch_size) * batch_size
-    train_size = int((data_size - valid_size) / batch_size) * batch_size
+    batch_size = conf.batch_size
+    if conf.validation_size > 0:
+        valid_size = conf.validation_size
+    else:
+        valid_size = int(data_size * conf.valid_ratio)
+    train_size = data_size - valid_size
 
     train_set, valid_set = train_test_split(
         data, rng=rng, test_size=valid_size, train_size=train_size
@@ -757,10 +766,21 @@ def train_xfads(model, data, *, conf):
         task_id = pbar.add_task(
             "Training", total=conf.max_epoch, loss=np.inf, mean=np.inf
         )
-        model = gt.train(model, train_set, valid_set, key, batch_loss, dataloader, conf.batch_size, conf.max_epoch, conf.patience, optimizer, data_sharding, model_sharding,
+        model = gt.train(
+            model,
+            train_set,
+            valid_set,
+            key,
+            batch_loss,
+            dataloader,
+            conf.batch_size,
+            conf.max_epoch,
+            conf.patience,
+            optimizer,
+            data_sharding,
+            model_sharding,
             epoch_callback=lambda x1, x2: jax.debug.callback(
-                lambda l1, l2: pbar.update(task_id, advance=1, loss=l1, mean=l2),
-                x1,
-                x2)
+                lambda l1, l2: pbar.update(task_id, advance=1, loss=l1, mean=l2), x2, x2
+            ),
         )
         return model
