@@ -38,7 +38,8 @@ import numpy as np
 import optax
 from jax import Array, NamedSharding, lax
 from jax import numpy as jnp
-from jax import random as jrnd
+from jax import random as jr
+from jax import sharding as jshd
 from jax.sharding import PartitionSpec as P
 from omegaconf import DictConfig, OmegaConf
 from rich.progress import (
@@ -50,6 +51,7 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
+from gearax import trainer as gt
 from gearax.trainer import train_epoch
 
 from . import vi
@@ -151,6 +153,7 @@ DEFAULT_TRAINER_CONFIG = DictConfig(
         "noise_gamma": 0.8,
         "valid_ratio": 0.2,
         "validation_size": 80,
+        "patience": 10,
     }
 )
 
@@ -195,30 +198,6 @@ def train_test_split(arrays, *, rng, test_ratio=None, test_size=None, train_size
     return tuple(
         array[perm[test_size : train_size + test_size]] for array in arrays
     ), tuple(array[perm[:test_size]] for array in arrays)
-
-
-def shard(arrays, sharding=None):
-    """
-    Place arrays on specified devices with optional sharding.
-
-    Parameters
-    ----------
-    arrays : tuple of Array
-        Arrays to place on devices.
-    sharding : Sharding, optional
-        JAX sharding specification for multi-device placement.
-
-    Returns
-    -------
-    tuple of Array
-        Arrays placed on specified devices.
-
-    Notes
-    -----
-    Used for efficient multi-device training by distributing data
-    across available accelerators according to the sharding specification.
-    """
-    return tuple(jax.device_put(arr, sharding) for arr in arrays)
 
 
 def batch_elbo(
@@ -267,9 +246,31 @@ def batch_elbo(
         )
     )  # (batch, seq)
 
-    keys = jrnd.split(key, observations.shape[:2])  # observations.shape[:2] + (2,)
+    keys = jr.split(key, observations.shape[:2])  # observations.shape[:2] + (2,)
 
     return _elbo(keys, times, posterior_moments, predicted_moments, observations)
+
+
+def batch_loss(model, batch, key):
+    """Compute negative ELBO loss for a batch of sequences."""
+    times, observations, controls, covariates = batch
+
+    key, model_key = jr.split(key)
+    _, posterior_moments, prior_moments = model(
+        times, observations, controls, covariates, key=model_key
+    )
+
+    key, elbo_key = jr.split(key)
+    free_energy = -batch_elbo(
+        model, elbo_key, times, posterior_moments, prior_moments, observations
+    )
+
+    loss = (
+        jnp.mean(free_energy) + model.conf.noise_penalty * model.forward.loss()
+        # + model.conf.noise_penalty * model.backward.loss()
+    )
+
+    return loss
 
 
 def train_fast(model, data, *, conf):
@@ -340,13 +341,13 @@ def train_fast(model, data, *, conf):
     # Merge with defaults - user config takes precedence
     conf = OmegaConf.merge(DEFAULT_TRAINER_CONFIG, conf)
 
-    key = jrnd.key(conf.seed)
+    key = jr.key(conf.seed)
     rng = np.random.default_rng(conf.seed)
 
     # >>> Prepare data
     n_devices = len(jax.devices())
     mesh = jax.make_mesh((n_devices,), ("batch",))
-    sharding = NamedSharding(mesh, P("batch"))
+    data_sharding = NamedSharding(mesh, P("batch"))
 
     # batch size is required to be multiple of the number of devices
     # validation size is required to be multile of batch_size
@@ -360,8 +361,8 @@ def train_fast(model, data, *, conf):
         data, rng=rng, test_size=valid_size, train_size=train_size
     )
 
-    train_set = shard(train_set, sharding)
-    valid_set = shard(valid_set, sharding)
+    train_set = eqx.filter_shard(train_set, data_sharding)
+    valid_set = eqx.filter_shard(valid_set, data_sharding)
     # <<<
 
     # >>> Prepare optimizer
@@ -381,12 +382,12 @@ def train_fast(model, data, *, conf):
         """Compute negative ELBO loss for a batch of sequences."""
         times, observations, controls, covariates = batch
 
-        key, model_key = jrnd.split(key)
+        key, model_key = jr.split(key)
         _, posterior_moments, prior_moments = model(
             times, observations, controls, covariates, key=model_key
         )
 
-        key, elbo_key = jrnd.split(key)
+        key, elbo_key = jr.split(key)
         free_energy = -batch_elbo(
             model, elbo_key, times, posterior_moments, prior_moments, observations
         )
@@ -410,14 +411,14 @@ def train_fast(model, data, *, conf):
         return vals, model, opt_state
 
     # Main loop
-    key, perm_key = jrnd.split(key)
-    perm = jrnd.permutation(perm_key, train_size)
+    key, perm_key = jr.split(key)
+    perm = jr.permutation(perm_key, train_size)
     min_iter = conf.min_iter
     max_iter = conf.max_iter
     beta = conf.beta
 
     with training_progress() as pbar:
-        key, valid_key = jrnd.split(key)
+        key, valid_key = jr.split(key)
         valid_loss = lax.stop_gradient(
             batch_loss(eqx.nn.inference_mode(model), valid_set, valid_key)
         )
@@ -439,13 +440,13 @@ def train_fast(model, data, *, conf):
             params, opt_state, i, converged, mean_loss, key, idx, perm = carry
 
             def new_permutation(key, permutation, _batch_index):
-                permutation = jrnd.permutation(key, train_size)
+                permutation = jr.permutation(key, train_size)
                 return permutation, 0
 
             def old_permutation(key, permutation, batch_index):
                 return permutation, batch_index
 
-            key, perm_key = jrnd.split(key)
+            key, perm_key = jr.split(key)
             perm, idx = lax.cond(
                 idx + batch_size >= train_size,
                 new_permutation,
@@ -458,10 +459,10 @@ def train_fast(model, data, *, conf):
             model = eqx.combine(params, static)
             batch_idx = lax.dynamic_slice_in_dim(perm, idx, batch_size)
             batch = tuple(arr[batch_idx] for arr in train_set)
-            key, step_key = jrnd.split(key)
+            key, step_key = jr.split(key)
             _, model, opt_state = batch_grad_step(model, opt_state, batch, step_key)
 
-            key, valid_key = jrnd.split(key)
+            key, valid_key = jr.split(key)
             valid_loss = lax.stop_gradient(
                 batch_loss(eqx.nn.inference_mode(model), valid_set, valid_key)
             )
@@ -488,7 +489,7 @@ def train_fast(model, data, *, conf):
                 perm,
             )
 
-        key, loop_key = jrnd.split(key)
+        key, loop_key = jr.split(key)
         params, *_ = lax.while_loop(
             train_cond,
             train_step,
@@ -499,7 +500,7 @@ def train_fast(model, data, *, conf):
     return model
 
 
-def train2(model, data, *, conf):
+def train(model, data, *, conf):
     """
     Fast training routine for XFADS models with multi-device support.
 
@@ -558,13 +559,13 @@ def train2(model, data, *, conf):
     # Merge with defaults - user config takes precedence
     conf = OmegaConf.merge(DEFAULT_TRAINER_CONFIG, conf)
 
-    key = jrnd.key(conf.seed)
+    key = jr.key(conf.seed)
     rng = np.random.default_rng(conf.seed)
 
     # >>> Prepare data
     n_devices = len(jax.devices())
     mesh = jax.make_mesh((n_devices,), ("batch",))
-    sharding = NamedSharding(mesh, P("batch"))
+    data_sharding = NamedSharding(mesh, P("batch"))
 
     # batch size is required to be multiple of the number of devices
     # validation size is required to be multile of batch_size
@@ -578,8 +579,8 @@ def train2(model, data, *, conf):
         data, rng=rng, test_size=valid_size, train_size=train_size
     )
 
-    train_set = shard(train_set, sharding)
-    valid_set = shard(valid_set, sharding)
+    train_set = eqx.filter_shard(train_set, data_sharding)
+    valid_set = eqx.filter_shard(valid_set, data_sharding)
     # <<<
 
     # >>> Prepare optimizer
@@ -599,12 +600,12 @@ def train2(model, data, *, conf):
         """Compute negative ELBO loss for a batch of sequences."""
         times, observations, controls, covariates = batch
 
-        key, model_key = jrnd.split(key)
+        key, model_key = jr.split(key)
         _, posterior_moments, prior_moments = model(
             times, observations, controls, covariates, key=model_key
         )
 
-        key, elbo_key = jrnd.split(key)
+        key, elbo_key = jr.split(key)
         free_energy = -batch_elbo(
             model, elbo_key, times, posterior_moments, prior_moments, observations
         )
@@ -618,7 +619,7 @@ def train2(model, data, *, conf):
 
     # Main loop
     with training_progress() as pbar:
-        key, valid_key = jrnd.split(key)
+        key, valid_key = jr.split(key)
         valid_loss = lax.stop_gradient(
             batch_loss(eqx.nn.inference_mode(model), valid_set, valid_key)
         )
@@ -639,10 +640,10 @@ def train2(model, data, *, conf):
 
         def train_step(carry):
             params, opt_state, key, epoch, running_loss, valid_loss = carry
-            key, epoch_key = jrnd.split(key)
+            key, epoch_key = jr.split(key)
             model, opt_state = train_epoch(eqx.combine(params, static), train_set, batch_loss, optimizer, opt_state, batch_size, epoch_key)
             params, _ = eqx.partition(model, eqx.is_inexact_array)
-            key, valid_key = jrnd.split(key)
+            key, valid_key = jr.split(key)
             valid_loss = lax.stop_gradient(
                 batch_loss(eqx.nn.inference_mode(model), valid_set, valid_key)
             )
@@ -654,7 +655,7 @@ def train2(model, data, *, conf):
             )
             return params, opt_state, key, epoch + 1, running_loss, valid_loss
 
-        key, epoch_key = jrnd.split(key)
+        key, epoch_key = jr.split(key)
         params, *_ = lax.while_loop(
             train_cond,
             train_step,
@@ -665,99 +666,85 @@ def train2(model, data, *, conf):
     return model
 
 
-def train(model, data, *, conf):
+def dataloader(arrays, batch_size, num_epochs, key, shuffle=True):
     """
-    Training routine for XFADS models with multi-device support.
+    Dataloader that yields batches with tracking information.
 
-    Implements efficient training using JAX transformations, automatic
-    differentiation, and multi-device data parallelism. Features include
-    gradient clipping, weight decay, noise injection, and validation-based
-    early stopping with exponential moving averages.
+    Args:
+        arrays: Tuple of data arrays to iterate over
+        batch_size: Size of each batch
+        num_epochs: Number of epochs to run (nonnegative integer, negative values treated as 0)
+        key: JAX random key for shuffling
+        shuffle:
 
-    Parameters
-    ----------
-    model : XFADS
-        The XFADS model to train.
-    data : tuple of Array
-        Training data as tuple (t, y, u, c) where:
-        - t: time indices, shape (N, T)
-        - y: observations, shape (N, T, observation_dim)
-        - u: control inputs, shape (N, T, input_dim)
-        - c: covariates, shape (N, T, covariate_dim)
-    conf : dict or DictConfig
-        Training configuration with hyperparameters. If dict or partial config,
-        missing values will be filled with defaults from DEFAULT_TRAINER_CONFIG.
-
-    Returns
-    -------
-    XFADS
-        Trained XFADS model with optimized parameters.
-
-    Notes
-    -----
-    The training procedure follows these steps:
-
-    1. **Data Preparation**: Split data into train/validation sets and
-       distribute across available devices using JAX sharding.
-
-    2. **Optimizer Setup**: Configure Optax optimizer chain with:
-       - Gradient clipping for stability
-       - Gradient noise injection for regularization
-       - Adam optimizer with weight decay
-       - Learning rate scaling
-
-    3. **Training Loop**: Iterative optimization with:
-       - Mini-batch gradient descent
-       - Validation loss monitoring
-       - Exponential moving average smoothing
-       - Early stopping based on convergence criteria
-
-    4. **Loss Computation**: Maximizes ELBO (Evidence Lower Bound):
-       Loss = -E[log p(y|z)] + KL(q(z)||p(z)) + noise_penalty
-
-    The implementation is optimized for performance with:
-    - JIT compilation of critical functions
-    - Efficient memory management with equinox
-    - Multi-device data parallelism
-    - Dynamic batch permutation for better mixing
-
-    Examples
-    --------
-    >>> from omegaconf import DictConfig
-    >>> user_conf = {"max_epoch": 100, "learning_rate": 1e-4}
-    >>> trained_model = train(model, (t, y, u, c), conf=user_conf)
-    >>> # Or with DictConfig
-    >>> conf = DictConfig({"max_epoch": 100, "learning_rate": 1e-4})
-    >>> trained_model = train(model, (t, y, u, c), conf=conf)
+    Yields:
+        (batch_data, epoch_num, batch_in_epoch)
     """
-    # Merge with defaults - user config takes precedence
+    # Treat negative num_epochs as 0
+    num_epochs = max(0, num_epochs)
+
+    dataset_size = arrays[0].shape[0]
+    assert all(array.shape[0] == dataset_size for array in arrays)
+    indices = jnp.arange(dataset_size)
+
+    epoch = 0  # index of epoch
+
+    def single_epoch_generator(epoch_key):
+        perm = jr.permutation(epoch_key, indices) if shuffle else indices
+        start = 0
+        end = batch_size
+        batch_in_epoch = 0
+        while end <= dataset_size:
+            batch_perm = perm[start:end]
+            batch_data = tuple(array[batch_perm] for array in arrays)
+            yield batch_data, epoch, batch_in_epoch
+            batch_in_epoch += 1
+            start = end
+            end = start + batch_size
+
+    # Finite number of epochs
+    for _ in range(num_epochs):
+        key, epoch_key = jr.split(key)
+        yield from single_epoch_generator(epoch_key)
+        epoch += 1
+
+
+def compute_patience(max_epoch, data_size, batch_size, scale=0.1):
+    n_batches = data_size // batch_size
+    total_steps = max_epoch * n_batches
+    patience_steps = int(total_steps * scale)
+    patience_epochs = max(1, patience_steps // n_batches)
+    return patience_epochs
+
+
+def train_xfads(model, data, *, conf):
     conf = OmegaConf.merge(DEFAULT_TRAINER_CONFIG, conf)
+    # Prepare loss
 
-    key = jrnd.key(conf.seed)
+    key = jr.key(conf.seed)
     rng = np.random.default_rng(conf.seed)
 
-    # >>> Prepare data
+    # >>> Prepare sharding
     n_devices = len(jax.devices())
     mesh = jax.make_mesh((n_devices,), ("batch",))
-    sharding = NamedSharding(mesh, P("batch"))
+    data_sharding = jshd.NamedSharding(mesh, jshd.PartitionSpec('batch'))
+    model_sharding = jshd.NamedSharding(mesh, jshd.PartitionSpec())
 
+    # Prepare data
     # batch size is required to be multiple of the number of devices
     # validation size is required to be multile of batch_size
-
     data_size = len(data[0])
     batch_size = int(conf.batch_size / n_devices) * n_devices
+    conf.batch_size = batch_size
     valid_size = int(conf.validation_size / batch_size) * batch_size
     train_size = int((data_size - valid_size) / batch_size) * batch_size
 
     train_set, valid_set = train_test_split(
         data, rng=rng, test_size=valid_size, train_size=train_size
     )
+    conf.patience = compute_patience(conf.max_epoch, data_size, batch_size)
 
-    train_set = shard(train_set, sharding)
-    valid_set = shard(valid_set, sharding)
-    # <<<
-
-    # >>> Prepare optimizer
+    # Prepare optimizer
     optimizer = optax.chain(
         optax.clip_by_global_norm(conf.clip_norm),
         optax.add_noise(conf.noise_eta, conf.noise_gamma, conf.seed),
@@ -765,64 +752,15 @@ def train(model, data, *, conf):
         optax.add_decayed_weights(conf.weight_decay),
         optax.scale_by_learning_rate(conf.learning_rate),
     )
-    opt_state = optimizer.init(eqx.filter(model, eqx.is_inexact_array))
-    # <<<
-
-    # Define loss and grad
-    @eqx.filter_jit
-    def batch_loss(model, batch, key):
-        """Compute negative ELBO loss for a batch of sequences."""
-        times, observations, controls, covariates = batch
-
-        key, model_key = jrnd.split(key)
-        _, posterior_moments, prior_moments = model(
-            times, observations, controls, covariates, key=model_key
-        )
-
-        key, elbo_key = jrnd.split(key)
-        free_energy = -batch_elbo(
-            model, elbo_key, times, posterior_moments, prior_moments, observations
-        )
-
-        loss = (
-            jnp.mean(free_energy) + model.conf.noise_penalty * model.forward.loss()
-            # + model.conf.noise_penalty * model.backward.loss()
-        )
-
-        return loss
-
-    # Main loop
-    min_epoch = conf.min_epoch
-    max_epoch = conf.max_epoch
-    beta = conf.beta
 
     with training_progress() as pbar:
-        key, valid_key = jrnd.split(key)
-        mean_loss = valid_loss = lax.stop_gradient(
-            batch_loss(eqx.nn.inference_mode(model), valid_set, valid_key)
-        )
         task_id = pbar.add_task(
-            "Training", total=max_epoch, loss=valid_loss, mean=valid_loss
+            "Training", total=conf.max_epoch, loss=np.inf, mean=np.inf
         )
-        for epoch in range(max_epoch):
-            key, epoch_key = jrnd.split(key)
-            model, opt_state = train_epoch(
-                model,
-                train_set,
-                batch_loss,
-                optimizer,
-                opt_state,
-                batch_size,
-                epoch_key,
-            )
-            valid_loss = lax.stop_gradient(
-                batch_loss(eqx.nn.inference_mode(model), valid_set, valid_key)
-            )
-            mean_loss = mean_loss * beta + valid_loss * (1 - beta)
-            pbar.update(task_id, advance=1, loss=valid_loss, mean=mean_loss)
-            converged = jnp.isclose(mean_loss, valid_loss) and valid_loss <= mean_loss
-
-            if epoch > min_epoch and converged:
-                break
-
-    return model
+        model = gt.train(model, train_set, valid_set, key, batch_loss, dataloader, conf.batch_size, conf.max_epoch, conf.patience, optimizer, data_sharding, model_sharding,
+            epoch_callback=lambda x1, x2: jax.debug.callback(
+                lambda l1, l2: pbar.update(task_id, advance=1, loss=l1, mean=l2),
+                x1,
+                x2)
+        )
+        return model

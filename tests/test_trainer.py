@@ -3,7 +3,7 @@ from jax import Array, numpy as jnp, random as jrnd
 import equinox as eqx
 from omegaconf import OmegaConf
 
-from jaxfads.trainer import train_fast, train, train2
+from jaxfads.trainer import train_fast, train, train_xfads
 from jaxfads.smoother import XFADS
 from jaxfads.dynamics import Dynamics, Noise
 
@@ -55,8 +55,8 @@ def trainer_config():
 def sample_data():
     """Generate sample training data."""
     key = jrnd.key(42)
-    n_trials = 20
-    n_timesteps = 10
+    n_trials = 100
+    n_timesteps = 20
     obs_dim = 10
     input_dim = 1
     context_dim = 0
@@ -124,9 +124,9 @@ def test_train_fast(model_conf, trainer_config, sample_data):
     """Test that train_fast can run without errors on simple data."""
     # Create model and minimal config for fast test
     model = XFADS(model_conf, jrnd.key(0))
-    trainer_config.max_iter = 2
-    trainer_config.batch_size = 4
-    trainer_config.validation_size = 4
+    trainer_config.max_iter = 5
+    trainer_config.batch_size = 64
+    trainer_config.validation_size = 32
 
     # This should run without errors
     trained_model = train_fast(model, sample_data, conf=trainer_config)
@@ -137,16 +137,16 @@ def test_train_fast(model_conf, trainer_config, sample_data):
     assert hasattr(trained_model, "forward")
 
 
-def test_train2(model_conf, trainer_config, sample_data):
+def test_train(model_conf, trainer_config, sample_data):
     """Test that train_fast can run without errors on simple data."""
     # Create model and minimal config for fast test
     model = XFADS(model_conf, jrnd.key(0))
-    trainer_config.max_iter = 2
-    trainer_config.batch_size = 4
-    trainer_config.validation_size = 4
+    trainer_config.max_iter = 5
+    trainer_config.batch_size = 64
+    trainer_config.validation_size = 32
 
     # This should run without errors
-    trained_model = train2(model, sample_data, conf=trainer_config)
+    trained_model = train(model, sample_data, conf=trainer_config)
 
     # Basic checks that we got a model back
     assert trained_model is not None
@@ -154,16 +154,16 @@ def test_train2(model_conf, trainer_config, sample_data):
     assert hasattr(trained_model, "forward")
 
 
-def test_train(model_conf, trainer_config, sample_data):
-    """Test that train can run without errors on simple data."""
+def test_train_xfads(model_conf, trainer_config, sample_data):
+    """Test that train_fast can run without errors on simple data."""
     # Create model and minimal config for fast test
     model = XFADS(model_conf, jrnd.key(0))
-    trainer_config.max_epoch = 2
-    trainer_config.batch_size = 4
-    trainer_config.validation_size = 4
+    trainer_config.max_iter = 5
+    trainer_config.batch_size = 64
+    trainer_config.validation_size = 32
 
     # This should run without errors
-    trained_model = train(model, sample_data, conf=trainer_config)
+    trained_model = train_xfads(model, sample_data, conf=trainer_config)
 
     # Basic checks that we got a model back
     assert trained_model is not None
