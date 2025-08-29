@@ -158,7 +158,7 @@ def test_train_xfads(model_conf, trainer_config, sample_data):
     """Test that train_fast can run without errors on simple data."""
     # Create model and minimal config for fast test
     model = XFADS(model_conf, jrnd.key(0))
-    trainer_config.max_iter = 5
+    trainer_config.max_epoch = 10
     trainer_config.batch_size = 64
     trainer_config.validation_size = 32
 
