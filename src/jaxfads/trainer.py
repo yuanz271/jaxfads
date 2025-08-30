@@ -32,70 +32,17 @@ DEFAULT_TRAINER_CONFIG : DictConfig
 
 from functools import partial
 
-import equinox as eqx
 import jax
 import numpy as np
 import optax
-from jax import Array, NamedSharding, lax
+from jax import Array
 from jax import numpy as jnp
 from jax import random as jr
 from jax import sharding as jshd
-from jax.sharding import PartitionSpec as P
 from omegaconf import DictConfig, OmegaConf
-from rich.progress import (
-    MofNCompleteColumn,
-    Progress,
-    SpinnerColumn,
-    TextColumn,
-    TimeElapsedColumn,
-    TimeRemainingColumn,
-)
-
 from gearax import trainer as gt
-from gearax.trainer import train_epoch
 
 from . import vi
-
-train_epoch = eqx.filter_jit(train_epoch)
-
-
-def training_progress():
-    """
-    Create a Rich progress bar for training visualization.
-
-    Returns
-    -------
-    Progress
-        Configured Rich Progress instance with columns for:
-        - Spinner animation
-        - Task description
-        - Progress counter
-        - Elapsed time
-        - Remaining time estimate
-        - Current loss value
-        - Moving average loss
-
-    Notes
-    -----
-    The progress bar provides real-time feedback during training including
-    current and smoothed loss values to monitor convergence.
-    """
-    return Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        MofNCompleteColumn(),
-        TextColumn("•"),
-        "Elapsed",
-        TimeElapsedColumn(),
-        TextColumn("•"),
-        "Remaining",
-        TimeRemainingColumn(),
-        TextColumn("•"),
-        "Loss",
-        TextColumn("{task.fields[loss]:.3f}"),
-        "MA Loss",
-        TextColumn("{task.fields[mean]:.3f}"),
-    )
 
 
 # Default configuration as DictConfig
@@ -273,407 +220,6 @@ def batch_loss(model, batch, key):
     return loss
 
 
-def train_fast(model, data, *, conf):
-    """
-    Fast training routine for XFADS models with multi-device support.
-
-    Implements efficient training using JAX transformations, automatic
-    differentiation, and multi-device data parallelism. Features include
-    gradient clipping, weight decay, noise injection, and validation-based
-    early stopping with exponential moving averages.
-
-    Parameters
-    ----------
-    model : XFADS
-        The XFADS model to train.
-    data : tuple of Array
-        Training data as tuple (t, y, u, c) where:
-        - t: time indices, shape (N, T)
-        - y: observations, shape (N, T, observation_dim)
-        - u: control inputs, shape (N, T, input_dim)
-        - c: covariates, shape (N, T, covariate_dim)
-    conf : dict or DictConfig
-        Training configuration with hyperparameters. If dict or partial config,
-        missing values will be filled with defaults from DEFAULT_TRAINER_CONFIG.
-
-    Returns
-    -------
-    XFADS
-        Trained XFADS model with optimized parameters.
-
-    Notes
-    -----
-    The training procedure follows these steps:
-
-    1. **Data Preparation**: Split data into train/validation sets and
-       distribute across available devices using JAX sharding.
-
-    2. **Optimizer Setup**: Configure Optax optimizer chain with:
-       - Gradient clipping for stability
-       - Gradient noise injection for regularization
-       - Adam optimizer with weight decay
-       - Learning rate scaling
-
-    3. **Training Loop**: Iterative optimization with:
-       - Mini-batch gradient descent
-       - Validation loss monitoring
-       - Exponential moving average smoothing
-       - Early stopping based on convergence criteria
-
-    4. **Loss Computation**: Maximizes ELBO (Evidence Lower Bound):
-       Loss = -E[log p(y|z)] + KL(q(z)||p(z)) + noise_penalty
-
-    The implementation is optimized for performance with:
-    - JIT compilation of critical functions
-    - Efficient memory management with equinox
-    - Multi-device data parallelism
-    - Dynamic batch permutation for better mixing
-
-    Examples
-    --------
-    >>> from omegaconf import DictConfig
-    >>> user_conf = {"max_iter": 1000, "learning_rate": 1e-4}
-    >>> trained_model = train_fast(model, (t, y, u, c), conf=user_conf)
-    >>> # Or with DictConfig
-    >>> conf = DictConfig({"max_iter": 1000, "learning_rate": 1e-4})
-    >>> trained_model = train_fast(model, (t, y, u, c), conf=conf)
-    """
-    # Merge with defaults - user config takes precedence
-    conf = OmegaConf.merge(DEFAULT_TRAINER_CONFIG, conf)
-
-    key = jr.key(conf.seed)
-    rng = np.random.default_rng(conf.seed)
-
-    # >>> Prepare data
-    n_devices = len(jax.devices())
-    mesh = jax.make_mesh((n_devices,), ("batch",))
-    data_sharding = NamedSharding(mesh, P("batch"))
-
-    # batch size is required to be multiple of the number of devices
-    # validation size is required to be multile of batch_size
-
-    data_size = len(data[0])
-    batch_size = int(conf.batch_size / n_devices) * n_devices
-    valid_size = int(conf.validation_size / batch_size) * batch_size
-    train_size = int((data_size - valid_size) / batch_size) * batch_size
-
-    train_set, valid_set = train_test_split(
-        data, rng=rng, test_size=valid_size, train_size=train_size
-    )
-
-    train_set = eqx.filter_shard(train_set, data_sharding)
-    valid_set = eqx.filter_shard(valid_set, data_sharding)
-    # <<<
-
-    # >>> Prepare optimizer
-    optimizer = optax.chain(
-        optax.clip_by_global_norm(conf.clip_norm),
-        optax.add_noise(conf.noise_eta, conf.noise_gamma, conf.seed),
-        optax.scale_by_adam(),
-        optax.add_decayed_weights(conf.weight_decay),
-        optax.scale_by_learning_rate(conf.learning_rate),
-    )
-    opt_state = optimizer.init(eqx.filter(model, eqx.is_inexact_array))
-    # <<<
-
-    # Define loss and grad
-    @eqx.filter_jit
-    def batch_loss(model, batch, key):
-        """Compute negative ELBO loss for a batch of sequences."""
-        times, observations, controls, covariates = batch
-
-        key, model_key = jr.split(key)
-        _, posterior_moments, prior_moments = model(
-            times, observations, controls, covariates, key=model_key
-        )
-
-        key, elbo_key = jr.split(key)
-        free_energy = -batch_elbo(
-            model, elbo_key, times, posterior_moments, prior_moments, observations
-        )
-
-        loss = (
-            jnp.mean(free_energy) + model.conf.noise_penalty * model.forward.loss()
-            # + model.conf.noise_penalty * model.backward.loss()
-        )
-
-        return loss
-
-    @eqx.filter_jit
-    def batch_grad_step(model, opt_state, batch, key):
-        """Perform one gradient update step."""
-        vals, grads = eqx.filter_value_and_grad(batch_loss)(
-            model, batch, key
-        )  # The gradient will be computed with respect to all floating-point JAX/NumPy arrays in the first argument
-        updates, opt_state = optimizer.update(grads, opt_state, model)
-        model = eqx.apply_updates(model, updates)
-
-        return vals, model, opt_state
-
-    # Main loop
-    key, perm_key = jr.split(key)
-    perm = jr.permutation(perm_key, train_size)
-    min_iter = conf.min_iter
-    max_iter = conf.max_iter
-    beta = conf.beta
-
-    with training_progress() as pbar:
-        key, valid_key = jr.split(key)
-        valid_loss = lax.stop_gradient(
-            batch_loss(eqx.nn.inference_mode(model), valid_set, valid_key)
-        )
-        task_id = pbar.add_task(
-            "Training", total=max_iter, loss=valid_loss, mean=valid_loss
-        )
-
-        params, static = eqx.partition(model, eqx.is_inexact_array)
-
-        def train_cond(carry):
-            """Training continuation condition."""
-            params, opt_state, i, converged, *_ = carry
-            return jnp.logical_and(
-                i < max_iter, jnp.logical_or(jnp.logical_not(converged), i < min_iter)
-            )
-
-        def train_step(carry):
-            """Single training step with validation."""
-            params, opt_state, i, converged, mean_loss, key, idx, perm = carry
-
-            def new_permutation(key, permutation, _batch_index):
-                permutation = jr.permutation(key, train_size)
-                return permutation, 0
-
-            def old_permutation(key, permutation, batch_index):
-                return permutation, batch_index
-
-            key, perm_key = jr.split(key)
-            perm, idx = lax.cond(
-                idx + batch_size >= train_size,
-                new_permutation,
-                old_permutation,
-                perm_key,
-                perm,
-                idx,
-            )
-
-            model = eqx.combine(params, static)
-            batch_idx = lax.dynamic_slice_in_dim(perm, idx, batch_size)
-            batch = tuple(arr[batch_idx] for arr in train_set)
-            key, step_key = jr.split(key)
-            _, model, opt_state = batch_grad_step(model, opt_state, batch, step_key)
-
-            key, valid_key = jr.split(key)
-            valid_loss = lax.stop_gradient(
-                batch_loss(eqx.nn.inference_mode(model), valid_set, valid_key)
-            )
-            jax.debug.callback(
-                lambda vl, ml: pbar.update(task_id, advance=1, loss=vl, mean=ml),
-                valid_loss,
-                mean_loss,
-            )
-
-            params, _ = eqx.partition(model, eqx.is_inexact_array)
-            converged = jnp.logical_and(
-                jnp.isclose(mean_loss, valid_loss), valid_loss <= mean_loss
-            )
-            mean_loss = mean_loss * beta + valid_loss * (1 - beta)
-
-            return (
-                params,
-                opt_state,
-                i + 1,
-                converged,
-                mean_loss,
-                key,
-                idx + batch_size,
-                perm,
-            )
-
-        key, loop_key = jr.split(key)
-        params, *_ = lax.while_loop(
-            train_cond,
-            train_step,
-            (params, opt_state, 0, False, valid_loss, loop_key, 0, perm),
-        )
-        model = eqx.combine(params, static)
-
-    return model
-
-
-def train(model, data, *, conf):
-    """
-    Fast training routine for XFADS models with multi-device support.
-
-    Implements efficient training using JAX transformations, automatic
-    differentiation, and multi-device data parallelism. Features include
-    gradient clipping, weight decay, noise injection, and validation-based
-    early stopping with exponential moving averages.
-
-    Parameters
-    ----------
-    model : XFADS
-        The XFADS model to train.
-    data : tuple of Array
-        Training data as tuple (t, y, u, c) where:
-        - t: time indices, shape (N, T)
-        - y: observations, shape (N, T, observation_dim)
-        - u: control inputs, shape (N, T, input_dim)
-        - c: covariates, shape (N, T, covariate_dim)
-    conf : dict or DictConfig
-        Training configuration with hyperparameters. If dict or partial config,
-        missing values will be filled with defaults from DEFAULT_TRAINER_CONFIG.
-
-    Returns
-    -------
-    XFADS
-        Trained XFADS model with optimized parameters.
-
-    Notes
-    -----
-    The training procedure follows these steps:
-
-    1. **Data Preparation**: Split data into train/validation sets and
-       distribute across available devices using JAX sharding.
-
-    2. **Optimizer Setup**: Configure Optax optimizer chain with:
-       - Gradient clipping for stability
-       - Gradient noise injection for regularization
-       - Adam optimizer with weight decay
-       - Learning rate scaling
-
-    3. **Training Loop**: Iterative optimization with:
-       - Mini-batch gradient descent
-       - Validation loss monitoring
-       - Exponential moving average smoothing
-       - Early stopping based on convergence criteria
-
-    4. **Loss Computation**: Maximizes ELBO (Evidence Lower Bound):
-       Loss = -E[log p(y|z)] + KL(q(z)||p(z)) + noise_penalty
-
-    The implementation is optimized for performance with:
-    - JIT compilation of critical functions
-    - Efficient memory management with equinox
-    - Multi-device data parallelism
-    - Dynamic batch permutation for better mixing
-    """
-    # Merge with defaults - user config takes precedence
-    conf = OmegaConf.merge(DEFAULT_TRAINER_CONFIG, conf)
-
-    key = jr.key(conf.seed)
-    rng = np.random.default_rng(conf.seed)
-
-    # >>> Prepare data
-    n_devices = len(jax.devices())
-    mesh = jax.make_mesh((n_devices,), ("batch",))
-    data_sharding = NamedSharding(mesh, P("batch"))
-
-    # batch size is required to be multiple of the number of devices
-    # validation size is required to be multile of batch_size
-
-    data_size = len(data[0])
-    batch_size = int(conf.batch_size / n_devices) * n_devices
-    valid_size = int(conf.validation_size / batch_size) * batch_size
-    train_size = int((data_size - valid_size) / batch_size) * batch_size
-
-    train_set, valid_set = train_test_split(
-        data, rng=rng, test_size=valid_size, train_size=train_size
-    )
-
-    train_set = eqx.filter_shard(train_set, data_sharding)
-    valid_set = eqx.filter_shard(valid_set, data_sharding)
-    # <<<
-
-    # >>> Prepare optimizer
-    optimizer = optax.chain(
-        optax.clip_by_global_norm(conf.clip_norm),
-        optax.add_noise(conf.noise_eta, conf.noise_gamma, conf.seed),
-        optax.scale_by_adam(),
-        optax.add_decayed_weights(conf.weight_decay),
-        optax.scale_by_learning_rate(conf.learning_rate),
-    )
-    opt_state = optimizer.init(eqx.filter(model, eqx.is_inexact_array))
-    # <<<
-
-    # Define loss and grad
-    # @eqx.filter_jit
-    def batch_loss(model, batch, key):
-        """Compute negative ELBO loss for a batch of sequences."""
-        times, observations, controls, covariates = batch
-
-        key, model_key = jr.split(key)
-        _, posterior_moments, prior_moments = model(
-            times, observations, controls, covariates, key=model_key
-        )
-
-        key, elbo_key = jr.split(key)
-        free_energy = -batch_elbo(
-            model, elbo_key, times, posterior_moments, prior_moments, observations
-        )
-
-        loss = (
-            jnp.mean(free_energy) + model.conf.noise_penalty * model.forward.loss()
-            # + model.conf.noise_penalty * model.backward.loss()
-        )
-
-        return loss
-
-    # Main loop
-    with training_progress() as pbar:
-        key, valid_key = jr.split(key)
-        valid_loss = lax.stop_gradient(
-            batch_loss(eqx.nn.inference_mode(model), valid_set, valid_key)
-        )
-        task_id = pbar.add_task(
-            "Training", total=conf.max_epoch, loss=valid_loss, mean=valid_loss
-        )
-
-        params, static = eqx.partition(model, eqx.is_inexact_array)
-
-        def train_cond(carry):
-            """Training continuation condition."""
-            params, opt_state, key, epoch, running_loss, valid_loss = carry
-            converged = jnp.logical_and(
-                jnp.isclose(running_loss, valid_loss), valid_loss < running_loss
-            )
-            stop = jnp.logical_and(converged, epoch > conf.min_epoch)
-            return jnp.logical_and(epoch < conf.max_epoch, jnp.logical_not(stop))
-
-        def train_step(carry):
-            params, opt_state, key, epoch, running_loss, valid_loss = carry
-            key, epoch_key = jr.split(key)
-            model, opt_state = train_epoch(
-                eqx.combine(params, static),
-                train_set,
-                batch_loss,
-                optimizer,
-                opt_state,
-                batch_size,
-                epoch_key,
-            )
-            params, _ = eqx.partition(model, eqx.is_inexact_array)
-            key, valid_key = jr.split(key)
-            valid_loss = lax.stop_gradient(
-                batch_loss(eqx.nn.inference_mode(model), valid_set, valid_key)
-            )
-            running_loss = running_loss * conf.beta + valid_loss * (1 - conf.beta)
-            jax.debug.callback(
-                lambda vl, ml: pbar.update(task_id, advance=1, loss=vl, mean=ml),
-                valid_loss,
-                running_loss,
-            )
-            return params, opt_state, key, epoch + 1, running_loss, valid_loss
-
-        key, epoch_key = jr.split(key)
-        params, *_ = lax.while_loop(
-            train_cond,
-            train_step,
-            (params, opt_state, epoch_key, 0, valid_loss, jnp.nan),
-        )
-        model = eqx.combine(params, static)
-
-    return model
-
-
 def dataloader(arrays, batch_size, num_epochs, key, shuffle=True):
     """
     Dataloader that yields batches with tracking information.
@@ -725,7 +271,62 @@ def compute_patience(max_epoch, data_size, batch_size, scale=0.1):
     return patience_epochs
 
 
-def train_xfads(model, data, *, conf):
+def train(model, data, *, conf):
+    """
+    Training routine for XFADS models with multi-device support.
+
+    Implements efficient training using JAX transformations, automatic
+    differentiation, and multi-device data parallelism. Features include
+    gradient clipping, weight decay, noise injection, and validation-based
+    early stopping with exponential moving averages.
+
+    Parameters
+    ----------
+    model : XFADS
+        The XFADS model to train.
+    data : tuple of Array
+        Training data as tuple (t, y, u, c) where:
+        - t: time indices, shape (N, T)
+        - y: observations, shape (N, T, observation_dim)
+        - u: control inputs, shape (N, T, input_dim)
+        - c: covariates, shape (N, T, covariate_dim)
+    conf : dict or DictConfig
+        Training configuration with hyperparameters. If dict or partial config,
+        missing values will be filled with defaults from DEFAULT_TRAINER_CONFIG.
+
+    Returns
+    -------
+    XFADS
+        Trained XFADS model with optimized parameters.
+
+    Notes
+    -----
+    The training procedure follows these steps:
+
+    1. **Data Preparation**: Split data into train/validation sets and
+       distribute across available devices using JAX sharding.
+
+    2. **Optimizer Setup**: Configure Optax optimizer chain with:
+       - Gradient clipping for stability
+       - Gradient noise injection for regularization
+       - Adam optimizer with weight decay
+       - Learning rate scaling
+
+    3. **Training Loop**: Iterative optimization with:
+       - Mini-batch gradient descent
+       - Validation loss monitoring
+       - Exponential moving average smoothing
+       - Early stopping based on convergence criteria
+
+    4. **Loss Computation**: Maximizes ELBO (Evidence Lower Bound):
+       Loss = -E[log p(y|z)] + KL(q(z)||p(z)) + noise_penalty
+
+    The implementation is optimized for performance with:
+    - JIT compilation of critical functions
+    - Efficient memory management with equinox
+    - Multi-device data parallelism
+    - Dynamic batch permutation for better mixing
+    """
     conf = OmegaConf.merge(DEFAULT_TRAINER_CONFIG, conf)
 
     key = jr.key(conf.seed)
@@ -762,25 +363,19 @@ def train_xfads(model, data, *, conf):
         optax.scale_by_learning_rate(conf.learning_rate),
     )
 
-    with training_progress() as pbar:
-        task_id = pbar.add_task(
-            "Training", total=conf.max_epoch, loss=np.inf, mean=np.inf
-        )
-        model = gt.train(
-            model,
-            train_set,
-            valid_set,
-            key,
-            batch_loss,
-            dataloader,
-            conf.batch_size,
-            conf.max_epoch,
-            conf.patience,
-            optimizer,
-            data_sharding,
-            model_sharding,
-            epoch_callback=lambda x1, x2: jax.debug.callback(
-                lambda l1, l2: pbar.update(task_id, advance=1, loss=l1, mean=l2), x2, x2
-            ),
-        )
-        return model
+    model = gt.train(
+        model,
+        train_set,
+        valid_set,
+        key,
+        batch_loss,
+        dataloader,
+        conf.batch_size,
+        conf.max_epoch,
+        conf.patience,
+        optimizer,
+        data_sharding,
+        model_sharding,
+    )
+
+    return model
