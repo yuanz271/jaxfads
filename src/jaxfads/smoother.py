@@ -15,7 +15,6 @@ XFADS
 from collections.abc import Callable
 from functools import partial
 from pathlib import Path
-from typing import Self
 
 import equinox as eqx
 from jax import Array, vmap
@@ -103,9 +102,10 @@ class XFADS(ConfModule):
     >>>
     >>> natural, moment, prediction = model(t, y, u, c, key=key)
     """
-    forward: eqx.Module
-    # backward: eqx.Module | None
-    likelihood: eqx.Module
+
+    forward: Dynamics
+    # backward: Dynamics | None
+    likelihood: Likelihood
     alpha_encoder: eqx.Module
     beta_encoder: eqx.Module
     masker: DataMasker
@@ -221,7 +221,7 @@ class XFADS(ConfModule):
         return load_model(path, cls)
 
     @classmethod
-    def save(cls, model: Self, path: str | Path):
+    def save(cls, model, path: str | Path):
         """
         Save a trained XFADS model to disk.
 
@@ -252,9 +252,7 @@ class XFADS(ConfModule):
         Applies constraints to ensure parameters are in valid range
         for the chosen exponential family approximation.
         """
-        return self.approx.constrain_natural(
-            self.unconstrained_prior_natural
-        )
+        return self.approx.constrain_natural(self.unconstrained_prior_natural)
 
     def __call__(self, t, y, u, c, *, key) -> tuple[Array, Array, Array]:
         """
@@ -324,9 +322,7 @@ class XFADS(ConfModule):
         >>> natural, moment, pred = model(t, y_batch, u_batch, c_batch, key=key)
         """
         batch_alpha_encode: Callable = vmap(vmap(self.alpha_encoder))  # type: ignore
-        batch_constrain_natural: Callable = vmap(
-            vmap(self.approx.constrain_natural)
-        )
+        batch_constrain_natural: Callable = vmap(vmap(self.approx.constrain_natural))
         batch_beta_encode: Callable = vmap(self.beta_encoder)  # type: ignore
 
         match self.conf.mode:
