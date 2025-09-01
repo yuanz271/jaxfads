@@ -376,6 +376,7 @@ def train(model, data, *, conf):
         optimizer,
         data_sharding,
         model_sharding,
+        conf.min_epoch,
     )
 
     return model
