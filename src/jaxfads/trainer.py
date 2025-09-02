@@ -199,7 +199,26 @@ def batch_elbo(
 
 
 def batch_loss(model, batch, key):
-    """Compute negative ELBO loss for a batch of sequences."""
+    """
+    Compute negative ELBO loss for a batch of sequences.
+
+    Parameters
+    ----------
+    model : XFADS
+        Model providing `__call__` to produce posterior/prior moments and
+        configuration for loss terms.
+    batch : tuple[Array, Array, Array, Array]
+        Tuple `(times, observations, controls, covariates)` with shapes
+        matching the training data layout.
+    key : Array
+        JAX PRNGKey used for stochastic components.
+
+    Returns
+    -------
+    Array
+        Scalar loss equal to the mean negative ELBO over the batch, plus
+        optional regularization terms.
+    """
     times, observations, controls, covariates = batch
 
     key, model_key = jr.split(key)
@@ -222,17 +241,29 @@ def batch_loss(model, batch, key):
 
 def dataloader(arrays, batch_size, num_epochs, key, shuffle=True):
     """
-    Dataloader that yields batches with tracking information.
+    Yield mini-batches with epoch/batch counters.
 
-    Args:
-        arrays: Tuple of data arrays to iterate over
-        batch_size: Size of each batch
-        num_epochs: Number of epochs to run (nonnegative integer, negative values treated as 0)
-        key: JAX random key for shuffling
-        shuffle:
+    Parameters
+    ----------
+    arrays : tuple[Array, ...]
+        Data arrays with equal first dimension (dataset size).
+    batch_size : int
+        Number of samples per batch.
+    num_epochs : int
+        Number of epochs to iterate (negative treated as 0).
+    key : Array
+        JAX PRNGKey for shuffling.
+    shuffle : bool, default=True
+        Whether to shuffle indices each epoch.
 
-    Yields:
-        (batch_data, epoch_num, batch_in_epoch)
+    Yields
+    ------
+    batch : tuple[Array, ...]
+        Batch slices from each input array.
+    epoch : int
+        Zero-based epoch index.
+    batch_in_epoch : int
+        Zero-based batch index within the epoch.
     """
     # Treat negative num_epochs as 0
     num_epochs = max(0, num_epochs)

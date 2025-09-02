@@ -47,6 +47,7 @@ class Noise(Protocol):
     Defines the interface that all noise models must implement to be
     compatible with XFADS dynamics models.
     """
+
     def cov(self) -> Array:
         """
         Get the noise covariance matrix.
@@ -190,6 +191,7 @@ class DiagGaussian(eqx.Module, strict=True):
     positive values during optimization. The actual covariance is
     obtained via constrain_positive() transformation.
     """
+
     unconstrained_cov: Array
 
     def __init__(self, cov: Array, size: int):
@@ -234,6 +236,7 @@ class Dynamics(SubclassRegistryMixin, ConfModule):
 
     where f is implemented by the forward() method and ε_t ~ noise.
     """
+
     noise: eqx.AbstractVar[Noise]
 
     @abstractmethod

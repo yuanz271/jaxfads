@@ -35,7 +35,9 @@ MAX_LOGRATE = 7.0
 
 class Likelihood(SubclassRegistryMixin, ConfModule):
     @abstractmethod
-    def eloglik(self, key: Array, t: Array, moment: Array, y: Array, approx, mc_size: int) -> Array: ...
+    def eloglik(
+        self, key: Array, t: Array, moment: Array, y: Array, approx, mc_size: int
+    ) -> Array: ...
 
 
 class Poisson(Likelihood):
@@ -71,6 +73,7 @@ class Poisson(Likelihood):
     where C is the readout matrix, b_t are (optional) time-varying biases,
     and δ_t accounts for uncertainty propagation from the latent state.
     """
+
     readout: StationaryLinear | VariantBiasLinear
 
     def __init__(self, conf, key):
@@ -188,6 +191,7 @@ class DiagGaussian(Likelihood):
     where C is the readout matrix, b_t are (optional) time-varying biases,
     and σ²_i are observation noise variances.
     """
+
     unconstrained_cov: Array = eqx.field(static=False)
     readout: StationaryLinear | VariantBiasLinear
 

@@ -180,6 +180,7 @@ class WeightNorm(Module):
     Salimans, T., & Kingma, D. P. (2016). Weight normalization: A simple
     reparameterization to accelerate training of deep neural networks.
     """
+
     layer: enn.Linear
     weight_name: str = eqx.field(static=True)
     axis: int | None = eqx.field(static=True)
@@ -298,6 +299,7 @@ class StationaryLinear(Module):
     layer : enn.Linear or WeightNorm
         The underlying linear transformation layer.
     """
+
     layer: enn.Linear | WeightNorm
 
     def __init__(self, state_dim, observation_dim, *, key, norm_readout: bool = False):
@@ -379,6 +381,7 @@ class VariantBiasLinear(Module):
     layer : enn.Linear or WeightNorm
         The underlying linear transformation layer (without bias).
     """
+
     biases: Array
     layer: enn.Linear | WeightNorm
 
@@ -438,6 +441,14 @@ class VariantBiasLinear(Module):
 
     @property
     def weight(self) -> Array:
+        """
+        Readout weight matrix.
+
+        Returns
+        -------
+        Array
+            Underlying linear layer weight of shape (observation_dim, state_dim).
+        """
         return self.layer.weight
 
     def set_static(self, static=True) -> None:
@@ -508,6 +519,7 @@ class RBFN(Module):
     readout : Module
         Linear layer for combining RBF outputs.
     """
+
     centers: Array = eqx.field(static=True)
     scale: Array
     readout: Module
@@ -582,6 +594,7 @@ class DataMasker(eqx.Module, strict=True):
     inference : bool
         Inference mode flag.
     """
+
     p: float
     inference: bool
 

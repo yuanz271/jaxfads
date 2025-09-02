@@ -41,6 +41,7 @@ class Mode(StrEnum):
     BIFILTER : str
         Bidirectional filtering mode for improved smoothing.
     """
+
     PSEUDO = auto()
     BIFILTER = auto()
 

@@ -274,6 +274,7 @@ class FullMVN(Approx):
     Parameter layout: [mean_vec, cov_matrix_flattened]
     Total parameters: D + D²
     """
+
     @classmethod
     def natural_to_moment(cls, natural: Array) -> Array:
         """
@@ -448,6 +449,7 @@ class DiagMVN(Approx):
     Parameter layout: [mean_vec, diag_cov_vec]
     Total parameters: 2D
     """
+
     @classmethod
     def natural_to_moment(cls, natural) -> Array:
         nat1, nat2 = jnp.split(natural, 2)

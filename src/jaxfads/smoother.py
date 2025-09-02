@@ -236,6 +236,14 @@ class XFADS(ConfModule):
 
     @property
     def approx(self):
+        """
+        Exponential-family approximation class.
+
+        Returns
+        -------
+        type[Approx]
+            The approximation type selected by configuration (e.g., `DiagMVN`).
+        """
         return Approx.get_subclass(self.conf.approx)
 
     def prior_natural(self) -> Array:
