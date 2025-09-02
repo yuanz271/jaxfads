@@ -68,6 +68,7 @@ class AlphaEncoder(ConfModule):
     exponential family approximation (e.g., 2D for diagonal MVN,
     D+D² for full covariance MVN).
     """
+
     layer: Callable
 
     def __init__(self, conf: DictConfig, key: Array):
@@ -156,6 +157,7 @@ class BetaEncoder(ConfModule):
     This architecture is inspired by bidirectional RNNs but operates
     on parameter space rather than raw observations.
     """
+
     h0: Array
     cell: Callable
     output: Callable

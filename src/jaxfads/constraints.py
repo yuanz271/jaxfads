@@ -7,18 +7,19 @@ MAX_EXP = 5.0
 EPS = jnp.finfo(jnp.float32).eps
 
 
-def constrain_positive(x):
+def constrain_positive(x: Array) -> Array:
     """
     Constrain values to be positive using square transformation.
 
     Parameters
     ----------
-    x
+    x : Array
         Input values to constrain.
 
     Returns
     -------
-    Positive values computed as x^2 + eps for numerical stability.
+    Array
+        Positive values computed as x^2 + eps for numerical stability.
 
     Notes
     -----
@@ -36,18 +37,19 @@ def constrain_positive(x):
     return jnp.square(x) + EPS
 
 
-def unconstrain_positive(x):
+def unconstrain_positive(x: Array) -> Array:
     """
     Unconstrain positive values using square root transformation.
 
     Parameters
     ----------
-    x
+    x : Array
         Positive input values to unconstrain.
 
     Returns
     -------
-    Unconstrained values computed as sqrt(x).
+    Array
+        Unconstrained values computed as sqrt(x).
 
     Notes
     -----
@@ -110,6 +112,7 @@ class AbstractConstraint(eqx.Module):
     __call__(unconstrained)
         Convenience method that calls constrain().
     """
+
     def constrain(self, unconstrained: Array) -> Array: ...
 
     def unconstrain(self, constrained: Array) -> Array: ...
@@ -138,6 +141,7 @@ class Positivity(AbstractConstraint):
     making it suitable for gradient-based optimization while ensuring
     all outputs are strictly positive.
     """
+
     def constrain(self, unconstrained: Array) -> Array:
         return jax.nn.softplus(unconstrained)
 

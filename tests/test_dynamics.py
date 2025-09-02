@@ -68,7 +68,7 @@ def test_predict_moment(spec):
         ),
         key=key,
     )
-    noise = DiagGaussian(jnp.array(1.), state_dim)
+    noise = DiagGaussian(jnp.array(1.0), state_dim)
 
     z = jrnd.normal(key, (state_dim,))
     u = jrnd.normal(key, (input_dim,))
@@ -96,7 +96,7 @@ def test_sample_expected_moment(spec):
         ),
         key=key,
     )
-    noise = DiagGaussian(jnp.array(1.), state_dim)
+    noise = DiagGaussian(jnp.array(1.0), state_dim)
 
     z = jrnd.normal(key, (state_dim,))
     u = jrnd.normal(key, (input_dim,))

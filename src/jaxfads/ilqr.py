@@ -6,8 +6,26 @@ from jax import numpy as jnp
 from jax.scipy.linalg import cho_factor, cho_solve
 
 
-# Forward simulation of a trajectory given an initial state and control sequence
 def rollout(x0, u, c, f):
+    """
+    Roll out a trajectory under given controls and dynamics.
+
+    Parameters
+    ----------
+    x0 : Array, shape (D_x,)
+        Initial state.
+    u : Array, shape (T, D_u)
+        Control sequence.
+    c : Array, shape (T, D_c)
+        Covariate sequence.
+    f : callable
+        Dynamics function mapping `(x_t, u_t, c_t) -> x_{t+1}`.
+
+    Returns
+    -------
+    Array, shape (T, D_x)
+        State trajectory excluding the final x_{T+1}.
+    """
     def step(x_t, inputs):
         u_t, c_t = inputs
         x_tp1 = f(x_t, u_t, c_t)
@@ -18,8 +36,28 @@ def rollout(x0, u, c, f):
     return x
 
 
-# Quadratic cost function, comparing state and control to a target trajectory
 def cost_function(x, u, target, Q, R):
+    """
+    Quadratic trajectory cost relative to a target.
+
+    Parameters
+    ----------
+    x : Array, shape (T, D_x)
+        State trajectory.
+    u : Array, shape (T, D_u)
+        Control trajectory.
+    target : Array, shape (T, D_x)
+        Target state trajectory.
+    Q : Array, shape (D_x, D_x)
+        State cost matrix (PD).
+    R : Array, shape (D_u, D_u)
+        Control cost matrix (PD).
+
+    Returns
+    -------
+    Array
+        Scalar total cost 0.5 * sum_t(||x_t - target_t||_Q^2 + ||u_t||_R^2).
+    """
     Qcho = jnp.linalg.cholesky(Q, upper=True)
     Rcho = jnp.linalg.cholesky(R, upper=True)
 
@@ -47,6 +85,43 @@ def backward_pass(
     min_damping=1e-6,
     max_damping=1e6,
 ):
+    """
+    Compute iLQR gains via a backward dynamic programming pass.
+
+    Parameters
+    ----------
+    x : Array, shape (T, D_x)
+        Current state rollout.
+    u : Array, shape (T, D_u)
+        Current control rollout.
+    c : Array, shape (T, D_c)
+        Covariates.
+    target : Array, shape (T, D_x)
+        Target states.
+    Q : Array, shape (D_x, D_x)
+        State cost matrix.
+    R : Array, shape (D_u, D_u)
+        Control cost matrix.
+    Df : callable
+        Linearization function returning `(F_x, F_u)` at `(x_t, u_t, c_t)`.
+    initial_damping : float, default=1e-3
+        Initial Levenberg–Marquardt damping.
+    damping_inc : float, default=2.0
+        Multiplicative increase factor when damping is insufficient.
+    damping_dec : float, default=0.5
+        Multiplicative decrease factor after a successful step.
+    min_damping : float, default=1e-6
+        Lower bound on damping.
+    max_damping : float, default=1e6
+        Upper bound on damping.
+
+    Returns
+    -------
+    k : Array, shape (T, D_u)
+        Feedforward control gains.
+    K : Array, shape (T, D_u, D_x)
+        Feedback control gains.
+    """
     x_size = jnp.size(x, -1)  # state dimension
     u_size = jnp.size(u, -1)  # control dimension
     eye_u = jnp.eye(u_size)
@@ -130,6 +205,41 @@ def backward_pass(
 
 
 def line_search(alpha, k, K, x_optimal, u_optimal, c, target, Q, R, f):
+    """
+    Perform line search over step size to update controls.
+
+    Parameters
+    ----------
+    alpha : float
+        Step-size scalar in [0, 1].
+    k : Array, shape (T, D_u)
+        Feedforward gains.
+    K : Array, shape (T, D_u, D_x)
+        Feedback gains.
+    x_optimal : Array, shape (T, D_x)
+        Current best trajectory.
+    u_optimal : Array, shape (T, D_u)
+        Current best controls.
+    c : Array, shape (T, D_c)
+        Covariates.
+    target : Array, shape (T, D_x)
+        Target trajectory.
+    Q : Array, shape (D_x, D_x)
+        State cost matrix.
+    R : Array, shape (D_u, D_u)
+        Control cost matrix.
+    f : callable
+        Dynamics function.
+
+    Returns
+    -------
+    new_cost : Array
+        Scalar cost after applying the step.
+    x_new : Array, shape (T, D_x)
+        New state trajectory.
+    u_new : Array, shape (T, D_u)
+        New control trajectory.
+    """
     def step(carry, inputs):
         x_t = carry
         k_t, K_t, x_opt, u_opt, c_t = inputs
@@ -149,16 +259,83 @@ def line_search(alpha, k, K, x_optimal, u_optimal, c, target, Q, R, f):
 
 
 def arg_first_less_than(array, value):
+    """
+    Return index of first element less than a value or -1 if none.
+
+    Parameters
+    ----------
+    array : Array, shape (N,)
+        Input array.
+    value : float
+        Comparison threshold.
+
+    Returns
+    -------
+    int
+        Index of first element < value, or -1 if none.
+    """
     arr = array < value
     return lax.cond(jnp.any(arr), jnp.argmax, lambda _: -1, arr)
 
 
 def arg_smallest_less_than(array, value):
+    """
+    Return index of smallest element less than a value or -1 if none.
+
+    Parameters
+    ----------
+    array : Array, shape (N,)
+        Input array.
+    value : float
+        Comparison threshold.
+
+    Returns
+    -------
+    int
+        Index of smallest element < value, or -1 if none.
+    """
     arr = array < value
     return lax.cond(jnp.any(arr), jnp.argmin, lambda _: -1, array)
 
 
 def ilqr(x0, u, c, target, Q, R, f, Df, max_iter=100, tol=1e-6, verbose=False):
+    """
+    Iterative Linear-Quadratic Regulator (iLQR) optimization.
+
+    Parameters
+    ----------
+    x0 : Array, shape (D_x,)
+        Initial state.
+    u : Array, shape (T, D_u)
+        Initial control sequence.
+    c : Array, shape (T, D_c)
+        Covariate sequence.
+    target : Array, shape (T, D_x)
+        Target state trajectory.
+    Q : Array, shape (D_x, D_x)
+        State cost matrix (PD).
+    R : Array, shape (D_u, D_u)
+        Control cost matrix (PD).
+    f : callable
+        Dynamics function mapping `(x_t, u_t, c_t) -> x_{t+1}`.
+    Df : callable
+        Linearization function returning `(F_x, F_u)` at `(x_t, u_t, c_t)`.
+    max_iter : int, default=100
+        Maximum number of optimization iterations.
+    tol : float, default=1e-6
+        Convergence tolerance on cost improvement.
+    verbose : bool, default=False
+        Whether to print iteration logs via `jax.debug.print`.
+
+    Returns
+    -------
+    u_optimal : Array, shape (T, D_u)
+        Optimized control sequence.
+    x_optimal : Array, shape (T, D_x)
+        Corresponding state trajectory.
+    success : bool
+        Whether a successful line search step occurred in the last iteration.
+    """
     # alphas = jnp.logspace(0, 15, num=50, base=0.5)
     alphas = 1 / jnp.geomspace(1, 1e5, num=50)
 
