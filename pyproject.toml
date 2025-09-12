@@ -17,8 +17,9 @@ classifiers = [
 dependencies = [
     "optax>=0.1.7",
     "numpy>=1.24.4",
-    "jax>=0.4.38",
-    "equinox>=0.11.11",
+    "jax<0.7.0",
+    "equinox>=0.11.12",
+    "omegaconf>=2.3.0",
     "rich>=14.0.0",
     "gearax",
     "tfp-nightly[jax]>=0.25",
@@ -42,7 +43,10 @@ target-version = "py311"
 lint.ignore = ["E501", "F722"]
 
 [tool.uv.sources]
-gearax = { path = "gearax", editable = true }
+gearax = { workspace = true, editable = true }
+
+[tool.uv.workspace]
+members = ["gearax"]
 
 [dependency-groups]
 dev = [
