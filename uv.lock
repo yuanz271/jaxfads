@@ -7,6 +7,12 @@ resolution-markers = [
     "python_full_version < '3.12'",
 ]
 
+[manifest]
+members = [
+    "gearax",
+    "jaxfads",
+]
+
 [[package]]
 name = "absl-py"
 version = "2.3.1"
@@ -264,10 +270,15 @@ dependencies = [
     { name = "rich" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "equinox", specifier = ">=0.11.12" },
-    { name = "jax", specifier = ">=0.4.38" },
+    { name = "jax", specifier = "<0.7.0" },
     { name = "omegaconf", specifier = ">=2.3.0" },
     { name = "rich", specifier = ">=14.0.0" },
 ]
@@ -327,7 +338,7 @@ dev = [
 requires-dist = [
     { name = "equinox", specifier = ">=0.11.12" },
     { name = "gearax", editable = "gearax" },
-    { name = "jax", specifier = ">=0.4.38" },
+    { name = "jax", specifier = "<0.7.0" },
     { name = "numpy", specifier = ">=1.24.4" },
     { name = "omegaconf", specifier = ">=2.3.0" },
     { name = "optax", specifier = ">=0.1.7" },
