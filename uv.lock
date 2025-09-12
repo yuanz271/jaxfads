@@ -13,6 +13,12 @@ members = [
     "jaxfads",
 ]
 
+[manifest]
+members = [
+    "gearax",
+    "jaxfads",
+]
+
 [[package]]
 name = "absl-py"
 version = "2.3.1"
@@ -268,6 +274,11 @@ dependencies = [
     { name = "jax" },
     { name = "omegaconf" },
     { name = "rich" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
 ]
 
 [package.dev-dependencies]
