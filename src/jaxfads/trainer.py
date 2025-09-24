@@ -8,16 +8,16 @@ maximizing the Evidence Lower Bound (ELBO) objective.
 
 Functions
 ---------
-training_progress
-    Create a Rich progress bar for training visualization.
 train_test_split
     Split arrays into training and test sets with random permutation.
-to_shard
-    Place arrays on specified devices with optional sharding.
+dataloader
+    Yield mini-batches with epoch and batch counters.
+compute_patience
+    Compute early-stopping patience in epochs from total steps.
 batch_elbo
     Compute Evidence Lower Bound (ELBO) for batched sequences.
-train_fast
-    Fast training routine for XFADS models with multi-device support.
+batch_loss
+    Compute mean negative ELBO (and regularization) for a batch.
 train
     Training routine for XFADS models with multi-device support.
 
@@ -27,7 +27,6 @@ DEFAULT_TRAINER_CONFIG : DictConfig
     Default training configuration for XFADS models with comprehensive
     hyperparameter settings including optimization, regularization, and
     early stopping parameters.
-
 """
 
 from functools import partial
@@ -44,46 +43,7 @@ from gearax import trainer as gt
 
 from . import vi
 
-
-# Default configuration as DictConfig
-"""
-Configuration dataclass for XFADS training hyperparameters.
-
-Parameters
-----------
-min_iter : int, default=50
-    Minimum number of training iterations before early stopping.
-max_iter : int, default=50
-    Maximum number of training iterations.
-learning_rate : float, default=1e-3
-    Learning rate for the optimizer.
-clip_norm : float, default=5.0
-    Maximum gradient norm for gradient clipping.
-batch_size : int, default=1
-    Batch size for training (will be adjusted for multi-device).
-weight_decay : float, default=1e-3
-    L2 regularization coefficient.
-beta : float, default=0.95
-    Exponential moving average coefficient for loss smoothing.
-seed : int, default=0
-    Random seed for reproducibility.
-noise_eta : float, default=0.5
-    Noise scale parameter for gradient noise injection.
-noise_gamma : float, default=0.8
-    Noise decay parameter for gradient noise injection.
-valid_ratio : float, default=0.2
-    Fraction of data to use for validation.
-validation_size : int, default=80
-    Fixed validation set size (overrides valid_ratio if specified).
-
-Notes
------
-The configuration supports various regularization techniques:
-- Gradient clipping for training stability
-- Weight decay for parameter regularization
-- Gradient noise injection for better generalization
-- Validation-based early stopping
-"""
+# Default configuration for XFADS training hyperparameters.
 DEFAULT_TRAINER_CONFIG = DictConfig(
     {
         "min_iter": 0,
@@ -295,6 +255,25 @@ def dataloader(arrays, batch_size, num_epochs, key, shuffle=True):
 
 
 def compute_patience(max_epoch, data_size, batch_size, scale=0.1):
+    """
+    Compute early-stopping patience (in epochs) from total training steps.
+
+    Parameters
+    ----------
+    max_epoch : int
+        Maximum number of epochs configured for training.
+    data_size : int
+        Number of samples in the dataset.
+    batch_size : int
+        Mini-batch size.
+    scale : float, default=0.1
+        Fraction of total training steps used as patience.
+
+    Returns
+    -------
+    int
+        Patience measured in epochs (at least 1 epoch).
+    """
     n_batches = data_size // batch_size
     total_steps = max_epoch * n_batches
     patience_steps = int(total_steps * scale)
