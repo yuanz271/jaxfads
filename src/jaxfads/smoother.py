@@ -50,7 +50,7 @@ class XFADS(ConfModule):
         - approx: Exponential family approximation type
         - forward: Forward dynamics model type
         - observation: Observation model type
-        - mode: Inference mode ('pseudo' or 'bifilter')
+        - mode: Inference mode ('pseudo', 'bifilter' not tested)
 
     Attributes
     ----------

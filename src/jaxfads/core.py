@@ -37,9 +37,9 @@ class Mode(StrEnum):
     Attributes
     ----------
     PSEUDO : str
-        Pseudo-observation mode using forward filtering only.
+        Pseudo-observation mode using forward filtering.
     BIFILTER : str
-        Bidirectional filtering mode for improved smoothing.
+        Bidirectional filtering mode (not tested).
     """
 
     PSEUDO = auto()
