@@ -68,6 +68,3 @@ def test_lowrankcov(capsys):
     cov_lr = jnp.ones((2, 1))
 
     mvn = tfp.MultivariateNormalDiagPlusLowRankCovariance(loc, cov_diag, cov_lr)
-
-    with capsys.disabled():
-        print(mvn.covariance())
