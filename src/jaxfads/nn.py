@@ -623,7 +623,7 @@ class DataMasker(eqx.Module, strict=True):
         *,
         key: Array | None = None,
         inference: bool | None = None,
-    ) -> tuple[Array | None, Array]:
+    ) -> Array:
         """
         Apply data masking to input array.
 
@@ -640,8 +640,6 @@ class DataMasker(eqx.Module, strict=True):
 
         Returns
         -------
-        key : Array or None
-            Updated PRNGKey (if provided) or None.
         mask : Array
             Binary mask array of shape (batch, time, 1) that can be
             broadcast with the input. In inference mode, returns all ones.
@@ -665,13 +663,12 @@ class DataMasker(eqx.Module, strict=True):
 
         shape = x.shape[:2] + (1,)  # broadcast to the last dimension
         if inference:
-            return key, jnp.ones(shape)
+            return jnp.ones(shape)
         elif key is None:
             raise RuntimeError(
                 f"{DataMasker.__name__} requires a key when running in non-deterministic mode."
             )
         else:
-            key, subkey = jrnd.split(key)
             q = 1 - jax.lax.stop_gradient(self.p)
             mask = jrnd.bernoulli(key, q, shape)  # type: ignore
-            return subkey, mask
+            return mask
