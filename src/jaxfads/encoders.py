@@ -182,7 +182,9 @@ class BetaEncoder(ConfModule):
         if conf.dropout is not None:
             self.dropout = eqx.nn.Dropout(conf.dropout)
 
-    def __call__(self, a: Array, *, key: Array) -> Array:
+    def __call__(
+        self, a: Array, *, key=None
+    ) -> Array:  # NOTE: for functions with optional key, key should be keyword-only argument; for function with required key, key should be the first non-differentiable positional argument.
         """
         Encode temporal dependencies from alpha updates.
 
@@ -190,7 +192,7 @@ class BetaEncoder(ConfModule):
         ----------
         a : Array, shape (T, param_dim)
             Sequence of alpha updates (natural parameter updates from observations).
-        key : Array
+        key : Array, optional
             Random key for dropout during training.
 
         Returns
