@@ -29,6 +29,7 @@ from .distributions import Approx
 from .dynamics import Dynamics
 from .nn import DataMasker
 from .observations import Likelihood
+from .util import vmap_with_key
 
 
 class XFADS(ConfModule):
@@ -329,15 +330,15 @@ class XFADS(ConfModule):
         >>>
         >>> natural, moment, pred = model(t, y_batch, u_batch, c_batch, key=key)
         """
-        batch_alpha_encode: Callable = vmap(vmap(self.alpha_encoder))  # type: ignore
-        batch_constrain_natural: Callable = vmap(vmap(self.approx.constrain_natural))
-        batch_beta_encode: Callable = vmap(self.beta_encoder)  # type: ignore
+        batch_constrain_natural = vmap(vmap(self.approx.constrain_natural))
+        batch_alpha_encode = vmap_with_key(vmap_with_key(self.alpha_encoder))
+        batch_beta_encode = vmap_with_key(self.beta_encoder)
 
         match self.conf.mode:
             case Mode.BIFILTER:
                 raise NotImplementedError("BIFILTER mode is not implemented.")
             case _:
-                batch_smooth = vmap(partial(core.filter, self))
+                smooth_batch = vmap(partial(core.filter, self))
 
                 def batch_encode(y: Array, key) -> Array:
                     # handling missing values
@@ -347,29 +348,31 @@ class XFADS(ConfModule):
                     # chex.assert_equal_shape((y, mask_y), dims=(0, 1))
                     y = jnp.where(mask_y, y, 0)
 
-                    key, ky = jrnd.split(key)
-                    a = batch_constrain_natural(
-                        batch_alpha_encode(y, key=jrnd.split(ky, y.shape[:2]))
-                    )
+                    key, alpha_key = jrnd.split(key)
+                    a = batch_constrain_natural(batch_alpha_encode(y, key=alpha_key))
                     a = jnp.where(mask_y, a, 0)  # miss_values have no updates to state
 
-                    key, mask_a = self.masker(y, key=key)
+                    key, mask_key = jrnd.split(key)
+                    mask_a = self.masker(y, key=mask_key)
                     a = jnp.where(mask_a, a, 0)  # type: ignore # pseudo missing values
 
+                    key, beta_key = jrnd.split(key)
                     b = batch_constrain_natural(
-                        batch_beta_encode(a, key=jrnd.split(key, a.shape[0]))  # type: ignore
+                        batch_beta_encode(a, key=beta_key)  # type: ignore
                     )
-                    key, mask_b = self.masker(y, key=key)
+
+                    key, mask_key = jrnd.split(key)
+                    mask_b = self.masker(y, key=mask_key)
                     b = jnp.where(mask_b, b, 0)  # filter only steps
 
-                    ab = a + b
+                    a_plus_b = a + b
 
                     # key, mask_ab = self.masker(y, key=key)
                     # ab = jnp.where(mask_ab, ab, 0)
 
-                    return ab
+                    return a_plus_b
 
-        key, ky = jrnd.split(key)
-        alpha = batch_encode(y, ky)
+        key, encode_key = jrnd.split(key)
+        alpha = batch_encode(y, encode_key)
 
-        return batch_smooth(jrnd.split(key, len(t)), t, alpha, u, c)
+        return smooth_batch(jrnd.split(key, jnp.size(t, 0)), t, alpha, u, c)
