@@ -12,6 +12,7 @@ XFADS
     Main class for Bayesian state-space modeling with variational inference.
 """
 
+from collections.abc import Callable
 from functools import partial
 from pathlib import Path
 
@@ -105,8 +106,8 @@ class XFADS(ConfModule):
     forward: Dynamics
     # backward: Dynamics | None
     likelihood: Likelihood
-    alpha_encoder: eqx.Module
-    beta_encoder: eqx.Module
+    alpha_encoder: Callable
+    beta_encoder: Callable
     masker: DataMasker
     unconstrained_prior_natural: Array
 
