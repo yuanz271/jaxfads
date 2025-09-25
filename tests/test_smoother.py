@@ -2,8 +2,8 @@ from typing import override
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from jax import Array, random as jrnd
-from omegaconf import OmegaConf
+from jax import Array, random as jr
+from omegaconf import OmegaConf, DictConfig
 import equinox as eqx
 from jaxfads.dynamics import Dynamics, Noise
 from jaxfads.smoother import XFADS
@@ -13,17 +13,16 @@ class Mock(Dynamics):
     noise: Noise | None
     layer: eqx.Module | None
 
-    def __init__(self, conf, key):
+    def __init__(self, conf: DictConfig, key: Array):
         self.conf = conf
         self.noise = None  # type: ignore
         self.layer = None
 
     @override
-    def forward(self, z, u, c, *, key=None) -> Array:
+    def forward(
+        self, z: Array, u: Array, c: Array, *, key: Array | None = None
+    ) -> Array:
         return z
-
-    def loss(self):
-        return 0.0
 
 
 def test_constructor():
@@ -90,7 +89,7 @@ def test_constructor():
         )
     )
 
-    model = XFADS(model_conf, jrnd.key(seed))
+    model = XFADS(model_conf, jr.key(seed))
 
     with TemporaryDirectory() as tmp_dir:
         path = Path(tmp_dir) / "model.zip"

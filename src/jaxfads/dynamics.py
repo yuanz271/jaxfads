@@ -31,7 +31,7 @@ import equinox as eqx
 import jax
 from jax import Array
 from jax import numpy as jnp
-from jax import random as jrnd
+from jax import random as jr
 
 from gearax.mixin import SubclassRegistryMixin
 from gearax.modules import ConfModule
@@ -61,7 +61,14 @@ class Noise(Protocol):
 
 
 def predict_moment(
-    z: Array, u: Array, c: Array, f, noise: Noise, approx: type[Approx], *, key=None
+    z: Array,
+    u: Array,
+    c: Array,
+    f: Callable[..., Array],
+    noise: Noise,
+    approx: type[Approx],
+    *,
+    key: Array | None = None,
 ) -> Array:
     """
     Predict moment parameters for next state given current state.
@@ -109,7 +116,7 @@ def sample_expected_moment(
     moment: Array,
     u: Array,
     c: Array,
-    f: Callable,
+    f: Callable[..., Array],
     noise: Noise,
     approx: type[Approx],
     mc_size: int,
@@ -153,7 +160,7 @@ def sample_expected_moment(
 
     where z_t^{(k)} ~ p(z_t) are samples from the current state distribution.
     """
-    key, subkey = jrnd.split(key)
+    key, subkey = jr.split(key)
     z = approx.sample_by_moment(subkey, moment, mc_size)
     u = jnp.broadcast_to(u, shape=(mc_size,) + u.shape)
     c = jnp.broadcast_to(c, shape=(mc_size,) + c.shape)
@@ -194,7 +201,7 @@ class DiagGaussian(eqx.Module, strict=True):
 
     unconstrained_cov: Array
 
-    def __init__(self, cov: Array, size: int):
+    def __init__(self, cov: Array, size: int):  # pyright: ignore[reportMissingSuperCall]
         self.unconstrained_cov = jnp.full(size, fill_value=unconstrain_positive(cov))
 
     def cov(self) -> Array:
@@ -216,7 +223,7 @@ class DiagGaussian(eqx.Module, strict=True):
     #     self.__dataclass_fields__['unconstrained_cov'].metadata = {'static': static}
 
 
-class Dynamics(SubclassRegistryMixin, ConfModule):
+class Dynamics(SubclassRegistryMixin, ConfModule):  # pyright: ignore[reportImplicitAbstractClass]
     """
     Abstract base class for dynamics models in XFADS.
 
@@ -297,7 +304,6 @@ class Dynamics(SubclassRegistryMixin, ConfModule):
 
         Returns
         -------
-        ArrayLike
             Regularization loss (default: 0.0).
 
         Notes

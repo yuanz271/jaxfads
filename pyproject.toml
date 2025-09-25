@@ -25,15 +25,23 @@ dependencies = [
     "jax>=0.4.38,<0.7.0",
 ]
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/jaxfads"]
-
-[project.urls]
-Repository = "https://github.com/yuanz271/jaxfads"
+[dependency-groups]
+dev = [
+    "chex>=0.1.90",
+    "matplotlib>=3.10.1",
+    "pytest>=8.3.4",
+    "ruff>=0.9.4",
+]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[project.urls]
+Repository = "https://github.com/yuanz271/jaxfads"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/jaxfads"]
 
 [tool.hatch.metadata]
 allow-direct-references = true
@@ -47,11 +55,3 @@ gearax = { workspace = true, editable = true }
 
 [tool.uv.workspace]
 members = ["gearax"]
-
-[dependency-groups]
-dev = [
-    "chex>=0.1.90",
-    "matplotlib>=3.10.1",
-    "pytest>=8.3.4",
-    "ruff>=0.9.4",
-]
