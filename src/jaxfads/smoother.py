@@ -12,7 +12,6 @@ XFADS
     Main class for Bayesian state-space modeling with variational inference.
 """
 
-from collections.abc import Callable
 from functools import partial
 from pathlib import Path
 
@@ -20,7 +19,6 @@ import equinox as eqx
 from jax import Array, vmap
 from jax import numpy as jnp
 from jax import random as jrnd
-
 from gearax.modules import ConfModule, load_model, save_model
 
 from . import core, encoders
@@ -139,7 +137,7 @@ class XFADS(ConfModule):
 
         key = jrnd.key(seed)
 
-        self.masker: DataMasker = DataMasker(dropout)
+        self.masker = DataMasker(dropout)
 
         key, ky = jrnd.split(key)
         self.forward = Dynamics.get_subclass(forward)(

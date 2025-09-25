@@ -16,7 +16,7 @@ from jaxfads.dynamics import Noise
 
 class Nonlinear(Dynamics):
     noise: Noise
-    f: Callable
+    f: Callable[..., Array]
 
     def __init__(
         self,

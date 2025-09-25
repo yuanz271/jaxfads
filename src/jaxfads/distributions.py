@@ -71,7 +71,7 @@ class Approx(SubclassRegistryMixin, ABC):
 
     @classmethod
     @abstractmethod
-    def natural_to_moment(cls, natural) -> Array:
+    def natural_to_moment(cls, natural: Array) -> Array:
         """
         Convert natural parameters to moment parameters.
 
@@ -94,7 +94,7 @@ class Approx(SubclassRegistryMixin, ABC):
 
     @classmethod
     @abstractmethod
-    def moment_to_natural(cls, moment) -> Array:
+    def moment_to_natural(cls, moment: Array) -> Array:
         """
         Convert moment parameters to natural parameters.
 
@@ -118,7 +118,7 @@ class Approx(SubclassRegistryMixin, ABC):
 
     @classmethod
     @abstractmethod
-    def sample_by_moment(cls, key, moment, mc_size) -> Array:
+    def sample_by_moment(cls, key: Array, moment: Array, mc_size: int) -> Array:
         """
         Generate samples from the distribution using moment parameters.
 
@@ -145,7 +145,7 @@ class Approx(SubclassRegistryMixin, ABC):
 
     @classmethod
     @abstractmethod
-    def param_size(cls, state_dim) -> int:
+    def param_size(cls, state_dim: int) -> int:
         """
         Get the total parameter size for given state dimension.
 
@@ -163,7 +163,7 @@ class Approx(SubclassRegistryMixin, ABC):
 
     @classmethod
     @abstractmethod
-    def kl(cls, moment1, moment2) -> Array:
+    def kl(cls, moment1: Array, moment2: Array) -> Array:
         """
         Compute KL divergence between two distributions.
 
@@ -254,11 +254,11 @@ class Approx(SubclassRegistryMixin, ABC):
 
     @classmethod
     @abstractmethod
-    def noise_moment(cls, noise_cov) -> Array: ...
+    def noise_moment(cls, noise_cov: Array) -> Array: ...
 
     @classmethod
     @abstractmethod
-    def prior_natural(cls, state_dim) -> Array: ...
+    def prior_natural(cls, state_dim: int) -> Array: ...
 
 
 class FullMVN(Approx):
@@ -379,7 +379,7 @@ class FullMVN(Approx):
         return state_dim + state_dim * state_dim
 
     @classmethod
-    def prior_natural(cls, state_dim) -> Array:
+    def prior_natural(cls, state_dim: int) -> Array:
         moment = cls.canon_to_moment(jnp.zeros(state_dim), jnp.eye(state_dim))
         return cls.moment_to_natural(moment)
 
@@ -451,21 +451,23 @@ class DiagMVN(Approx):
     """
 
     @classmethod
-    def natural_to_moment(cls, natural) -> Array:
+    def natural_to_moment(cls, natural: Array) -> Array:
         nat1, nat2 = jnp.split(natural, 2)
         cov = -0.5 / nat2
         mean = -0.5 * nat1 / nat2
         return jnp.concatenate((mean, cov))
 
     @classmethod
-    def moment_to_natural(cls, moment) -> Array:
+    def moment_to_natural(cls, moment: Array) -> Array:
         mean, cov = cls.moment_to_canon(moment)
         nat2 = -0.5 / cov
         nat1 = mean / cov
         return jnp.concatenate((nat1, nat2))
 
     @classmethod
-    def sample_by_moment(cls, key, moment, mc_size=None) -> Array:
+    def sample_by_moment(
+        cls, key: Array, moment: Array, mc_size: int | None = None
+    ) -> Array:
         mean, cov = cls.moment_to_canon(moment)
         shape = None if mc_size is None else (mc_size,)
         return jrnd.multivariate_normal(
@@ -473,14 +475,14 @@ class DiagMVN(Approx):
         )  # It seems JAX does the reparameterization trick
 
     @classmethod
-    def moment_to_canon(cls, moment) -> tuple:
+    def moment_to_canon(cls, moment: Array) -> tuple[Array, Array]:
         mean, cov = jnp.split(
             moment, 2, -1
         )  # trick: the 2nd moment here is actually cov diag
         return mean, cov
 
     @classmethod
-    def canon_to_moment(cls, mean, cov) -> Array:
+    def canon_to_moment(cls, mean: Array, cov: Array) -> Array:
         moment = jnp.concatenate((mean, cov))
         return moment
 
@@ -493,7 +495,7 @@ class DiagMVN(Approx):
         return param_size // 2
 
     @classmethod
-    def kl(cls, moment1, moment2) -> Array:
+    def kl(cls, moment1: Array, moment2: Array) -> Array:
         m1, cov1 = cls.moment_to_canon(moment1)
         m2, cov2 = cls.moment_to_canon(moment2)
         return tfd.kl_divergence(
@@ -503,11 +505,11 @@ class DiagMVN(Approx):
         )
 
     @classmethod
-    def param_size(cls, state_dim) -> int:
+    def param_size(cls, state_dim: int) -> int:
         return 2 * state_dim
 
     @classmethod
-    def prior_natural(cls, state_dim) -> Array:
+    def prior_natural(cls, state_dim: int) -> Array:
         """Return standard normal in natural parameter form"""
         moment = cls.canon_to_moment(jnp.zeros(state_dim), jnp.ones(state_dim))
         return cls.moment_to_natural(moment)
@@ -517,23 +519,23 @@ class DiagMVN(Approx):
         return jnp.diag(cov)
 
     @classmethod
-    def constrain_moment(cls, unconstrained) -> Array:
+    def constrain_moment(cls, unconstrained: Array) -> Array:
         loc, v = jnp.split(unconstrained, 2)
         v = constrain_positive(v)
         return jnp.concatenate((loc, v))
 
     @classmethod
-    def constrain_natural(cls, unconstrained) -> Array:
+    def constrain_natural(cls, unconstrained: Array) -> Array:
         n1, n2 = jnp.split(unconstrained, 2)
         n2 = -constrain_positive(n2)
         return jnp.concatenate((n1, n2))
 
     @classmethod
-    def unconstrain_natural(cls, natural) -> Array:
+    def unconstrain_natural(cls, natural: Array) -> Array:
         n1, n2 = jnp.split(natural, 2)
         n2 = unconstrain_positive(-n2)
         return jnp.concatenate((n1, n2))
 
     @classmethod
-    def noise_moment(cls, noise_cov) -> Array:
+    def noise_moment(cls, noise_cov: Array) -> Array:
         return noise_cov
