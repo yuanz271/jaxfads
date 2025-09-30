@@ -34,22 +34,22 @@ class MockDynamics(Dynamics):
 def trainer_config():
     """Default training configuration."""
     return OmegaConf.create(
-        dict(
-            min_iter=0,
-            max_iter=5,
-            min_epoch=0,
-            max_epoch=5,
-            learning_rate=1e-3,
-            clip_norm=5.0,
-            batch_size=2,
-            weight_decay=1e-3,
-            beta=0.95,
-            seed=42,
-            noise_eta=0.5,
-            noise_gamma=0.8,
-            valid_ratio=0.2,
-            validation_size=2,
-        )
+        {
+            "min_iter": 0,
+            "max_iter": 5,
+            "min_epoch": 0,
+            "max_epoch": 5,
+            "learning_rate": 1e-3,
+            "clip_norm": 5.0,
+            "batch_size": 2,
+            "weight_decay": 1e-3,
+            "beta": 0.95,
+            "seed": 42,
+            "noise_eta": 0.5,
+            "noise_gamma": 0.8,
+            "valid_ratio": 0.2,
+            "validation_size": 2,
+        }
     )
 
 
