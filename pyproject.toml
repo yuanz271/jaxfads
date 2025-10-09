@@ -55,6 +55,3 @@ gearax = { workspace = true, editable = true }
 
 [tool.uv.workspace]
 members = ["gearax"]
-
-[tool.uv.workspace]
-members = ["gearax"]
