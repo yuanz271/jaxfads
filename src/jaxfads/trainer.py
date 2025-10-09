@@ -31,6 +31,7 @@ DEFAULT_TRAINER_CONFIG : DictConfig
 
 from functools import partial
 
+import equinox as eqx
 import jax
 import numpy as np
 import optax
@@ -181,8 +182,10 @@ def batch_loss(model, batch, key):
     """
     times, observations, controls, covariates = batch
 
+    checkpointed_model = eqx.filter_checkpoint(model)
+
     key, model_key = jr.split(key)
-    _, posterior_moments, prior_moments = model(
+    _, posterior_moments, prior_moments = checkpointed_model(
         times, observations, controls, covariates, key=model_key
     )
 
@@ -213,8 +216,8 @@ def dataloader(arrays, batch_size, num_epochs, key, shuffle=True):
         Number of epochs to iterate (negative treated as 0).
     key : Array
         JAX PRNGKey for shuffling.
-    shuffle : bool, default=True
-        Whether to shuffle indices each epoch.
+    shuffle : bool, optional
+        Whether to shuffle indices each epoch. Default is ``True``.
 
     Yields
     ------
@@ -266,13 +269,13 @@ def compute_patience(max_epoch, data_size, batch_size, scale=0.1):
         Number of samples in the dataset.
     batch_size : int
         Mini-batch size.
-    scale : float, default=0.1
-        Fraction of total training steps used as patience.
+    scale : float, optional
+        Fraction of total training steps used as patience. Default is ``0.1``.
 
     Returns
     -------
     int
-        Patience measured in epochs (at least 1 epoch).
+        Patience measured in epochs (at least ``1``).
     """
     n_batches = data_size // batch_size
     total_steps = max_epoch * n_batches
