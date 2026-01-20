@@ -304,6 +304,7 @@ class Dynamics(SubclassRegistryMixin, ConfModule):  # pyright: ignore[reportImpl
 
         Returns
         -------
+        Array or float
             Regularization loss (default: 0.0).
 
         Notes

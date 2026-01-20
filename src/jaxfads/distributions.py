@@ -242,23 +242,96 @@ class Approx(SubclassRegistryMixin, ABC):
 
     @classmethod
     @abstractmethod
-    def constrain_moment(cls, unconstrained: Array) -> Array: ...
+    def constrain_moment(cls, unconstrained: Array) -> Array:
+        """
+        Transform unconstrained parameters to valid moment parameters.
+
+        Parameters
+        ----------
+        unconstrained : Array
+            Unconstrained parameter vector from optimization.
+
+        Returns
+        -------
+        Array
+            Valid moment parameters satisfying distribution constraints
+            (e.g., positive definite covariance).
+        """
+        ...
 
     @classmethod
     @abstractmethod
-    def constrain_natural(cls, unconstrained: Array) -> Array: ...
+    def constrain_natural(cls, unconstrained: Array) -> Array:
+        """
+        Transform unconstrained parameters to valid natural parameters.
+
+        Parameters
+        ----------
+        unconstrained : Array
+            Unconstrained parameter vector from optimization.
+
+        Returns
+        -------
+        Array
+            Valid natural parameters satisfying distribution constraints
+            (e.g., negative definite precision for Gaussians).
+        """
+        ...
 
     @classmethod
     @abstractmethod
-    def unconstrain_natural(cls, natural: Array) -> Array: ...
+    def unconstrain_natural(cls, natural: Array) -> Array:
+        """
+        Transform natural parameters to unconstrained space.
+
+        Parameters
+        ----------
+        natural : Array
+            Valid natural parameter vector.
+
+        Returns
+        -------
+        Array
+            Unconstrained parameters suitable for optimization.
+        """
+        ...
 
     @classmethod
     @abstractmethod
-    def noise_moment(cls, noise_cov: Array) -> Array: ...
+    def noise_moment(cls, noise_cov: Array) -> Array:
+        """
+        Convert noise covariance to moment parameter format.
+
+        Parameters
+        ----------
+        noise_cov : Array
+            Diagonal noise covariance values.
+
+        Returns
+        -------
+        Array
+            Noise covariance in the format expected by this approximation
+            (e.g., diagonal vector or full matrix).
+        """
+        ...
 
     @classmethod
     @abstractmethod
-    def prior_natural(cls, state_dim: int) -> Array: ...
+    def prior_natural(cls, state_dim: int) -> Array:
+        """
+        Get natural parameters for the standard normal prior.
+
+        Parameters
+        ----------
+        state_dim : int
+            Dimensionality of the state space.
+
+        Returns
+        -------
+        Array
+            Natural parameters for N(0, I) prior distribution.
+        """
+        ...
 
 
 class FullMVN(Approx):
@@ -308,6 +381,7 @@ class FullMVN(Approx):
 
     @classmethod
     def moment_to_natural(cls, moment: Array) -> Array:
+        """See base class. Inverts covariance to get precision."""
         loc, V = cls.moment_to_canon(moment)
         P = damping_inv(V)
         Nat2 = -0.5 * P
@@ -318,6 +392,7 @@ class FullMVN(Approx):
 
     @classmethod
     def sample_by_moment(cls, key: Array, moment: Array, mc_size: int) -> Array:
+        """See base class. Uses JAX multivariate_normal with reparameterization."""
         loc, V = cls.moment_to_canon(moment)
         return jrnd.multivariate_normal(
             key, loc, V, shape=(mc_size,)
@@ -325,6 +400,7 @@ class FullMVN(Approx):
 
     @classmethod
     def moment_to_canon(cls, moment: Array) -> tuple[Array, Array]:
+        """See base class. Extracts mean vector and reshapes covariance matrix."""
         n = jnp.size(moment)
         m = cls.variable_size(n)
         loc, v = jnp.split(moment, [m])
@@ -360,12 +436,14 @@ class FullMVN(Approx):
 
     @classmethod
     def canon_to_moment(cls, mean: Array, cov: Array) -> Array:
+        """See base class. Flattens covariance and concatenates with mean."""
         v = cov.flatten()
         moment = jnp.concatenate((mean, v))
         return moment
 
     @classmethod
     def kl(cls, moment1: Array, moment2: Array) -> Array:
+        """See base class. Uses TFP for full covariance KL computation."""
         m1, V1 = cls.moment_to_canon(moment1)
         m2, V2 = cls.moment_to_canon(moment2)
         return tfd.kl_divergence(
@@ -376,19 +454,23 @@ class FullMVN(Approx):
 
     @classmethod
     def param_size(cls, state_dim: int) -> int:
+        """See base class. Returns D + D² for full covariance."""
         return state_dim + state_dim * state_dim
 
     @classmethod
     def prior_natural(cls, state_dim: int) -> Array:
+        """See base class. Returns N(0, I) in natural form."""
         moment = cls.canon_to_moment(jnp.zeros(state_dim), jnp.eye(state_dim))
         return cls.moment_to_natural(moment)
 
     @classmethod
     def full_cov(cls, cov: Array) -> Array:
+        """See base class. Identity for full covariance."""
         return cov
 
     @classmethod
     def constrain_moment(cls, unconstrained: Array) -> Array:
+        """See base class. Builds PSD covariance via diag + low-rank."""
         n = jnp.size(unconstrained)
         # n = m + m + m
         # m = sqrt(n + 1) - 1
@@ -402,6 +484,7 @@ class FullMVN(Approx):
 
     @classmethod
     def constrain_natural(cls, unconstrained: Array) -> Array:
+        """See base class. Builds negative definite precision."""
         n = jnp.size(unconstrained)
         # n = m + m + m
         # m = sqrt(n + 1) - 1
@@ -415,12 +498,44 @@ class FullMVN(Approx):
 
     @classmethod
     def noise_moment(cls, noise_cov) -> Array:
+        """See base class. Converts diagonal noise to full matrix."""
         return jnp.diag(noise_cov)
 
 
 class LoRaMVN(Approx):
+    """
+    Low-rank plus diagonal multivariate normal approximation.
+
+    Implements exponential family operations for multivariate normal
+    distributions with low-rank plus diagonal covariance structure:
+    Σ = diag(d) + vv^T where d is diagonal and v is a rank-1 factor.
+
+    This provides a trade-off between the expressiveness of full
+    covariance and the efficiency of diagonal covariance.
+
+    Notes
+    -----
+    Parameter layout: [mean_vec, diag_scalar, low_rank_vec]
+    Total parameters: D + 1 + D = 2D + 1
+
+    The covariance is parameterized as:
+
+    .. math::
+
+        \\Sigma = \\text{diag}(d) + vv^T
+
+    This allows capturing one principal direction of correlation while
+    maintaining O(D) storage and computation.
+
+    See Also
+    --------
+    FullMVN : Full covariance (D + D² parameters).
+    DiagMVN : Diagonal covariance (2D parameters).
+    """
+
     @classmethod
     def constrain_moment(cls, unconstrained: Array) -> Array:
+        """See base class. Builds PSD covariance via scalar diag + rank-1."""
         n = jnp.size(unconstrained)
         # n = m + 1 + m
         m = (n - 1) // 2
@@ -433,6 +548,7 @@ class LoRaMVN(Approx):
 
     @classmethod
     def noise_moment(cls, noise_cov) -> Array:
+        """See base class. Converts diagonal noise to full matrix."""
         return jnp.diag(noise_cov)
 
 
@@ -452,6 +568,7 @@ class DiagMVN(Approx):
 
     @classmethod
     def natural_to_moment(cls, natural: Array) -> Array:
+        """See base class. Diagonal case: element-wise inversion."""
         nat1, nat2 = jnp.split(natural, 2)
         cov = -0.5 / nat2
         mean = -0.5 * nat1 / nat2
@@ -459,6 +576,7 @@ class DiagMVN(Approx):
 
     @classmethod
     def moment_to_natural(cls, moment: Array) -> Array:
+        """See base class. Diagonal case: element-wise operations."""
         mean, cov = cls.moment_to_canon(moment)
         nat2 = -0.5 / cov
         nat1 = mean / cov
@@ -468,6 +586,7 @@ class DiagMVN(Approx):
     def sample_by_moment(
         cls, key: Array, moment: Array, mc_size: int | None = None
     ) -> Array:
+        """See base class. Uses diagonal covariance for efficient sampling."""
         mean, cov = cls.moment_to_canon(moment)
         shape = None if mc_size is None else (mc_size,)
         return jrnd.multivariate_normal(
@@ -476,6 +595,7 @@ class DiagMVN(Approx):
 
     @classmethod
     def moment_to_canon(cls, moment: Array) -> tuple[Array, Array]:
+        """See base class. Splits into mean and diagonal covariance."""
         mean, cov = jnp.split(
             moment, 2, -1
         )  # trick: the 2nd moment here is actually cov diag
@@ -483,11 +603,13 @@ class DiagMVN(Approx):
 
     @classmethod
     def canon_to_moment(cls, mean: Array, cov: Array) -> Array:
+        """See base class. Concatenates mean and diagonal covariance."""
         moment = jnp.concatenate((mean, cov))
         return moment
 
     @classmethod
     def variable_size(cls, param_size: int) -> int:
+        """See base class. Returns param_size // 2 for diagonal case."""
         # n: size of vectorized mean param
         # m: size of random variable
         # n = m + m*m
@@ -496,6 +618,7 @@ class DiagMVN(Approx):
 
     @classmethod
     def kl(cls, moment1: Array, moment2: Array) -> Array:
+        """See base class. Uses TFP diagonal MVN for efficient KL."""
         m1, cov1 = cls.moment_to_canon(moment1)
         m2, cov2 = cls.moment_to_canon(moment2)
         return tfd.kl_divergence(
@@ -506,36 +629,42 @@ class DiagMVN(Approx):
 
     @classmethod
     def param_size(cls, state_dim: int) -> int:
+        """See base class. Returns 2D for diagonal case."""
         return 2 * state_dim
 
     @classmethod
     def prior_natural(cls, state_dim: int) -> Array:
-        """Return standard normal in natural parameter form"""
+        """See base class. Returns N(0, I) in natural form."""
         moment = cls.canon_to_moment(jnp.zeros(state_dim), jnp.ones(state_dim))
         return cls.moment_to_natural(moment)
 
     @classmethod
     def full_cov(cls, cov: Array) -> Array:
+        """See base class. Converts diagonal to full matrix."""
         return jnp.diag(cov)
 
     @classmethod
     def constrain_moment(cls, unconstrained: Array) -> Array:
+        """See base class. Applies positivity to variance terms."""
         loc, v = jnp.split(unconstrained, 2)
         v = constrain_positive(v)
         return jnp.concatenate((loc, v))
 
     @classmethod
     def constrain_natural(cls, unconstrained: Array) -> Array:
+        """See base class. Ensures negative precision (nat2 < 0)."""
         n1, n2 = jnp.split(unconstrained, 2)
         n2 = -constrain_positive(n2)
         return jnp.concatenate((n1, n2))
 
     @classmethod
     def unconstrain_natural(cls, natural: Array) -> Array:
+        """See base class. Inverts constrain_natural."""
         n1, n2 = jnp.split(natural, 2)
         n2 = unconstrain_positive(-n2)
         return jnp.concatenate((n1, n2))
 
     @classmethod
     def noise_moment(cls, noise_cov: Array) -> Array:
+        """See base class. Identity for diagonal case."""
         return noise_cov

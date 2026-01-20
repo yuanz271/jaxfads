@@ -34,10 +34,58 @@ MAX_LOGRATE = 7.0
 
 
 class Likelihood(SubclassRegistryMixin, ConfModule):
+    """
+    Abstract base class for observation/emission models in XFADS.
+
+    Defines the interface for computing expected log-likelihoods of
+    observations given latent state distributions. Subclasses implement
+    specific observation models (e.g., Poisson, Gaussian).
+
+    Methods
+    -------
+    eloglik(key, t, moment, y, approx, mc_size)
+        Compute expected log-likelihood E_{q(z)}[log p(y|z)].
+
+    Notes
+    -----
+    The expected log-likelihood is a key component of the ELBO objective:
+
+    .. math::
+
+        \\mathcal{L} = \\sum_t E_{q(z_t)}[\\log p(y_t | z_t)] - KL(q || p)
+
+    Implementations should handle uncertainty propagation from the
+    approximate posterior q(z) through the observation model.
+    """
+
     @abstractmethod
     def eloglik(
         self, key: Array, t: Array, moment: Array, y: Array, approx, mc_size: int
-    ) -> Array: ...
+    ) -> Array:
+        """
+        Compute expected log-likelihood of observations.
+
+        Parameters
+        ----------
+        key : Array
+            JAX PRNG key for stochastic computation (if needed).
+        t : Array
+            Time index for time-varying parameters.
+        moment : Array
+            Moment parameters of the latent state distribution q(z_t).
+        y : Array
+            Observed data at time t.
+        approx : type[Approx]
+            Exponential family approximation class defining q(z).
+        mc_size : int
+            Number of Monte Carlo samples (for stochastic approximations).
+
+        Returns
+        -------
+        Array
+            Expected log-likelihood E_{q(z_t)}[log p(y_t | z_t)].
+        """
+        ...
 
 
 class Poisson(Likelihood):

@@ -1,3 +1,37 @@
+"""
+Parameter constraint transformations for XFADS.
+
+This module provides bijective transformations between constrained and
+unconstrained parameter spaces, enabling gradient-based optimization
+of parameters with domain restrictions (e.g., positive variances).
+
+Functions
+---------
+constrain_positive
+    Map unconstrained values to positive values via x² + ε.
+unconstrain_positive
+    Inverse mapping via sqrt.
+softplus_inverse
+    Inverse of the softplus function log(1 + exp(x)).
+
+Classes
+-------
+AbstractConstraint
+    Abstract base class for constraint transformations.
+Positivity
+    Positivity constraint using softplus transformation.
+
+Notes
+-----
+Two positivity approaches are provided:
+
+1. Square transformation (constrain_positive/unconstrain_positive):
+   Simpler but has zero gradient at x=0.
+
+2. Softplus transformation (Positivity class):
+   Smooth everywhere with non-zero gradients.
+"""
+
 import equinox as eqx
 import jax
 from jax import Array
@@ -113,11 +147,40 @@ class AbstractConstraint(eqx.Module):
         Convenience method that calls constrain().
     """
 
-    def constrain(self, unconstrained: Array) -> Array: ...
+    def constrain(self, unconstrained: Array) -> Array:
+        """
+        Transform unconstrained parameters to constrained space.
 
-    def unconstrain(self, constrained: Array) -> Array: ...
+        Parameters
+        ----------
+        unconstrained : Array
+            Parameters in unconstrained space (full real line).
+
+        Returns
+        -------
+        Array
+            Parameters in constrained space (e.g., positive reals).
+        """
+        ...
+
+    def unconstrain(self, constrained: Array) -> Array:
+        """
+        Transform constrained parameters to unconstrained space.
+
+        Parameters
+        ----------
+        constrained : Array
+            Parameters in constrained space.
+
+        Returns
+        -------
+        Array
+            Parameters in unconstrained space for optimization.
+        """
+        ...
 
     def __call__(self, unconstrained: Array) -> Array:
+        """Apply constraint transformation. Alias for constrain()."""
         return self.constrain(unconstrained)
 
 
@@ -143,7 +206,9 @@ class Positivity(AbstractConstraint):
     """
 
     def constrain(self, unconstrained: Array) -> Array:
+        """See base class. Applies softplus: log(1 + exp(x))."""
         return jax.nn.softplus(unconstrained)
 
     def unconstrain(self, constrained: Array) -> Array:
+        """See base class. Applies inverse softplus."""
         return softplus_inverse(constrained)

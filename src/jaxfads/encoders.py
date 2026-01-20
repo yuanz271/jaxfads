@@ -72,6 +72,7 @@ class AlphaEncoder(ConfModule):
     layer: Callable
 
     def __init__(self, conf: DictConfig, key: Array):
+        """Initialize AlphaEncoder. See class docstring for parameters."""
         self.conf = conf
         approx = Approx.get_subclass(conf.approx)
         self.layer = make_mlp(
@@ -164,6 +165,7 @@ class BetaEncoder(ConfModule):
     dropout: eqx.nn.Dropout | None = None
 
     def __init__(self, conf: DictConfig, key: Array):
+        """Initialize BetaEncoder. See class docstring for parameters."""
         self.conf = conf
         approx = Approx.get_subclass(conf.approx)
 

@@ -1,3 +1,44 @@
+"""
+Iterative Linear Quadratic Regulator (iLQR) for trajectory optimization.
+
+This module implements iLQR, an iterative algorithm for solving nonlinear
+optimal control problems by repeatedly linearizing dynamics and solving
+the resulting LQR subproblems.
+
+Functions
+---------
+rollout
+    Simulate a trajectory under given controls and dynamics.
+cost_function
+    Compute quadratic trajectory cost.
+backward_pass
+    Compute feedback gains via dynamic programming.
+line_search
+    Armijo line search for step size selection.
+arg_first_less_than
+    Find first index where condition holds.
+arg_smallest_less_than
+    Find index of smallest value below threshold.
+ilqr
+    Main iLQR optimization routine.
+
+Notes
+-----
+iLQR iteratively refines a control sequence by:
+
+1. Forward pass: Roll out trajectory under current controls
+2. Backward pass: Compute optimal feedback gains via Riccati recursion
+3. Line search: Find step size that reduces cost
+
+The algorithm converges to a locally optimal trajectory for nonlinear
+dynamics with quadratic costs.
+
+References
+----------
+.. [1] Li, W., & Todorov, E. (2004). Iterative linear quadratic regulator
+       design for nonlinear biological movement systems. ICINCO.
+"""
+
 from functools import partial
 
 import jax
@@ -26,6 +67,7 @@ def rollout(x0, u, c, f):
     Array, shape (T, D_x)
         State trajectory excluding the final x_{T+1}.
     """
+
     def step(x_t, inputs):
         u_t, c_t = inputs
         x_tp1 = f(x_t, u_t, c_t)
@@ -240,6 +282,7 @@ def line_search(alpha, k, K, x_optimal, u_optimal, c, target, Q, R, f):
     u_new : Array, shape (T, D_u)
         New control trajectory.
     """
+
     def step(carry, inputs):
         x_t = carry
         k_t, K_t, x_opt, u_opt, c_t = inputs

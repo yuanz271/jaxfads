@@ -44,7 +44,10 @@ from gearax import trainer as gt
 
 from . import vi
 
-# Default configuration for XFADS training hyperparameters.
+#: Default configuration for XFADS training hyperparameters.
+#: Contains settings for optimization (learning_rate, clip_norm, weight_decay),
+#: training schedule (min/max_iter, min/max_epoch, batch_size), early stopping
+#: (patience, valid_ratio, validation_size), and noise injection (noise_eta, noise_gamma).
 DEFAULT_TRAINER_CONFIG = DictConfig(
     {
         "min_iter": 0,
