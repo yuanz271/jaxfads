@@ -1,19 +1,86 @@
-# Repository Guidelines
+# JAXFADS - Project Knowledge Base
 
-## Project Structure & Module Organization
-The JAX implementation lives in `src/jaxfads/`, with modules grouped by responsibility: `core.py` collects filtering primitives, `dynamics.py` and `observations.py` encode system models, while `nn.py`, `encoders.py`, and `trainer.py` provide neural blocks and training orchestration. Shared helpers sit in `util.py`. Tests mirror the public surface in `tests/` (for example `test_smoother.py` and `test_trainer.py`). Keep the repository root lean aside from workspace packages declared in `pyproject.toml`; the empty `gearax/` directory exists for editable workspace components referenced by `[tool.uv.sources]`.
+**Generated:** 2026-01-20  
+**Commit:** 0597b52  
+**Branch:** main
 
-## Build, Test, and Development Commands
-Use `uv` to manage the environment and run tooling:
-- `uv sync` — create or update the virtual environment with runtime and `dev` extras.
-- `uv run pytest` — execute the full unit-test suite.
-- `uv run python -m pytest tests/test_smoother.py -k "my_case"` — target a specific module or test expression.
+## Overview
 
-## Coding Style & Naming Conventions
-Follow PEP 8 with 4-space indentation and type annotations for public APIs. Docstrings use the NumPy format (section headers such as `Parameters`, `Returns`, `Notes`) shown in `src/jaxfads/core.py`; include shapes and dtypes where helpful. Prefer descriptive snake_case for functions and variables and PascalCase for classes. Keep imports sorted in standard-library, third-party, local order. Run `uv run ruff check .` before submitting; fixable issues can be auto-corrected with `uv run ruff check . --fix`.
+JAX library for variational Bayesian state-space modeling (XFADS). Exponential-family dynamical systems with neural parameterizations via Equinox.
 
-## Testing Guidelines
-Extend coverage with `uv run pytest` whenever logic under `src/jaxfads/` changes. Add targeted tests in the corresponding `tests/test_<module>.py` file and name cases `test_<behavior>`. Use parametrization for shape or device variants, and isolate randomness with `jax.random.PRNGKey(...)`. For stochastic routines, assert against tolerances (e.g., `jnp.allclose`) rather than exact equality.
+## Structure
 
-## Commit & Pull Request Guidelines
-Commits follow short, imperative summaries, as seen in `git log` (for example `fix smoother init`). Group related edits together and include rationale in the body when the change is non-trivial. For pull requests, provide a scope summary, the verification commands you ran, and references to issues or papers when relevant. Attach plots or logs if you alter training dynamics, and call out any new dependencies added to `pyproject.toml`.
+```
+jaxfads/
+├── src/jaxfads/      # Core library (see src/jaxfads/AGENTS.md)
+├── tests/            # Unit tests mirroring src/ structure
+├── gearax/           # Workspace submodule (editable dependency)
+└── pyproject.toml    # Build config, deps, ruff settings
+```
+
+## Where to Look
+
+| Task | Location | Notes |
+|------|----------|-------|
+| Filtering/smoothing algorithms | `src/jaxfads/core.py` | `filter()`, `bismooth()` |
+| Main model class | `src/jaxfads/smoother.py` | `XFADS` orchestrator |
+| State transitions | `src/jaxfads/dynamics.py` | `Dynamics`, `DiagGaussian` |
+| Observation models | `src/jaxfads/observations.py` | `Poisson`, `DiagGaussian` |
+| Distribution math | `src/jaxfads/distributions.py` | `DiagMVN`, `FullMVN`, `Approx` |
+| Neural blocks | `src/jaxfads/nn.py`, `encoders.py` | MLP, RBF, encoders |
+| Training loop | `src/jaxfads/trainer.py` | `train()`, `batch_elbo()` |
+| Add tests | `tests/test_<module>.py` | Use `conftest.py` fixtures |
+
+## Commands
+
+```bash
+# Environment
+uv sync                              # Install deps
+
+# Testing
+uv run pytest                        # Full suite
+uv run pytest tests/test_smoother.py -k "test_name"  # Specific
+
+# Linting
+uv run ruff check .                  # Check
+uv run ruff check . --fix            # Auto-fix
+```
+
+## Conventions
+
+- **Style**: PEP 8, 4-space indent, type annotations on public APIs
+- **Docstrings**: NumPy format (`Parameters`, `Returns`, `Notes`) with shapes/dtypes
+- **Imports**: stdlib → third-party → local
+- **Naming**: `snake_case` functions/vars, `PascalCase` classes
+- **Ruff ignores**: E501 (line length), F722 (forward refs)
+
+## Anti-Patterns
+
+- **NO** `as any`, `@ts-ignore` equivalents for type suppression
+- **NO** empty exception handlers
+- **NO** committing without running `uv run ruff check .`
+
+## Testing Conventions
+
+- Test files: `tests/test_<module>.py`
+- Fixtures: Use `spec` from `conftest.py` for shared params
+- Stochastic tests: Use `chex.assert_trees_all_close` with tolerances
+- Randomness: Always `jax.random.PRNGKey(seed)` for reproducibility
+- I/O tests: Use `tempfile.TemporaryDirectory`
+
+## Dependencies
+
+| Package | Purpose |
+|---------|---------|
+| `jax` | Autodiff, accelerators |
+| `equinox` | Neural modules (PyTree-based) |
+| `optax` | Optimizers |
+| `tensorflow-probability[jax]` | Probability distributions |
+| `omegaconf` | Config management |
+| `gearax` | Workspace component (local editable) |
+
+## Known Issues
+
+- TODO in `core.py:100`: Prior placement undecided (approx vs dynamics)
+- No CI/CD pipelines yet (manual `pytest`/`ruff`)
+- Several modules lack test coverage (`vi.py`, `constraints.py`, `encoders.py`, `observations.py`, `util.py`, `core.py`)
