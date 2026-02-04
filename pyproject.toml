@@ -20,9 +20,9 @@ dependencies = [
     "equinox>=0.11.12",
     "omegaconf>=2.3.0",
     "rich>=14.0.0",
-    "gearax",
     "tensorflow-probability[jax]>=0.24.0,<0.26.0",
     "jax>=0.4.38,<0.7.0",
+    "gearax",
 ]
 
 [dependency-groups]
@@ -50,8 +50,8 @@ allow-direct-references = true
 target-version = "py311"
 lint.ignore = ["E501", "F722"]
 
-[tool.uv.sources]
-gearax = { workspace = true, editable = true }
-
 [tool.uv.workspace]
 members = ["gearax"]
+
+[tool.uv.sources]
+gearax = { workspace = true }
