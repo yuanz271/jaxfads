@@ -110,6 +110,11 @@ def test_diagmvn_kl_matches_closed_form():
 
     This test guards against passing variance where TFP expects std.
     """
+
+    def _kl_closed_form(m1, v1, m2, v2):
+        return 0.5 * jnp.sum(jnp.log(v2 / v1) + (v1 + (m1 - m2) ** 2) / v2 - 1.0)
+
+    # Case 1: moderate variances
     m1 = jnp.array([1.0, -0.5, 0.3])
     v1 = jnp.array([0.5, 2.0, 0.1])
     m2 = jnp.array([0.0, 0.0, 1.0])
@@ -119,10 +124,26 @@ def test_diagmvn_kl_matches_closed_form():
     moment2 = DiagMVN.canon_to_moment(m2, v2)
 
     kl_actual = DiagMVN.kl(moment1, moment2)
-    kl_expected = 0.5 * jnp.sum(jnp.log(v2 / v1) + (v1 + (m1 - m2) ** 2) / v2 - 1.0)
+    kl_expected = _kl_closed_form(m1, v1, m2, v2)
 
     chex.assert_tree_all_finite(kl_actual)
     chex.assert_trees_all_close(kl_actual, kl_expected, atol=1e-5)
+
+    # Case 2: large asymmetric variances — maximally distinguishes
+    # "variance passed as std" (would give ~605) from correct (~31.8)
+    m1b = jnp.array([3.0, -2.0])
+    v1b = jnp.array([0.1, 10.0])
+    m2b = jnp.array([0.0, 1.0])
+    v2b = jnp.array([5.0, 0.3])
+
+    moment1b = DiagMVN.canon_to_moment(m1b, v1b)
+    moment2b = DiagMVN.canon_to_moment(m2b, v2b)
+
+    kl_actual_b = DiagMVN.kl(moment1b, moment2b)
+    kl_expected_b = _kl_closed_form(m1b, v1b, m2b, v2b)
+
+    chex.assert_tree_all_finite(kl_actual_b)
+    chex.assert_trees_all_close(kl_actual_b, kl_expected_b, atol=1e-4)
 
     # KL(p, p) == 0
     kl_self = DiagMVN.kl(moment1, moment1)
