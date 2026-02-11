@@ -159,6 +159,22 @@ def sample_expected_moment(
     E[μ(z_t)] ≈ (1/K) Σ_{k=1}^K μ(z_t^{(k)})
 
     where z_t^{(k)} ~ p(z_t) are samples from the current state distribution.
+
+    The same ``key`` is intentionally reused for every MC sample when
+    evaluating ``f``.  This keeps any stochastic regularisation inside
+    ``f`` (e.g. dropout) fixed within the expectation: the MC estimate
+    integrates over latent uncertainty z ~ q(z_t) only, not over
+    dropout randomness.
+
+    Non-finite handling
+    -------------------
+    After computing per-sample moments, any sample containing NaN or Inf
+    values is masked out.  The mean is taken only over valid (all-finite)
+    samples.  If *every* sample is non-finite, the function falls back to
+    the deterministic prediction at the posterior mean ``z_mean`` (no MC).
+    This makes the MC estimate robust against rare dynamics blow-ups
+    (e.g. stiff ODEs, overflow in ``exp``) without requiring users to
+    clamp their dynamics functions.
     """
     key, subkey = jr.split(key)
     z = approx.sample_by_moment(subkey, moment, mc_size)
@@ -168,7 +184,23 @@ def sample_expected_moment(
         partial(predict_moment, f=f, noise=noise, approx=approx, key=key),
         in_axes=(0, 0, 0),
     )
-    moment = jnp.mean(f_vmap_sample_axis(z, u, c), axis=0)
+    moments = f_vmap_sample_axis(z, u, c)  # (mc_size, param_size)
+
+    # --- nonfinite-safe aggregation ---
+    # valid_k: True when all moment entries for sample k are finite
+    valid = jnp.all(jnp.isfinite(moments), axis=-1)  # (mc_size,)
+    n_valid = jnp.sum(valid)
+    # Masked mean (zero out entire invalid rows so NaN/Inf don't poison the sum)
+    safe_moments = jnp.where(valid[:, None], moments, 0.0)
+    mc_mean = jnp.sum(safe_moments, axis=0) / jnp.maximum(n_valid, 1.0)
+
+    # Fallback: deterministic prediction at the posterior mean
+    z_mean, _ = approx.moment_to_canon(moment)
+    fallback = predict_moment(
+        z_mean, u[0], c[0], f=f, noise=noise, approx=approx, key=key
+    )
+
+    moment = jnp.where(n_valid > 0, mc_mean, fallback)
     return moment
 
 
