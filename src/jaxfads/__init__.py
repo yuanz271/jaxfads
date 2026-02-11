@@ -39,6 +39,7 @@ Examples
 >>> model = XFADS(conf, key)
 """
 
+from .logging import configure_logging, get_logger
 from .smoother import XFADS
 
-__all__ = ["XFADS"]
+__all__ = ["XFADS", "configure_logging", "get_logger"]

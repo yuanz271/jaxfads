@@ -59,6 +59,97 @@ def test_reparameterization(spec):
     )
 
 
+def test_diagmvn_near_zero_cov_stability():
+    """Near-zero covariance must not produce extreme natural parameters.
+
+    When dynamics process noise is near zero (cov ~ EPS), the raw natural
+    parameter nat2 = -0.5/cov would be enormous (~-4e6), causing numerical
+    instability in the filtering loop.  The floor in moment_to_natural()
+    should prevent this.
+    """
+    state_dim = 2
+    mean = jnp.ones(state_dim)
+
+    # Simulate what happens with cov=0.0 through the constraint pipeline:
+    # constrain_positive(unconstrain_positive(0.0)) ≈ EPS ≈ 1.19e-7
+    eps = jnp.finfo(jnp.float32).eps
+    tiny_cov = jnp.full(state_dim, eps)
+
+    moment = DiagMVN.canon_to_moment(mean, tiny_cov)
+    natural = DiagMVN.moment_to_natural(moment)
+
+    # Natural parameters must be finite
+    chex.assert_tree_all_finite(natural)
+
+    # nat2 should be bounded (floor of 1e-6 → nat2 ≈ -5e5, not -4e6)
+    _, nat2 = jnp.split(natural, 2)
+    assert float(jnp.max(jnp.abs(nat2)).item()) < 1e6, (
+        f"nat2 too large: {float(jnp.max(jnp.abs(nat2)).item()):.3e}"
+    )
+
+    # Roundtrip: natural → moment → natural should be stable
+    moment_rt = DiagMVN.natural_to_moment(natural)
+    chex.assert_tree_all_finite(moment_rt)
+    mean_rt, cov_rt = DiagMVN.moment_to_canon(moment_rt)
+    chex.assert_tree_all_finite(mean_rt)
+    chex.assert_tree_all_finite(cov_rt)
+
+    # Normal covariance should roundtrip exactly
+    normal_cov = jnp.ones(state_dim)
+    moment_normal = DiagMVN.canon_to_moment(mean, normal_cov)
+    natural_normal = DiagMVN.moment_to_natural(moment_normal)
+    moment_normal_rt = DiagMVN.natural_to_moment(natural_normal)
+    chex.assert_trees_all_close(moment_normal, moment_normal_rt)
+
+
+def test_diagmvn_kl_matches_closed_form():
+    """DiagMVN.kl() must match the closed-form diagonal Gaussian KL.
+
+    The closed-form KL for diagonal Gaussians with variance vectors v1, v2:
+        KL(q || p) = 0.5 * sum( log(v2/v1) + (v1 + (m1-m2)^2) / v2 - 1 )
+
+    This test guards against passing variance where TFP expects std.
+    """
+
+    def _kl_closed_form(m1, v1, m2, v2):
+        return 0.5 * jnp.sum(jnp.log(v2 / v1) + (v1 + (m1 - m2) ** 2) / v2 - 1.0)
+
+    # Case 1: moderate variances
+    m1 = jnp.array([1.0, -0.5, 0.3])
+    v1 = jnp.array([0.5, 2.0, 0.1])
+    m2 = jnp.array([0.0, 0.0, 1.0])
+    v2 = jnp.array([1.0, 1.0, 0.5])
+
+    moment1 = DiagMVN.canon_to_moment(m1, v1)
+    moment2 = DiagMVN.canon_to_moment(m2, v2)
+
+    kl_actual = DiagMVN.kl(moment1, moment2)
+    kl_expected = _kl_closed_form(m1, v1, m2, v2)
+
+    chex.assert_tree_all_finite(kl_actual)
+    chex.assert_trees_all_close(kl_actual, kl_expected, atol=1e-5)
+
+    # Case 2: large asymmetric variances — maximally distinguishes
+    # "variance passed as std" (would give ~605) from correct (~31.8)
+    m1b = jnp.array([3.0, -2.0])
+    v1b = jnp.array([0.1, 10.0])
+    m2b = jnp.array([0.0, 1.0])
+    v2b = jnp.array([5.0, 0.3])
+
+    moment1b = DiagMVN.canon_to_moment(m1b, v1b)
+    moment2b = DiagMVN.canon_to_moment(m2b, v2b)
+
+    kl_actual_b = DiagMVN.kl(moment1b, moment2b)
+    kl_expected_b = _kl_closed_form(m1b, v1b, m2b, v2b)
+
+    chex.assert_tree_all_finite(kl_actual_b)
+    chex.assert_trees_all_close(kl_actual_b, kl_expected_b, atol=1e-4)
+
+    # KL(p, p) == 0
+    kl_self = DiagMVN.kl(moment1, moment1)
+    chex.assert_trees_all_close(kl_self, jnp.array(0.0), atol=1e-6)
+
+
 def test_lowrankcov(capsys):
     # MultivariateNormalDiagPlusLowRankCovariance is DIFFERENT from
     # MultivariateNormalDiagPlusLowRank
@@ -67,4 +158,4 @@ def test_lowrankcov(capsys):
     cov_diag = jnp.ones(2)
     cov_lr = jnp.ones((2, 1))
 
-    mvn = tfp.MultivariateNormalDiagPlusLowRankCovariance(loc, cov_diag, cov_lr)
+    _ = tfp.MultivariateNormalDiagPlusLowRankCovariance(loc, cov_diag, cov_lr)

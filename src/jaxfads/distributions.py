@@ -576,8 +576,17 @@ class DiagMVN(Approx):
 
     @classmethod
     def moment_to_natural(cls, moment: Array) -> Array:
-        """See base class. Diagonal case: element-wise operations."""
+        """See base class. Diagonal case: element-wise operations.
+
+        Notes
+        -----
+        A minimum floor of 1e-6 is applied to the covariance before
+        inversion to prevent extreme natural parameters (nat2 ~ -1/2cov)
+        when the covariance is near zero.  This mirrors the damping used
+        in ``FullMVN.moment_to_natural`` via ``damping_inv``.
+        """
         mean, cov = cls.moment_to_canon(moment)
+        cov = jnp.maximum(cov, 1e-6)
         nat2 = -0.5 / cov
         nat1 = mean / cov
         return jnp.concatenate((nat1, nat2))
@@ -618,12 +627,23 @@ class DiagMVN(Approx):
 
     @classmethod
     def kl(cls, moment1: Array, moment2: Array) -> Array:
-        """See base class. Uses TFP diagonal MVN for efficient KL."""
+        """See base class. Uses TFP diagonal MVN for efficient KL.
+
+        Notes
+        -----
+        ``moment_to_canon`` returns *variance* vectors, but TFP's
+        ``MultivariateNormalDiag`` expects ``scale_diag`` (std).
+        We convert via ``sqrt(max(cov, 1e-6))`` to avoid sqrt-of-zero.
+        """
         m1, cov1 = cls.moment_to_canon(moment1)
         m2, cov2 = cls.moment_to_canon(moment2)
         return tfd.kl_divergence(
-            tfd.MultivariateNormalDiag(m1, cov1),
-            tfd.MultivariateNormalDiag(m2, cov2),
+            tfd.MultivariateNormalDiag(
+                loc=m1, scale_diag=jnp.sqrt(jnp.maximum(cov1, 1e-6))
+            ),
+            tfd.MultivariateNormalDiag(
+                loc=m2, scale_diag=jnp.sqrt(jnp.maximum(cov2, 1e-6))
+            ),
             allow_nan_stats=False,
         )
 

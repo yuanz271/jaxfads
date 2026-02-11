@@ -30,6 +30,7 @@ DEFAULT_TRAINER_CONFIG : DictConfig
 """
 
 from functools import partial
+import time
 
 import equinox as eqx
 import jax
@@ -43,6 +44,10 @@ from omegaconf import DictConfig, OmegaConf
 from gearax import trainer as gt
 
 from . import vi
+from .logging import get_logger
+
+
+logger = get_logger(__name__)
 
 #: Default configuration for XFADS training hyperparameters.
 #: Contains settings for optimization (learning_rate, clip_norm, weight_decay),
@@ -345,6 +350,8 @@ def train(model, data, *, conf):
     """
     conf = OmegaConf.merge(DEFAULT_TRAINER_CONFIG, conf)
 
+    t0 = time.perf_counter()
+
     key = jr.key(conf.seed)
     rng = np.random.default_rng(conf.seed)
 
@@ -370,6 +377,31 @@ def train(model, data, *, conf):
     )
     conf.patience = compute_patience(conf.max_epoch, data_size, batch_size)
 
+    logger.info(
+        "train start: devices=%d batch_size=%d data=%d train=%d valid=%d max_epoch=%d patience=%d seed=%d",
+        n_devices,
+        int(conf.batch_size),
+        int(data_size),
+        int(train_size),
+        int(valid_size),
+        int(conf.max_epoch),
+        int(conf.patience),
+        int(conf.seed),
+    )
+    logger.debug(
+        "sharding: data=%s model=%s",
+        data_sharding.spec,
+        model_sharding.spec,
+    )
+    logger.debug(
+        "optimizer: lr=%s clip_norm=%s weight_decay=%s noise_eta=%s noise_gamma=%s",
+        conf.learning_rate,
+        conf.clip_norm,
+        conf.weight_decay,
+        conf.noise_eta,
+        conf.noise_gamma,
+    )
+
     # Prepare optimizer
     optimizer = optax.chain(
         optax.clip_by_global_norm(conf.clip_norm),
@@ -394,5 +426,8 @@ def train(model, data, *, conf):
         model_sharding,
         conf.min_epoch,
     )
+
+    dt = time.perf_counter() - t0
+    logger.info("train end: elapsed=%.2fs", dt)
 
     return model
