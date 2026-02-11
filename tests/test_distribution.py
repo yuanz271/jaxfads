@@ -102,6 +102,33 @@ def test_diagmvn_near_zero_cov_stability():
     chex.assert_trees_all_close(moment_normal, moment_normal_rt)
 
 
+def test_diagmvn_kl_matches_closed_form():
+    """DiagMVN.kl() must match the closed-form diagonal Gaussian KL.
+
+    The closed-form KL for diagonal Gaussians with variance vectors v1, v2:
+        KL(q || p) = 0.5 * sum( log(v2/v1) + (v1 + (m1-m2)^2) / v2 - 1 )
+
+    This test guards against passing variance where TFP expects std.
+    """
+    m1 = jnp.array([1.0, -0.5, 0.3])
+    v1 = jnp.array([0.5, 2.0, 0.1])
+    m2 = jnp.array([0.0, 0.0, 1.0])
+    v2 = jnp.array([1.0, 1.0, 0.5])
+
+    moment1 = DiagMVN.canon_to_moment(m1, v1)
+    moment2 = DiagMVN.canon_to_moment(m2, v2)
+
+    kl_actual = DiagMVN.kl(moment1, moment2)
+    kl_expected = 0.5 * jnp.sum(jnp.log(v2 / v1) + (v1 + (m1 - m2) ** 2) / v2 - 1.0)
+
+    chex.assert_tree_all_finite(kl_actual)
+    chex.assert_trees_all_close(kl_actual, kl_expected, atol=1e-5)
+
+    # KL(p, p) == 0
+    kl_self = DiagMVN.kl(moment1, moment1)
+    chex.assert_trees_all_close(kl_self, jnp.array(0.0), atol=1e-6)
+
+
 def test_lowrankcov(capsys):
     # MultivariateNormalDiagPlusLowRankCovariance is DIFFERENT from
     # MultivariateNormalDiagPlusLowRank
