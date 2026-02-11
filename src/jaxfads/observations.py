@@ -245,7 +245,7 @@ class DiagGaussian(Likelihood):
 
     def __init__(self, conf, key):
         self.conf = conf
-        cov = conf.get("cov", jnp.ones(conf.observation_dim))
+        cov = jnp.array(conf.get("cov", jnp.ones(conf.observation_dim)))
         self.unconstrained_cov = unconstrain_positive(cov)
 
         n_steps = conf.get("n_steps", 0)

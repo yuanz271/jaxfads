@@ -576,8 +576,17 @@ class DiagMVN(Approx):
 
     @classmethod
     def moment_to_natural(cls, moment: Array) -> Array:
-        """See base class. Diagonal case: element-wise operations."""
+        """See base class. Diagonal case: element-wise operations.
+
+        Notes
+        -----
+        A minimum floor of 1e-6 is applied to the covariance before
+        inversion to prevent extreme natural parameters (nat2 ~ -1/2cov)
+        when the covariance is near zero.  This mirrors the damping used
+        in ``FullMVN.moment_to_natural`` via ``damping_inv``.
+        """
         mean, cov = cls.moment_to_canon(moment)
+        cov = jnp.maximum(cov, 1e-6)
         nat2 = -0.5 / cov
         nat1 = mean / cov
         return jnp.concatenate((nat1, nat2))

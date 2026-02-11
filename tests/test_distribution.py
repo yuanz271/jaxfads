@@ -59,6 +59,49 @@ def test_reparameterization(spec):
     )
 
 
+def test_diagmvn_near_zero_cov_stability():
+    """Near-zero covariance must not produce extreme natural parameters.
+
+    When dynamics process noise is near zero (cov ~ EPS), the raw natural
+    parameter nat2 = -0.5/cov would be enormous (~-4e6), causing numerical
+    instability in the filtering loop.  The floor in moment_to_natural()
+    should prevent this.
+    """
+    state_dim = 2
+    mean = jnp.ones(state_dim)
+
+    # Simulate what happens with cov=0.0 through the constraint pipeline:
+    # constrain_positive(unconstrain_positive(0.0)) ≈ EPS ≈ 1.19e-7
+    eps = jnp.finfo(jnp.float32).eps
+    tiny_cov = jnp.full(state_dim, eps)
+
+    moment = DiagMVN.canon_to_moment(mean, tiny_cov)
+    natural = DiagMVN.moment_to_natural(moment)
+
+    # Natural parameters must be finite
+    chex.assert_tree_all_finite(natural)
+
+    # nat2 should be bounded (floor of 1e-6 → nat2 ≈ -5e5, not -4e6)
+    _, nat2 = jnp.split(natural, 2)
+    assert float(jnp.max(jnp.abs(nat2)).item()) < 1e6, (
+        f"nat2 too large: {float(jnp.max(jnp.abs(nat2)).item()):.3e}"
+    )
+
+    # Roundtrip: natural → moment → natural should be stable
+    moment_rt = DiagMVN.natural_to_moment(natural)
+    chex.assert_tree_all_finite(moment_rt)
+    mean_rt, cov_rt = DiagMVN.moment_to_canon(moment_rt)
+    chex.assert_tree_all_finite(mean_rt)
+    chex.assert_tree_all_finite(cov_rt)
+
+    # Normal covariance should roundtrip exactly
+    normal_cov = jnp.ones(state_dim)
+    moment_normal = DiagMVN.canon_to_moment(mean, normal_cov)
+    natural_normal = DiagMVN.moment_to_natural(moment_normal)
+    moment_normal_rt = DiagMVN.natural_to_moment(natural_normal)
+    chex.assert_trees_all_close(moment_normal, moment_normal_rt)
+
+
 def test_lowrankcov(capsys):
     # MultivariateNormalDiagPlusLowRankCovariance is DIFFERENT from
     # MultivariateNormalDiagPlusLowRank
