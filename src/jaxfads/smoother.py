@@ -29,6 +29,10 @@ from .dynamics import Dynamics
 from .nn import DataMasker
 from .observations import Likelihood
 from .util import vmap_with_key
+from .logging import get_logger
+
+
+logger = get_logger(__name__)
 
 
 class XFADS(ConfModule):
@@ -138,6 +142,19 @@ class XFADS(ConfModule):
 
         key = jrnd.key(seed)
 
+        logger.info(
+            "XFADS init: mode=%s approx=%s forward=%s observation=%s state_dim=%s obs_dim=%s mc_size=%s dropout=%s seed=%s",
+            str(self.conf.mode),
+            str(self.conf.approx),
+            str(forward),
+            str(observation),
+            str(self.conf.state_dim),
+            str(self.conf.observation_dim),
+            str(self.conf.mc_size),
+            str(dropout),
+            str(seed),
+        )
+
         self.masker = DataMasker(dropout)
 
         key, ky = jrnd.split(key)
@@ -218,6 +235,7 @@ class XFADS(ConfModule):
         XFADS
             Loaded model instance.
         """
+        logger.info("XFADS load: path=%s", str(path))
         return load_model(path, cls)
 
     @classmethod
@@ -232,6 +250,7 @@ class XFADS(ConfModule):
         path : str or Path
             Path where to save the model.
         """
+        logger.info("XFADS save: path=%s", str(path))
         save_model(path, model)
 
     @property
