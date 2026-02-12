@@ -12,5 +12,5 @@ multirun/
 .vscode/
 bandit/
 
-# Generated example outputs
-examples/*.pdf
+# Examples (kept out of git)
+examples/
