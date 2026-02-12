@@ -70,7 +70,23 @@ pip install -e ".[dev]"
 
 ## Citation & Resources
 
-If you build on XFADS in academic work, please cite the accompanying [paper](https://papers.neurips.cc/paper_files/paper/2024/hash/18595bc3e802a3b11035927fd928eb9c-Abstract-Conference.html). Refer to the official arXiv entry for the most up-to-date citation details. Supplementary resources:
+If you build on XFADS in academic work, please cite the accompanying paper. 
 
+```bibtex
+@inproceedings{NEURIPS2024_18595bc3,
+ author = {Dowling, Matthew and Zhao, Yuan and Park, Il Memming},
+ booktitle = {Advances in Neural Information Processing Systems},
+ doi = {10.52202/079017-0430},
+ editor = {A. Globerson and L. Mackey and D. Belgrave and A. Fan and U. Paquet and J. Tomczak and C. Zhang},
+ pages = {13458--13488},
+ publisher = {Curran Associates, Inc.},
+ title = {eXponential FAmily Dynamical Systems (XFADS): Large-scale nonlinear Gaussian state-space modeling},
+ url = {https://proceedings.neurips.cc/paper_files/paper/2024/file/18595bc3e802a3b11035927fd928eb9c-Paper-Conference.pdf},
+ volume = {37},
+ year = {2024}
+}
+```
+
+Supplementary resources:
 - [Paper](https://papers.neurips.cc/paper_files/paper/2024/hash/18595bc3e802a3b11035927fd928eb9c-Abstract-Conference.html)
 - [PyTorch implementation](https://github.com/catniplab/xfads)
