@@ -51,8 +51,6 @@ posterior = model.smooth(observations)
 
 The returned posterior distribution object exposes smoothed means and covariances that can be decoded or fed into downstream tasks.
 
-For a complete, runnable example with synthetic data (2D Van der Pol latents and 10D Gaussian observations), see [`examples/toy_example.py`](examples/toy_example.py).
-
 ## Installation
 
 ```bash
