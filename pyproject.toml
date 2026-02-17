@@ -22,7 +22,7 @@ dependencies = [
     "rich>=14.0.0",
     "tensorflow-probability[jax]>=0.24.0,<0.26.0",
     "jax>=0.4.38,<0.7.0",
-    "gearax",
+    "gearax @ git+https://github.com/yuanz271/gearax.git@49d4480ec8739914b8983c22f8b3824e893723fd",
 ]
 
 [dependency-groups]
@@ -50,8 +50,3 @@ allow-direct-references = true
 target-version = "py311"
 lint.ignore = ["E501", "F722"]
 
-[tool.uv.workspace]
-members = ["gearax"]
-
-[tool.uv.sources]
-gearax = { workspace = true }

@@ -11,6 +11,7 @@ outputs/
 multirun/
 .vscode/
 bandit/
+uv.lock
 
 # Examples (kept out of git)
 examples/

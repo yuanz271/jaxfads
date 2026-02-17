@@ -54,10 +54,12 @@ The returned posterior distribution object exposes smoothed means and covariance
 ## Installation
 
 ```bash
-git clone --recursive https://github.com/yuanz271/jaxfads.git
+git clone https://github.com/yuanz271/jaxfads.git
 cd jaxfads
 pip install -e ".[dev]"
 ```
+
+`gearax` is installed from its GitHub repository at a pinned commit during installation.
 
 ## Project Layout
 
