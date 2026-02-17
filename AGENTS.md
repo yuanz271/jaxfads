@@ -14,7 +14,6 @@ JAX library for variational Bayesian state-space modeling (XFADS). Exponential-f
 jaxfads/
 ├── src/jaxfads/      # Core library (see src/jaxfads/AGENTS.md)
 ├── tests/            # Unit tests mirroring src/ structure
-├── gearax/           # Workspace submodule (editable dependency)
 └── pyproject.toml    # Build config, deps, ruff settings
 ```
 
@@ -54,6 +53,14 @@ uv run ruff check . --fix            # Auto-fix
 - **Naming**: `snake_case` functions/vars, `PascalCase` classes
 - **Ruff ignores**: E501 (line length), F722 (forward refs)
 
+## Branching Practices
+
+- Branch from `main` for every change.
+- Keep branches focused and short-lived.
+- Open a pull request before merging.
+- Rebase or merge latest `main` before final review.
+- Squash or tidy commits before merge if requested.
+
 ## Anti-Patterns
 
 - **NO** `as any`, `@ts-ignore` equivalents for type suppression
@@ -77,7 +84,7 @@ uv run ruff check . --fix            # Auto-fix
 | `optax` | Optimizers |
 | `tensorflow-probability[jax]` | Probability distributions |
 | `omegaconf` | Config management |
-| `gearax` | Workspace component (local editable) |
+| `gearax` | GitHub dependency pinned in `pyproject.toml` |
 
 ## Known Issues
 
