@@ -191,4 +191,3 @@ Docstrings that say "See base class" are allowed to omit summary/Parameters/Retu
 
 - TODO in `core.py:100`: Prior placement undecided (approx vs dynamics)
 - No CI/CD pipelines yet (manual `pytest`/`ruff`)
-- Several modules lack test coverage (`vi.py`, `constraints.py`, `encoders.py`, `observations.py`, `util.py`, `core.py`)
