@@ -56,10 +56,12 @@ The returned posterior distribution object exposes smoothed means and covariance
 ```bash
 git clone https://github.com/yuanz271/jaxfads.git
 cd jaxfads
-pip install -e ".[dev]"
+pip install -e .
 ```
 
 `gearax` is installed from its GitHub repository at a pinned commit during installation.
+
+For development workflows and project conventions, see [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ## Project Layout
 
