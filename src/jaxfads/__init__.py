@@ -1,15 +1,10 @@
 """
-eXponential FAmily Dynamical Systems (XFADS).
+Exponential Family Dynamical Systems (XFADS).
 
 A JAX-based library for Bayesian state-space modeling using variational inference
 with exponential family approximations. XFADS implements flexible nonlinear
 dynamical systems with neural network parameterizations for dynamics,
 observations, and variational approximations.
-
-Classes
--------
-XFADS
-    Main model class orchestrating variational inference for XFADS.
 
 Notes
 -----

@@ -34,16 +34,16 @@ jaxfads/
 |--------|---------|-------------|
 | `core.py` | Filtering primitives | `filter()`, `bismooth()`, `Mode` |
 | `smoother.py` | Main orchestrator | `XFADS` class |
-| `dynamics.py` | State transitions | `Dynamics`, `predict_moment()`, `sample_expected_moment()` |
+| `dynamics.py` | State transitions | `Noise`, `DiagGaussian`, `Dynamics`, `predict_moment()`, `sample_expected_moment()` |
 | `observations.py` | Likelihoods | `Poisson`, `DiagGaussian`, `Likelihood` |
-| `distributions.py` | Approx posteriors | `DiagMVN`, `FullMVN`, `LoRaMVN`, `Approx` |
-| `nn.py` | Neural blocks | `make_mlp()`, `WeightNorm`, `RBFN`, `DataMasker` |
+| `distributions.py` | Approx posteriors | `DiagMVN`, `FullMVN`, `LoRaMVN`, `Approx`, `damping_inv` |
+| `nn.py` | Neural blocks | `make_mlp()`, `gauss_rbf()`, `WeightNorm`, `StationaryLinear`, `VariantBiasLinear`, `RBFN`, `DataMasker` |
 | `encoders.py` | Sequence encoders | `AlphaEncoder`, `BetaEncoder` |
-| `trainer.py` | Training loop | `train()`, `batch_elbo()`, `batch_loss()` |
+| `trainer.py` | Training loop | `train()`, `batch_elbo()`, `batch_loss()`, `train_test_split()`, `dataloader()`, `compute_patience()`, `DEFAULT_TRAINER_CONFIG` |
 | `vi.py` | Variational inference | `elbo()` |
 | `util.py` | Helpers | `vmap_with_key()` |
-| `constraints.py` | Parameter constraints | - |
-| `ilqr.py` | Iterative LQR | - |
+| `constraints.py` | Parameter constraints | `constrain_positive()`, `unconstrain_positive()`, `softplus_inverse()`, `AbstractConstraint`, `Positivity` |
+| `ilqr.py` | Iterative LQR | `rollout()`, `cost_function()`, `backward_pass()`, `line_search()`, `arg_first_less_than()`, `arg_smallest_less_than()`, `ilqr()` |
 
 ### Architecture
 
@@ -125,7 +125,13 @@ uv run pytest tests/test_smoother.py -k "test_name"  # Specific
 # Linting
 uv run ruff check .                  # Check
 uv run ruff check . --fix            # Auto-fix
+
+# Docstring linting
+uv run python -m numpydoc lint src/jaxfads/*.py
 ```
+
+Docstring linting enforces a minimal ruleset: GL01, SS02, PR01, PR10, RT01.
+Docstrings that say "See base class" are allowed to omit summary/Parameters/Returns checks.
 
 ## Conventions
 

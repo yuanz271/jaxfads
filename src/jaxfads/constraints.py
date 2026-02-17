@@ -5,22 +5,6 @@ This module provides bijective transformations between constrained and
 unconstrained parameter spaces, enabling gradient-based optimization
 of parameters with domain restrictions (e.g., positive variances).
 
-Functions
----------
-constrain_positive
-    Map unconstrained values to positive values via x² + ε.
-unconstrain_positive
-    Inverse mapping via sqrt.
-softplus_inverse
-    Inverse of the softplus function log(1 + exp(x)).
-
-Classes
--------
-AbstractConstraint
-    Abstract base class for constraint transformations.
-Positivity
-    Positivity constraint using softplus transformation.
-
 Notes
 -----
 Two positivity approaches are provided:
@@ -180,7 +164,11 @@ class AbstractConstraint(eqx.Module):
         ...
 
     def __call__(self, unconstrained: Array) -> Array:
-        """Apply constraint transformation. Alias for constrain()."""
+        """
+        Apply constraint transformation.
+
+        Alias for ``constrain``.
+        """
         return self.constrain(unconstrained)
 
 

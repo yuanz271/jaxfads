@@ -52,3 +52,9 @@ allow-direct-references = true
 target-version = "py311"
 lint.ignore = ["E501", "F722"]
 
+[tool.numpydoc_validation]
+checks = ["GL01", "SS02", "PR01", "PR10", "RT01"]
+override_GL01 = "See base class"
+override_PR01 = "See base class"
+override_RT01 = "See base class"
+

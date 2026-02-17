@@ -3,11 +3,6 @@ Utility functions for XFADS.
 
 This module provides helper functions for JAX operations, particularly
 for handling random key management in vectorized computations.
-
-Functions
----------
-vmap_with_key
-    Wrap a function to vmap with independent random keys per element.
 """
 
 from collections.abc import Callable

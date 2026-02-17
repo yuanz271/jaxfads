@@ -3,15 +3,8 @@ Neural encoders for variational inference in XFADS.
 
 This module implements neural network encoders that convert observations and
 temporal information into natural parameter updates for variational inference
-in XFADS. The encoders learn to map raw observations to
-structured updates for the posterior distributions over latent states.
-
-Classes
--------
-AlphaEncoder
-    Alpha encoder for observation-driven information updates in XFADS.
-BetaEncoder
-    Beta encoder for temporal dependency modeling in XFADS.
+in XFADS. The encoders learn to map raw observations to structured updates for
+the posterior distributions over latent states.
 """
 
 import math
@@ -72,7 +65,16 @@ class AlphaEncoder(ConfModule):
     layer: Callable
 
     def __init__(self, conf: DictConfig, key: Array):
-        """Initialize AlphaEncoder. See class docstring for parameters."""
+        """
+        Initialize the alpha encoder.
+
+        Parameters
+        ----------
+        conf : DictConfig
+            Encoder configuration.
+        key : Array
+            PRNG key for parameter initialization.
+        """
         self.conf = conf
         approx = Approx.get_subclass(conf.approx)
         self.layer = make_mlp(
@@ -165,7 +167,16 @@ class BetaEncoder(ConfModule):
     dropout: eqx.nn.Dropout | None = None
 
     def __init__(self, conf: DictConfig, key: Array):
-        """Initialize BetaEncoder. See class docstring for parameters."""
+        """
+        Initialize the beta encoder.
+
+        Parameters
+        ----------
+        conf : DictConfig
+            Encoder configuration.
+        key : Array
+            PRNG key for parameter initialization.
+        """
         self.conf = conf
         approx = Approx.get_subclass(conf.approx)
 

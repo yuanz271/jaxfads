@@ -1,4 +1,5 @@
-"""Host-side diagnostics helpers.
+"""
+Host-side diagnostics helpers.
 
 These utilities are designed to help debug training/inference while keeping
 all Python logging outside any JAX-jitted function.
@@ -25,7 +26,22 @@ class LossStats:
 
 
 def compute_loss_stats(model, batch, *, key: Array) -> LossStats:
-    """Compute a few scalar diagnostics for a given batch.
+    """
+    Compute scalar loss diagnostics for a given batch.
+
+    Parameters
+    ----------
+    model : XFADS
+        Model used to compute losses.
+    batch : tuple[Array, Array, Array, Array]
+        Tuple of `(times, observations, controls, covariates)`.
+    key : Array
+        PRNG key for stochastic computations.
+
+    Returns
+    -------
+    LossStats
+        Loss statistics for the batch.
 
     Notes
     -----
@@ -69,7 +85,23 @@ class GradStats:
 
 
 def compute_grad_stats(model, batch, *, key: Array) -> GradStats:
-    """Compute gradient norm and non-finite flag for a batch."""
+    """
+    Compute gradient norm and non-finite flag for a batch.
+
+    Parameters
+    ----------
+    model : XFADS
+        Model used to compute gradients.
+    batch : tuple[Array, Array, Array, Array]
+        Tuple of `(times, observations, controls, covariates)`.
+    key : Array
+        PRNG key for stochastic computations.
+
+    Returns
+    -------
+    GradStats
+        Gradient statistics for the batch.
+    """
 
     @eqx.filter_jit
     def _grad_stats(m, b, k):

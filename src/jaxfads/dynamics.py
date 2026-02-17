@@ -4,22 +4,6 @@ Dynamics models for XFADS.
 This module implements various dynamics models for state transitions in
 XFADS. It provides abstract interfaces for dynamics and noise models,
 along with concrete implementations for common cases.
-
-Functions
----------
-predict_moment
-    Predict moment parameters for next state given current state.
-sample_expected_moment
-    Compute expected moment parameters via Monte Carlo sampling.
-
-Classes
--------
-Noise
-    Protocol for noise models in dynamics systems.
-DiagGaussian
-    Diagonal Gaussian noise model for dynamics systems.
-Dynamics
-    Abstract base class for dynamics models in XFADS.
 """
 
 from abc import abstractmethod
@@ -166,11 +150,10 @@ def sample_expected_moment(
     integrates over latent uncertainty z ~ q(z_t) only, not over
     dropout randomness.
 
-    Non-finite handling
-    -------------------
+    Non-finite handling:
     After computing per-sample moments, any sample containing NaN or Inf
-    values is masked out.  The mean is taken only over valid (all-finite)
-    samples.  If *every* sample is non-finite, the function falls back to
+    values is masked out. The mean is taken only over valid (all-finite)
+    samples. If *every* sample is non-finite, the function falls back to
     the deterministic prediction at the posterior mean ``z_mean`` (no MC).
     This makes the MC estimate robust against rare dynamics blow-ups
     (e.g. stiff ODEs, overflow in ``exp``) without requiring users to

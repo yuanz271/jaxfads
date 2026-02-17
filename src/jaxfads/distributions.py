@@ -1,26 +1,10 @@
 """
 Exponential-family variational distributions for XFADS.
 
-This module provides implementations of exponential family distributions
-with natural and moment parameterizations for variational inference in
-XFADS. Supports various approximations including full covariance, low-rank,
-and diagonal multivariate normal distributions.
-
-Functions
----------
-damping_inv
-    Compute matrix inverse with damping for numerical stability.
-
-Classes
--------
-Approx
-    Abstract base class for exponential family approximations.
-FullMVN
-    Full covariance multivariate normal approximation.
-LoRaMVN
-    Low-rank multivariate normal approximation.
-DiagMVN
-    Diagonal covariance multivariate normal approximation.
+This module provides implementations of exponential-family distributions
+with natural and moment parameterizations for variational inference in XFADS.
+It supports full-covariance, low-rank, and diagonal multivariate normal
+approximations.
 """
 
 import math
@@ -568,7 +552,9 @@ class DiagMVN(Approx):
 
     @classmethod
     def natural_to_moment(cls, natural: Array) -> Array:
-        """See base class. Diagonal case: element-wise inversion."""
+        """
+        See base class. Diagonal case: element-wise inversion.
+        """
         nat1, nat2 = jnp.split(natural, 2)
         cov = -0.5 / nat2
         mean = -0.5 * nat1 / nat2
@@ -627,7 +613,8 @@ class DiagMVN(Approx):
 
     @classmethod
     def kl(cls, moment1: Array, moment2: Array) -> Array:
-        """See base class. Uses TFP diagonal MVN for efficient KL.
+        """
+        See base class. Uses TFP diagonal MVN for efficient KL.
 
         Notes
         -----

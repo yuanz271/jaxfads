@@ -1,4 +1,5 @@
-"""Logging utilities for jaxfads.
+"""
+Logging utilities for jaxfads.
 
 This module is deliberately host-side only. Do not call Python logging APIs from
 functions that may be JIT-compiled; for deep debugging of JAX-transformed code,
@@ -17,14 +18,20 @@ _BASE_LOGGER_NAME = "jaxfads"
 
 
 def get_logger(name: str = _BASE_LOGGER_NAME) -> logging.Logger:
-    """Return a namespaced jaxfads logger.
+    """
+    Return a namespaced jaxfads logger.
 
     Parameters
     ----------
-    name:
-        Logger name. If `name` is a module name under `jaxfads` (e.g.
-        "jaxfads.trainer"), it is used directly. Otherwise it is prefixed with
-        "jaxfads.".
+    name : str, default=_BASE_LOGGER_NAME
+        Logger name. If ``name`` is a module name under ``jaxfads`` (e.g.
+        ``"jaxfads.trainer"``), it is used directly. Otherwise it is prefixed with
+        ``"jaxfads."``.
+
+    Returns
+    -------
+    logging.Logger
+        Logger instance scoped under the jaxfads namespace.
     """
     if name == _BASE_LOGGER_NAME or name.startswith(_BASE_LOGGER_NAME + "."):
         return logging.getLogger(name)
@@ -34,7 +41,23 @@ def get_logger(name: str = _BASE_LOGGER_NAME) -> logging.Logger:
 def _find_handler(
     logger: logging.Logger, handler_type: type[logging.Handler], **attrs: Any
 ) -> logging.Handler | None:
-    """Return the first handler whose type matches *exactly* (not via subclass)."""
+    """
+    Return the first handler whose type matches *exactly* (not via subclass).
+
+    Parameters
+    ----------
+    logger : logging.Logger
+        Logger to search.
+    handler_type : type[logging.Handler]
+        Handler class to match exactly.
+    **attrs : Any
+        Attribute filters that must match on the handler instance.
+
+    Returns
+    -------
+    logging.Handler | None
+        Matching handler or ``None`` if no handler is found.
+    """
     for h in logger.handlers:
         if type(h) is not handler_type:
             continue
@@ -48,21 +71,22 @@ def configure_logging(
     *,
     file_path: str | os.PathLike[str] | None = None,
 ) -> None:
-    """Configure jaxfads logging.
+    """
+    Configure jaxfads logging.
 
     This function is idempotent: calling it multiple times will not add
-    duplicate handlers.  Calling it again with a different *level* updates
+    duplicate handlers. Calling it again with a different *level* updates
     the logger and all previously-attached handlers.
 
     Console output always uses Rich's ``RichHandler``.
 
     Parameters
     ----------
-    level:
-        Logging level for the base `jaxfads` logger. Can be overridden by
+    level : str | int, default="INFO"
+        Logging level for the base ``jaxfads`` logger. Can be overridden by
         the ``JAXFADS_LOG_LEVEL`` environment variable (env var always wins).
-    file_path:
-        Optional log file path. If not provided, reads `JAXFADS_LOG_FILE`.
+    file_path : str | os.PathLike[str] | None, default=None
+        Optional log file path. If not provided, reads ``JAXFADS_LOG_FILE``.
     """
     env_level = os.environ.get("JAXFADS_LOG_LEVEL")
     if env_level:

@@ -4,18 +4,6 @@ Core filtering and smoothing algorithms for XFADS.
 This module implements the fundamental algorithms for XFADS,
 including forward filtering and bidirectional smoothing
 using variational inference in exponential family approximations.
-
-Functions
----------
-filter
-    Forward filtering for state estimation using variational inference.
-bismooth
-    Bidirectional filtering for improved state smoothing.
-
-Classes
--------
-Mode
-    Enumeration of inference modes for XFADS.
 """
 
 from enum import StrEnum, auto

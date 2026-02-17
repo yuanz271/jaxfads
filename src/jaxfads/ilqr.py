@@ -5,23 +5,6 @@ This module implements iLQR, an iterative algorithm for solving nonlinear
 optimal control problems by repeatedly linearizing dynamics and solving
 the resulting LQR subproblems.
 
-Functions
----------
-rollout
-    Simulate a trajectory under given controls and dynamics.
-cost_function
-    Compute quadratic trajectory cost.
-backward_pass
-    Compute feedback gains via dynamic programming.
-line_search
-    Armijo line search for step size selection.
-arg_first_less_than
-    Find first index where condition holds.
-arg_smallest_less_than
-    Find index of smallest value below threshold.
-ilqr
-    Main iLQR optimization routine.
-
 Notes
 -----
 iLQR iteratively refines a control sequence by:

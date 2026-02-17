@@ -5,28 +5,6 @@ This module provides training routines for XFADS models using JAX and Optax.
 It implements efficient batch training with multi-device support, progress
 tracking, and validation-based early stopping. The training is based on
 maximizing the Evidence Lower Bound (ELBO) objective.
-
-Functions
----------
-train_test_split
-    Split arrays into training and test sets with random permutation.
-dataloader
-    Yield mini-batches with epoch and batch counters.
-compute_patience
-    Compute early-stopping patience in epochs from total steps.
-batch_elbo
-    Compute Evidence Lower Bound (ELBO) for batched sequences.
-batch_loss
-    Compute mean negative ELBO (and regularization) for a batch.
-train
-    Training routine for XFADS models with multi-device support.
-
-Variables
----------
-DEFAULT_TRAINER_CONFIG : DictConfig
-    Default training configuration for XFADS models with comprehensive
-    hyperparameter settings including optimization, regularization, and
-    early stopping parameters.
 """
 
 from functools import partial
