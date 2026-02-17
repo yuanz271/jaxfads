@@ -168,6 +168,11 @@ uv run ruff check . --fix            # Auto-fix
 | `omegaconf` | Config management |
 | `gearax` | GitHub dependency pinned in `pyproject.toml` |
 
+## Security Notes
+
+- Dependabot reports a minor advisory for `fonttools` **4.59.0**, pulled in via the dev dependency `matplotlib`.
+- This impacts development tooling only; no runtime dependency for the library.
+
 ## Known Issues
 
 - TODO in `core.py:100`: Prior placement undecided (approx vs dynamics)
