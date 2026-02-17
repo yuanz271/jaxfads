@@ -168,6 +168,7 @@ uv run ruff check . --fix            # Auto-fix
 | `omegaconf` | Config management |
 | `gearax` | GitHub dependency pinned in `pyproject.toml` |
 | `numpydoc` | NumPy-style docstring linting (dev) |
+| `ty` | Type checking (dev) |
 
 ## Security Notes
 
