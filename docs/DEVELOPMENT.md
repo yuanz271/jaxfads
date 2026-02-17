@@ -167,6 +167,7 @@ uv run ruff check . --fix            # Auto-fix
 | `tensorflow-probability[jax]` | Probability distributions |
 | `omegaconf` | Config management |
 | `gearax` | GitHub dependency pinned in `pyproject.toml` |
+| `numpydoc` | NumPy-style docstring linting (dev) |
 
 ## Security Notes
 
