@@ -61,8 +61,6 @@ pip install -e .
 
 `gearax` is installed from its GitHub repository at a pinned commit during installation.
 
-For development workflows and project conventions, see [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
-
 ## Project Layout
 
 - `src/jaxfads/core.py`: Filtering primitives and shared interfaces.
