@@ -8,7 +8,6 @@ XFADS is a JAX-based library for Bayesian state-space modeling using variational
 
 - [Overview](#overview)
 - [Features](#features)
-- [Quick Start](#quick-start)
 - [Installation](#installation)
 - [Project Layout](#project-layout)
 - [Citation & Resources](#citation--resources)
@@ -16,6 +15,8 @@ XFADS is a JAX-based library for Bayesian state-space modeling using variational
 ## Overview
 
 XFADS provides a unified framework for building differentiable dynamical systems where both the latent transitions and observation models can be learned. The package focuses on scalable variational smoothing techniques, enabling practitioners to prototype custom exponential-family models without re-implementing inference algorithms.
+
+For a runnable walkthrough, see `examples/toy_example.py`.
 
 ## Features
 
@@ -25,45 +26,10 @@ XFADS provides a unified framework for building differentiable dynamical systems
 - **Accelerated JAX execution** with support for automatic differentiation on CPU, GPU, and TPU.
 - **Modular design** that decouples core filtering primitives from task-specific components.
 
-## Quick Start
-
-```python
-import jax.random as jr
-from omegaconf import DictConfig
-
-from jaxfads import XFADS
-
-conf = DictConfig({
-    "state_dim": 10,
-    "observation_dim": 50,
-    "mc_size": 100,
-    "approx": "DiagMVN",
-    "forward": "Linear",
-    "obs_conf": {
-        "model": "GLM",
-        "observation_dim": 50,
-        "state_dim": 10,
-        "likelihood": "Poisson",
-        "cov": [1.0] * 50,
-        "norm_readout": False,
-    },
-})
-
-key = jr.key(0)
-model = XFADS(conf, key)
-
-# observations: array with shape (time_steps, observation_dim)
-posterior = model.smooth(observations)
-```
-
-The returned posterior distribution object exposes smoothed means and covariances that can be decoded or fed into downstream tasks.
-
 ## Installation
 
 ```bash
-git clone https://github.com/yuanz271/jaxfads.git
-cd jaxfads
-pip install -e .
+pip install git+https://github.com/yuanz271/jaxfads.git
 ```
 
 `gearax` is installed from its GitHub repository at a pinned commit during installation.
