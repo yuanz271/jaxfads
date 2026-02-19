@@ -28,7 +28,7 @@ def damping_inv(a: Array, damping: float = _EPS) -> Array:
     ----------
     a : Array, shape (..., D, D)
         Input square matrix to be inverted.
-    damping : float, default=1e-6
+    damping : float, default=_EPS
         Damping factor added to the diagonal for numerical stability.
 
     Returns

@@ -102,9 +102,8 @@ Dynamics        # Transition model with forward()
 
 | Constant | Location | Purpose |
 |----------|----------|---------|
-| `MAX_LOGRATE` | `observations.py:33` | Clip log-rate for numerical stability |
-| `MAX_EXP` | `nn.py:53` | Exp overflow guard |
-| `EPS` | `nn.py:54` | Numerical epsilon |
+| `_EPS` | `constraints.py:18` | Machine epsilon (float32) for numerical stability |
+| `_MAX_LOGRATE` | `observations.py:24` | Clip log-rate for numerical stability |
 
 ### Adding New Components
 
