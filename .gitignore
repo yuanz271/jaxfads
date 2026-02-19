@@ -13,8 +13,8 @@ multirun/
 bandit/
 uv.lock
 
-# Examples (kept out of git)
-examples/
+# Examples (ignore generated PDFs only)
+examples/*.pdf
 .git-town.toml
 .pre-commit-config.yaml
 .python-version

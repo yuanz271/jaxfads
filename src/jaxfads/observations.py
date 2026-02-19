@@ -1,14 +1,14 @@
 """
 Observation/emission models for XFADS.
 
-This module implements observation components that define the relationship
-between latent states and observed data. It provides likelihood functions for
-count data (Poisson) and continuous data (Gaussian), plus an
-``ObservationModel`` wrapper that combines a likelihood with a readout module
-for parameter initialization and expected log-likelihood computation.
+This module implements concrete observation components that define the
+relationship between latent states and observed data. Abstract interfaces
+are defined in ``jaxfads.base``.
 """
 
-from abc import ABC, abstractmethod
+from abc import abstractmethod
+from collections.abc import Callable
+from typing import Protocol
 
 import equinox as eqx
 import tensorflow_probability.substrates.jax.distributions as tfp
@@ -19,6 +19,7 @@ from jax import random as jrnd
 from gearax.mixin import SubclassRegistryMixin
 from gearax.modules import ConfModule
 
+from .base import ObservationModel
 from .constraints import constrain_positive, unconstrain_positive
 from .distributions import Approx
 from .nn import StationaryLinear, VariantBiasLinear
@@ -59,70 +60,68 @@ def make_readout(conf, key: Array) -> StationaryLinear | VariantBiasLinear:
     )
 
 
-class Likelihood(SubclassRegistryMixin, ConfModule):
+class Likelihood(Protocol):
     """
-    Abstract base class for observation/emission models in XFADS.
+    Protocol for observation/emission likelihoods in XFADS.
 
     Defines the interface for computing expected log-likelihoods of
-    observations given latent state distributions. Subclasses implement
-    specific observation models (e.g., Poisson, Gaussian).
-
-    Methods
-    -------
-    eloglik(key, t, moment, y, approx, mc_size, readout)
-        Compute expected log-likelihood E_{q(z)}[log p(y|z)].
-    initialize(t, y, u, c)
-        Initialize likelihood parameters from data statistics.
-    readout_init_target(mean_y)
-        Transform mean observations into readout initialization targets.
-
-    Notes
-    -----
-    The expected log-likelihood is a key component of the ELBO objective:
-
-    .. math::
-
-        \\mathcal{L} = \\sum_t E_{q(z_t)}[\\log p(y_t | z_t)] - KL(q || p)
-
-    Implementations should handle uncertainty propagation from the
-    approximate posterior q(z) through the observation model.
+    observations given latent state distributions.
     """
 
     def initialize(self, t: Array, y: Array, u: Array, c: Array) -> "Likelihood":
         """
         Initialize likelihood parameters from data statistics.
 
-        Parameters
-        ----------
-        t : Array
-            Time steps for the sequences.
-        y : Array
-            Observation sequences.
-        u : Array
-            Control input sequences.
-        c : Array
-            Covariate sequences.
-
         Returns
         -------
         Likelihood
             Updated likelihood instance. Default implementation is a no-op.
+        """
+        ...
+
+    def readout_init_target(self, mean_y: Array) -> Array:
+        """
+        Transform mean observations into readout initialization targets.
+
+        Returns
+        -------
+        Array
+            Initialization targets for the readout biases.
+        """
+        ...
+
+    def eloglik(
+        self,
+        key: Array,
+        t: Array,
+        moment: Array,
+        y: Array,
+        approx: type[Approx],
+        mc_size: int,
+        readout: Callable[..., Array],
+    ) -> Array:
+        """
+        Compute expected log-likelihood of observations.
+        """
+        ...
+
+
+class LikelihoodRegistry(SubclassRegistryMixin, ConfModule):
+    """
+    Registry base class for likelihood implementations.
+    """
+
+    def initialize(
+        self, t: Array, y: Array, u: Array, c: Array
+    ) -> "LikelihoodRegistry":
+        """
+        Initialize likelihood parameters from data statistics.
         """
         return self
 
     def readout_init_target(self, mean_y: Array) -> Array:
         """
         Transform mean observations into readout initialization targets.
-
-        Parameters
-        ----------
-        mean_y : Array
-            Mean observations over the batch dimension.
-
-        Returns
-        -------
-        Array
-            Initialization targets for the readout biases.
         """
         return mean_y
 
@@ -133,68 +132,12 @@ class Likelihood(SubclassRegistryMixin, ConfModule):
         t: Array,
         moment: Array,
         y: Array,
-        approx,
+        approx: type[Approx],
         mc_size: int,
-        readout,
+        readout: Callable[..., Array],
     ) -> Array:
         """
         Compute expected log-likelihood of observations.
-
-        Parameters
-        ----------
-        key : Array
-            JAX PRNG key for stochastic computation (if needed).
-        t : Array
-            Time index for time-varying parameters.
-        moment : Array
-            Moment parameters of the latent state distribution q(z_t).
-        y : Array
-            Observed data at time t.
-        approx : type[Approx]
-            Exponential family approximation class defining q(z).
-        mc_size : int
-            Number of Monte Carlo samples (for stochastic approximations).
-        readout : callable
-            Readout module mapping latent states to observation parameters.
-
-        Returns
-        -------
-        Array
-            Expected log-likelihood E_{q(z_t)}[log p(y_t | z_t)].
-        """
-        ...
-
-
-class ObservationModel(SubclassRegistryMixin, ConfModule):
-    """
-    Abstract observation model interface.
-
-    Observation models combine readouts and likelihoods to compute expected
-    log-likelihoods and initialize observation parameters.
-    """
-
-    readout: eqx.AbstractVar[object]
-    likelihood: eqx.AbstractVar[Likelihood]
-
-    @abstractmethod
-    def eloglik(
-        self,
-        key: Array,
-        t: Array,
-        moment: Array,
-        y: Array,
-        approx: type[Approx],
-        mc_size: int,
-    ) -> Array:
-        """
-        Compute expected log-likelihood for observations.
-        """
-        ...
-
-    @abstractmethod
-    def initialize(self, t: Array, y: Array, u: Array, c: Array) -> "ObservationModel":
-        """
-        Initialize observation parameters from data statistics.
         """
         ...
 
@@ -216,7 +159,7 @@ class GLM(ObservationModel):
         self.readout = make_readout(conf, readout_key)
         key, likelihood_key = jrnd.split(key)
         likelihood_name = conf.get("observation", "Poisson")
-        self.likelihood = Likelihood.get_subclass(likelihood_name)(
+        self.likelihood = LikelihoodRegistry.get_subclass(likelihood_name)(
             conf,
             key=likelihood_key,
         )
@@ -301,10 +244,11 @@ __all__ = [
     "DiagGaussian",
     "make_readout",
     "Likelihood",
+    "LikelihoodRegistry",
 ]
 
 
-class Poisson(Likelihood):
+class Poisson(LikelihoodRegistry):
     """
     Poisson observation model for count data in XFADS.
 
@@ -405,7 +349,7 @@ class Poisson(Likelihood):
         return ll
 
 
-class DiagGaussian(Likelihood):
+class DiagGaussian(LikelihoodRegistry):
     """
     Diagonal Gaussian observation model for continuous data in XFADS.
 

@@ -160,6 +160,7 @@ Docstrings that say "See base class" are allowed to omit summary/Parameters/Retu
 - **NO** `as any`, `@ts-ignore` equivalents for type suppression
 - **NO** empty exception handlers
 - **NO** committing without running `uv run ruff check .`
+- **NO** committing without running formatters (e.g., `uv run ruff format .`) if applicable.
 
 ## Testing Conventions
 

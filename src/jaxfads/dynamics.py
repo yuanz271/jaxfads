@@ -1,15 +1,12 @@
 """
 Dynamics models for XFADS.
 
-This module implements various dynamics models for state transitions in
-XFADS. It provides abstract interfaces for dynamics and noise models,
-along with concrete implementations for common cases.
+This module implements concrete dynamics models for state transitions in
+XFADS. Abstract interfaces are defined in ``jaxfads.base``.
 """
 
-from abc import abstractmethod
 from collections.abc import Callable
 from functools import partial
-from typing import Protocol
 
 import equinox as eqx
 import jax
@@ -17,31 +14,9 @@ from jax import Array
 from jax import numpy as jnp
 from jax import random as jr
 
-from gearax.mixin import SubclassRegistryMixin
-from gearax.modules import ConfModule
-
+from .base import Noise
 from .constraints import constrain_positive, unconstrain_positive
 from .distributions import Approx
-
-
-class Noise(Protocol):
-    """
-    Protocol for noise models in dynamics systems.
-
-    Defines the interface that all noise models must implement to be
-    compatible with XFADS dynamics models.
-    """
-
-    def cov(self) -> Array:
-        """
-        Get the noise covariance matrix.
-
-        Returns
-        -------
-        Array
-            Noise covariance matrix or covariance parameters.
-        """
-        ...
 
 
 def predict_moment(
@@ -236,95 +211,3 @@ class DiagGaussian(eqx.Module, strict=True):
 
     # def set_static(self, static=True) -> None:
     #     self.__dataclass_fields__['unconstrained_cov'].metadata = {'static': static}
-
-
-class Dynamics(SubclassRegistryMixin, ConfModule):  # pyright: ignore[reportImplicitAbstractClass]
-    """
-    Abstract base class for dynamics models in XFADS.
-
-    Defines the interface for state transition models that describe how
-    the latent state evolves over time. Concrete subclasses implement
-    specific dynamics such as linear, nonlinear, or neural dynamics.
-
-    Attributes
-    ----------
-    noise : Noise
-        Process noise model for the dynamics.
-
-    Notes
-    -----
-    The dynamics model defines the state transition:
-    z_{t+1} = f(z_t, u_t, c_t) + ε_t
-
-    where f is implemented by the forward() method and ε_t ~ noise.
-    """
-
-    noise: eqx.AbstractVar[Noise]
-
-    @abstractmethod
-    def forward(self, z: Array, u: Array, c: Array, *, key=None) -> Array:
-        """
-        Compute the deterministic part of state transition.
-
-        Parameters
-        ----------
-        z : Array, shape (state_dim,)
-            Current state vector.
-        u : Array, shape (input_dim,)
-            Control/input vector.
-        c : Array, shape (covariate_dim,)
-            Covariate vector.
-        key : PRNGKeyArray, optional
-            Random key for stochastic dynamics (e.g., dropout).
-
-        Returns
-        -------
-        Array, shape (state_dim,)
-            Predicted next state mean (before adding noise).
-
-        Notes
-        -----
-        This method should implement the deterministic function f in:
-        z_{t+1} = f(z_t, u_t, c_t) + ε_t
-
-        The noise ε_t is handled separately by the noise model.
-        """
-        ...
-
-    def __call__(self, *args, **kwargs) -> Array:
-        """
-        Convenience method to call forward().
-
-        Returns
-        -------
-        Array
-            Result of forward(*args, **kwargs).
-        """
-        return self.forward(*args, **kwargs)
-
-    def cov(self) -> Array:
-        """
-        Get the process noise covariance.
-
-        Returns
-        -------
-        Array
-            Noise covariance matrix or parameters.
-        """
-        return self.noise.cov()  # type: ignore
-
-    def loss(self) -> Array | float:
-        """
-        Compute regularization loss for the dynamics.
-
-        Returns
-        -------
-        Array or float
-            Regularization loss (default: 0.0).
-
-        Notes
-        -----
-        Subclasses can override this to add parameter regularization,
-        stability constraints, or other penalties.
-        """
-        return 0.0

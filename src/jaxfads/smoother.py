@@ -20,9 +20,10 @@ from gearax.modules import ConfModule, load_model, save_model
 from . import core, encoders
 from .core import Mode
 from .distributions import Approx
-from .dynamics import Dynamics
+from .base import Dynamics
 from .nn import DataMasker
-from .observations import GLM, ObservationModel
+from .base import ObservationModel
+from .observations import GLM
 from .util import vmap_with_key
 from .logging import get_logger
 

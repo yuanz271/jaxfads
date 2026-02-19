@@ -4,7 +4,7 @@ from jax import random as jrnd
 from omegaconf import OmegaConf
 
 from jaxfads.distributions import DiagMVN
-from jaxfads.observations import GLM, DiagGaussian, Poisson
+from jaxfads.observations import GLM
 
 
 def _poisson_conf(state_dim: int, observation_dim: int, *, n_steps: int = 0):

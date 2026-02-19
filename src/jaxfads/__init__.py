@@ -34,7 +34,17 @@ Examples
 >>> model = XFADS(conf, key)
 """
 
+from .base import Dynamics, Noise, ObservationModel
 from .logging import configure_logging, get_logger
+from .observations import Likelihood
 from .smoother import XFADS
 
-__all__ = ["XFADS", "configure_logging", "get_logger"]
+__all__ = [
+    "Dynamics",
+    "Likelihood",
+    "Noise",
+    "ObservationModel",
+    "XFADS",
+    "configure_logging",
+    "get_logger",
+]

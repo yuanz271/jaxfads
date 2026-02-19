@@ -347,9 +347,9 @@ class StationaryLinear(Module):
             Updated layer with bias set.
         """
         if isinstance(self.layer, WeightNorm):
-            layer = eqx.tree_at(lambda l: l.layer.bias, self.layer, bias)
+            layer = eqx.tree_at(lambda layer_: layer_.layer.bias, self.layer, bias)
         else:
-            layer = eqx.tree_at(lambda l: l.bias, self.layer, bias)
+            layer = eqx.tree_at(lambda layer_: layer_.bias, self.layer, bias)
         return eqx.tree_at(lambda r: r.layer, self, layer)
 
 

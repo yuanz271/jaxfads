@@ -5,7 +5,7 @@ from omegaconf import OmegaConf
 
 from jaxfads.trainer import train
 from jaxfads.smoother import XFADS
-from jaxfads.dynamics import Dynamics, Noise
+from jaxfads.base import Dynamics, Noise
 
 
 class MockDynamics(Dynamics):

@@ -5,7 +5,7 @@ from tempfile import TemporaryDirectory
 from jax import Array, random as jr
 from omegaconf import OmegaConf, DictConfig
 import equinox as eqx
-from jaxfads.dynamics import Dynamics, Noise
+from jaxfads.base import Dynamics, Noise
 from jaxfads.smoother import XFADS
 
 

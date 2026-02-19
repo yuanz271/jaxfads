@@ -6,7 +6,8 @@ import equinox as eqx
 from omegaconf import OmegaConf
 
 from jaxfads.smoother import XFADS
-from jaxfads.dynamics import Dynamics, Noise, DiagGaussian
+from jaxfads.base import Dynamics, Noise
+from jaxfads.dynamics import DiagGaussian
 from jaxfads.diagnostics import (
     LossStats,
     GradStats,

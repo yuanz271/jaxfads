@@ -7,14 +7,9 @@ import chex
 from omegaconf import OmegaConf
 
 from jaxfads.distributions import DiagMVN
-from jaxfads.dynamics import (
-    Dynamics,
-    predict_moment,
-    sample_expected_moment,
-    DiagGaussian,
-)
+from jaxfads.base import Dynamics, Noise
+from jaxfads.dynamics import DiagGaussian, predict_moment, sample_expected_moment
 from jaxfads.nn import make_mlp
-from jaxfads.dynamics import Noise
 
 
 class Nonlinear(Dynamics):

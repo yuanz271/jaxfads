@@ -21,6 +21,15 @@ def test_elbo_matches_manual():
     expected = _eloglik_stub(None, None, None, y, None, None) - DiagMVN.kl(
         moment, moment_p
     )
-    value = elbo(jrnd.key(0), jnp.array(0), moment, moment_p, y, _eloglik_stub, DiagMVN, mc_size=1)
+    value = elbo(
+        jrnd.key(0),
+        jnp.array(0),
+        moment,
+        moment_p,
+        y,
+        _eloglik_stub,
+        DiagMVN,
+        mc_size=1,
+    )
 
     chex.assert_trees_all_close(value, expected)

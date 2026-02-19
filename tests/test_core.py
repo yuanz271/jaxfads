@@ -6,7 +6,8 @@ from jax import random as jrnd
 
 from jaxfads import core
 from jaxfads.distributions import DiagMVN
-from jaxfads.dynamics import DiagGaussian, Dynamics, Noise
+from jaxfads.base import Dynamics, Noise
+from jaxfads.dynamics import DiagGaussian
 
 
 class IdentityDynamics(Dynamics):
@@ -44,9 +45,7 @@ def test_filter_shapes_and_finite():
     u = jnp.zeros((T, 0))
     c = jnp.zeros((T, 0))
 
-    nature_f, moment_f, moment_p = core.filter(
-        model, key, jnp.arange(T), alpha, u, c
-    )
+    nature_f, moment_f, moment_p = core.filter(model, key, jnp.arange(T), alpha, u, c)
 
     chex.assert_shape(nature_f, (T, param_dim))
     chex.assert_shape(moment_f, (T, param_dim))
@@ -67,9 +66,7 @@ def test_bismooth_shapes_and_finite():
     u = jnp.zeros((T, 0))
     c = jnp.zeros((T, 0))
 
-    nature_s, moment_s, moment_p = core.bismooth(
-        model, key, jnp.arange(T), alpha, u, c
-    )
+    nature_s, moment_s, moment_p = core.bismooth(model, key, jnp.arange(T), alpha, u, c)
 
     chex.assert_shape(nature_s, (T, param_dim))
     chex.assert_shape(moment_s, (T, param_dim))
