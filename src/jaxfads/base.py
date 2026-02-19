@@ -93,7 +93,7 @@ class Dynamics(SubclassRegistryMixin, ConfModule):  # pyright: ignore[reportImpl
         Array
             Noise covariance matrix or parameters.
         """
-        return self.noise.cov()  # type: ignore
+        return self.noise.cov()
 
     def loss(self) -> Array | float:
         """

@@ -686,5 +686,5 @@ class DataMasker(eqx.Module, strict=True):
             )
         else:
             q = 1 - jax.lax.stop_gradient(self.p)
-            mask = jrnd.bernoulli(key, q, shape)  # type: ignore
+            mask = jrnd.bernoulli(key, q, shape)
             return mask

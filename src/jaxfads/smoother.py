@@ -364,12 +364,10 @@ class XFADS(ConfModule):
 
                     key, mask_key = jrnd.split(key)
                     mask_a = self.masker(y, key=mask_key)
-                    a = jnp.where(mask_a, a, 0)  # type: ignore # pseudo missing values
+                    a = jnp.where(mask_a, a, 0)  # pseudo missing values
 
                     key, beta_key = jrnd.split(key)
-                    b = batch_constrain_natural(
-                        batch_beta_encode(a, key=beta_key)  # type: ignore
-                    )
+                    b = batch_constrain_natural(batch_beta_encode(a, key=beta_key))
 
                     key, mask_key = jrnd.split(key)
                     mask_b = self.masker(y, key=mask_key)
