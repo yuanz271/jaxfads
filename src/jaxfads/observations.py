@@ -17,10 +17,11 @@ from jax import random as jrnd
 
 from .base import ObservationModel
 from .constraints import constrain_positive, unconstrain_positive
+from .constraints import _EPS
 from .distributions import Approx
 from .nn import StationaryLinear, VariantBiasLinear
 
-MAX_LOGRATE = 7.0
+_MAX_LOGRATE = 7.0
 
 
 def make_readout(conf, key: Array) -> StationaryLinear | VariantBiasLinear:
@@ -263,7 +264,7 @@ class Poisson:
         Array
             Log-mean targets for initializing the readout biases.
         """
-        return jnp.log(jnp.maximum(mean_y, 1e-6))
+        return jnp.log(jnp.maximum(mean_y, _EPS))
 
     def eloglik(
         self,
@@ -314,8 +315,8 @@ class Poisson:
         C = readout.weight
         cvc = jnp.diag(C @ V @ C.T)
         loglam = eta + 0.5 * cvc
-        # loglam = jnp.where(loglam < MAX_LOGRATE, loglam, jnp.log(loglam))
-        loglam = jnp.minimum(loglam, MAX_LOGRATE)
+        # loglam = jnp.where(loglam < _MAX_LOGRATE, loglam, jnp.log(loglam))
+        loglam = jnp.minimum(loglam, _MAX_LOGRATE)
         lam = jnp.exp(loglam)
         ll = jnp.sum(y * eta - lam)
         return ll

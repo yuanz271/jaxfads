@@ -17,10 +17,10 @@ from tensorflow_probability.substrates.jax import distributions as tfd
 
 from gearax.mixin import SubclassRegistryMixin
 
-from .constraints import constrain_positive, unconstrain_positive
+from .constraints import _EPS, constrain_positive, unconstrain_positive
 
 
-def damping_inv(a: Array, damping: float = 1e-6) -> Array:
+def damping_inv(a: Array, damping: float = _EPS) -> Array:
     """
     Compute the inverse of a matrix with damping for numerical stability.
 
@@ -488,7 +488,7 @@ class FullMVN(Approx):
         m = cls.variable_size(n)
         nat1, nat2_flat = jnp.split(natural, [m])
         neg_nat2 = jnp.reshape(-nat2_flat, (m, m))
-        L = jnp.linalg.cholesky(neg_nat2 + 1e-6 * jnp.eye(m))
+        L = jnp.linalg.cholesky(neg_nat2 + _EPS * jnp.eye(m))
         return jnp.concatenate((nat1, L.flatten()))
 
     @classmethod
@@ -659,13 +659,13 @@ class DiagMVN(Approx):
 
         Notes
         -----
-        A minimum floor of 1e-6 is applied to the covariance before
+        A minimum floor of _EPS is applied to the covariance before
         inversion to prevent extreme natural parameters (nat2 ~ -1/2cov)
         when the covariance is near zero.  This mirrors the damping used
         in ``FullMVN.moment_to_natural`` via ``damping_inv``.
         """
         mean, cov = cls.moment_to_canon(moment)
-        cov = jnp.maximum(cov, 1e-6)
+        cov = jnp.maximum(cov, _EPS)
         nat2 = -0.5 / cov
         nat1 = mean / cov
         return jnp.concatenate((nat1, nat2))
@@ -713,16 +713,16 @@ class DiagMVN(Approx):
         -----
         ``moment_to_canon`` returns *variance* vectors, but TFP's
         ``MultivariateNormalDiag`` expects ``scale_diag`` (std).
-        We convert via ``sqrt(max(cov, 1e-6))`` to avoid sqrt-of-zero.
+        We convert via ``sqrt(max(cov, _EPS))`` to avoid sqrt-of-zero.
         """
         m1, cov1 = cls.moment_to_canon(moment1)
         m2, cov2 = cls.moment_to_canon(moment2)
         return tfd.kl_divergence(
             tfd.MultivariateNormalDiag(
-                loc=m1, scale_diag=jnp.sqrt(jnp.maximum(cov1, 1e-6))
+                loc=m1, scale_diag=jnp.sqrt(jnp.maximum(cov1, _EPS))
             ),
             tfd.MultivariateNormalDiag(
-                loc=m2, scale_diag=jnp.sqrt(jnp.maximum(cov2, 1e-6))
+                loc=m2, scale_diag=jnp.sqrt(jnp.maximum(cov2, _EPS))
             ),
             allow_nan_stats=False,
         )

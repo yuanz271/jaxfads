@@ -13,8 +13,9 @@ import jax
 from jax import Array
 from jax import numpy as jnp
 
-MAX_EXP = 5.0
-EPS = jnp.finfo(jnp.float32).eps
+#: Machine epsilon for float32, used for numerical stability (e.g., matrix
+#: damping, covariance floors, Cholesky regularisation).
+_EPS: float = float(jnp.finfo(jnp.float32).eps)
 
 
 def constrain_positive(x: Array) -> Array:

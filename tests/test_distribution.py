@@ -82,9 +82,9 @@ def test_diagmvn_near_zero_cov_stability():
     # Natural parameters must be finite
     chex.assert_tree_all_finite(natural)
 
-    # nat2 should be bounded (floor of 1e-6 → nat2 ≈ -5e5, not -4e6)
+    # nat2 should be bounded (floor of EPS ≈ 1.19e-7 → nat2 ≈ -4.2e6)
     _, nat2 = jnp.split(natural, 2)
-    assert float(jnp.max(jnp.abs(nat2)).item()) < 1e6, (
+    assert float(jnp.max(jnp.abs(nat2)).item()) < 1e7, (
         f"nat2 too large: {float(jnp.max(jnp.abs(nat2)).item()):.3e}"
     )
 

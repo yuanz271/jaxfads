@@ -28,10 +28,7 @@ from jax import numpy as jnp
 from jax import random as jrnd
 
 from . import constraints
-
-_MIN_NORM: float = 1e-6
-MAX_EXP: float = 5.0
-EPS = jnp.finfo(jnp.float32).eps
+from .constraints import _EPS
 
 
 def make_mlp(
@@ -216,7 +213,7 @@ class WeightNorm(Module):
             Weight matrix normalized to unit norm along specified axes.
         """
         w = getattr(self.layer, self.weight_name)
-        w = w / (self._norm(w) + _MIN_NORM)
+        w = w / (self._norm(w) + _EPS)
 
         return w
 
