@@ -22,12 +22,7 @@ from .core import Mode
 from .distributions import Approx
 from .dynamics import Dynamics
 from .nn import DataMasker
-from .observations import (
-    DefaultObservationModel,
-    Likelihood,
-    ObservationModel,
-    make_readout,
-)
+from .observations import DefaultObservationModel, ObservationModel
 from .util import vmap_with_key
 from .logging import get_logger
 
@@ -139,7 +134,6 @@ class XFADS(ConfModule):
         seed = self.conf.seed
         dropout = self.conf.dropout
         forward = self.conf.forward
-        observation = self.conf.observation
         observation_model = self.conf.get(
             "observation_model", DefaultObservationModel.__name__
         )
@@ -151,7 +145,7 @@ class XFADS(ConfModule):
             str(self.conf.mode),
             str(self.conf.approx),
             str(forward),
-            str(observation),
+            str(self.conf.observation),
             str(observation_model),
             str(self.conf.state_dim),
             str(self.conf.observation_dim),
@@ -169,20 +163,8 @@ class XFADS(ConfModule):
         )
 
         key, ky = jrnd.split(key)
-        readout = make_readout(self.conf.obs_conf, ky)
-
-        key, ky = jrnd.split(key)
-        likelihood = Likelihood.get_subclass(observation)(
-            self.conf.obs_conf,
-            key=ky,
-        )
-
         observation_model_cls = ObservationModel.get_subclass(observation_model)
-        self.observation = observation_model_cls(
-            self.conf.obs_conf,
-            readout=readout,
-            likelihood=likelihood,
-        )
+        self.observation = observation_model_cls(self.conf.obs_conf, key=ky)
 
         key, ky = jrnd.split(key)
         self.alpha_encoder = encoders.AlphaEncoder(

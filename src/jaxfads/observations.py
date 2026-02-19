@@ -14,6 +14,7 @@ import equinox as eqx
 import tensorflow_probability.substrates.jax.distributions as tfp
 from jax import Array
 from jax import numpy as jnp
+from jax import random as jrnd
 
 from gearax.mixin import SubclassRegistryMixin
 from gearax.modules import ConfModule
@@ -164,7 +165,7 @@ class Likelihood(SubclassRegistryMixin, ConfModule):
         ...
 
 
-class ObservationModel(SubclassRegistryMixin, ConfModule, ABC):
+class ObservationModel(SubclassRegistryMixin, ConfModule):
     """
     Abstract observation model interface.
 
@@ -209,15 +210,16 @@ class DefaultObservationModel(ObservationModel):
     readout: StationaryLinear | VariantBiasLinear
     likelihood: Likelihood
 
-    def __init__(
-        self,
-        conf,
-        readout: StationaryLinear | VariantBiasLinear,
-        likelihood: Likelihood,
-    ):
+    def __init__(self, conf, key: Array):
         self.conf = conf
-        self.readout = readout
-        self.likelihood = likelihood
+        key, readout_key = jrnd.split(key)
+        self.readout = make_readout(conf, readout_key)
+        key, likelihood_key = jrnd.split(key)
+        likelihood_name = conf.get("observation", "Poisson")
+        self.likelihood = Likelihood.get_subclass(likelihood_name)(
+            conf,
+            key=likelihood_key,
+        )
 
     def eloglik(
         self,

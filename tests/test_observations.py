@@ -4,12 +4,7 @@ from jax import random as jrnd
 from omegaconf import OmegaConf
 
 from jaxfads.distributions import DiagMVN
-from jaxfads.observations import (
-    DefaultObservationModel,
-    DiagGaussian,
-    Poisson,
-    make_readout,
-)
+from jaxfads.observations import DefaultObservationModel, DiagGaussian, Poisson
 
 
 def _poisson_conf(state_dim: int, observation_dim: int, *, n_steps: int = 0):
@@ -35,12 +30,10 @@ def _gaussian_conf(state_dim: int, observation_dim: int, *, n_steps: int = 0):
     )
 
 
-def _make_observation(conf, likelihood_cls, key):
-    key, readout_key = jrnd.split(key)
-    readout = make_readout(conf, readout_key)
-    key, likelihood_key = jrnd.split(key)
-    likelihood = likelihood_cls(conf, likelihood_key)
-    return DefaultObservationModel(conf, readout=readout, likelihood=likelihood)
+def _make_observation(conf, key, *, observation="Poisson"):
+    conf = conf.copy()
+    conf.observation = observation
+    return DefaultObservationModel(conf, key)
 
 
 def test_poisson_eloglik_shape_and_finite():
@@ -48,7 +41,7 @@ def test_poisson_eloglik_shape_and_finite():
     state_dim = 2
     observation_dim = 3
     conf = _poisson_conf(state_dim, observation_dim)
-    observation = _make_observation(conf, Poisson, key)
+    observation = _make_observation(conf, key, observation="Poisson")
 
     mean = jnp.zeros(state_dim)
     cov = jnp.ones(state_dim)
@@ -65,7 +58,7 @@ def test_diag_gaussian_eloglik_shape_and_finite():
     state_dim = 2
     observation_dim = 3
     conf = _gaussian_conf(state_dim, observation_dim)
-    observation = _make_observation(conf, DiagGaussian, key)
+    observation = _make_observation(conf, key, observation="DiagGaussian")
 
     mean = jnp.zeros(state_dim)
     cov = jnp.ones(state_dim)
@@ -89,14 +82,14 @@ def test_poisson_initialize_biases():
     c = jnp.zeros((batch, time_steps, 1))
 
     conf = _poisson_conf(state_dim, observation_dim, n_steps=0)
-    observation = _make_observation(conf, Poisson, key)
+    observation = _make_observation(conf, key, observation="Poisson")
     initialized = observation.initialize(t, y, u, c)
     chex.assert_trees_all_close(
         initialized.readout.layer.bias, jnp.zeros(observation_dim)
     )
 
     conf = _poisson_conf(state_dim, observation_dim, n_steps=time_steps)
-    observation = _make_observation(conf, Poisson, key)
+    observation = _make_observation(conf, key, observation="Poisson")
     initialized = observation.initialize(t, y, u, c)
     chex.assert_trees_all_close(
         initialized.readout.biases, jnp.zeros((time_steps, observation_dim))
@@ -115,14 +108,14 @@ def test_diag_gaussian_initialize_biases():
     c = jnp.zeros((batch, time_steps, 1))
 
     conf = _gaussian_conf(state_dim, observation_dim, n_steps=0)
-    observation = _make_observation(conf, DiagGaussian, key)
+    observation = _make_observation(conf, key, observation="DiagGaussian")
     initialized = observation.initialize(t, y, u, c)
     chex.assert_trees_all_close(
         initialized.readout.layer.bias, jnp.zeros(observation_dim)
     )
 
     conf = _gaussian_conf(state_dim, observation_dim, n_steps=time_steps)
-    observation = _make_observation(conf, DiagGaussian, key)
+    observation = _make_observation(conf, key, observation="DiagGaussian")
     initialized = observation.initialize(t, y, u, c)
     chex.assert_trees_all_close(
         initialized.readout.biases, jnp.zeros((time_steps, observation_dim))
