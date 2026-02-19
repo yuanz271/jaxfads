@@ -22,7 +22,7 @@ from .core import Mode
 from .distributions import Approx
 from .dynamics import Dynamics
 from .nn import DataMasker
-from .observations import DefaultObservationModel, ObservationModel
+from .observations import GLM, ObservationModel
 from .util import vmap_with_key
 from .logging import get_logger
 
@@ -134,9 +134,7 @@ class XFADS(ConfModule):
         seed = self.conf.seed
         dropout = self.conf.dropout
         forward = self.conf.forward
-        observation_model = self.conf.get(
-            "observation_model", DefaultObservationModel.__name__
-        )
+        observation_model = self.conf.get("observation_model", GLM.__name__)
 
         key = jrnd.key(seed)
 

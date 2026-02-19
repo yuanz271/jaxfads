@@ -199,9 +199,9 @@ class ObservationModel(SubclassRegistryMixin, ConfModule):
         ...
 
 
-class DefaultObservationModel(ObservationModel):
+class GLM(ObservationModel):
     """
-    Default observation model composed of a likelihood and readout.
+    GLM observation model composed of a likelihood and readout.
 
     This wrapper owns the readout module and the likelihood, delegating
     expected log-likelihood computations and coordinating initialization.
@@ -255,9 +255,7 @@ class DefaultObservationModel(ObservationModel):
         """
         return self.likelihood.eloglik(key, t, moment, y, approx, mc_size, self.readout)
 
-    def initialize(
-        self, t: Array, y: Array, u: Array, c: Array
-    ) -> "DefaultObservationModel":
+    def initialize(self, t: Array, y: Array, u: Array, c: Array) -> "GLM":
         """
         Initialize likelihood and readout parameters from data statistics.
 
@@ -274,7 +272,7 @@ class DefaultObservationModel(ObservationModel):
 
         Returns
         -------
-        DefaultObservationModel
+        GLM
             Updated observation model with initialized components.
         """
         likelihood = self.likelihood.initialize(t, y, u, c)
@@ -297,7 +295,7 @@ class DefaultObservationModel(ObservationModel):
 
 
 __all__ = [
-    "DefaultObservationModel",
+    "GLM",
     "ObservationModel",
     "Poisson",
     "DiagGaussian",

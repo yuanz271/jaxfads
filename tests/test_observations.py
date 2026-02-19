@@ -4,7 +4,7 @@ from jax import random as jrnd
 from omegaconf import OmegaConf
 
 from jaxfads.distributions import DiagMVN
-from jaxfads.observations import DefaultObservationModel, DiagGaussian, Poisson
+from jaxfads.observations import GLM, DiagGaussian, Poisson
 
 
 def _poisson_conf(state_dim: int, observation_dim: int, *, n_steps: int = 0):
@@ -33,7 +33,7 @@ def _gaussian_conf(state_dim: int, observation_dim: int, *, n_steps: int = 0):
 def _make_observation(conf, key, *, observation="Poisson"):
     conf = conf.copy()
     conf.observation = observation
-    return DefaultObservationModel(conf, key)
+    return GLM(conf, key)
 
 
 def test_poisson_eloglik_shape_and_finite():
