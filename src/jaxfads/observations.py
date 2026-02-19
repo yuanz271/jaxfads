@@ -19,9 +19,18 @@ from gearax.modules import ConfModule
 
 from .constraints import constrain_positive, unconstrain_positive
 from .distributions import Approx
-from .nn import StationaryLinear, VariantBiasLinear
+from .nn import StationaryLinear, VariantBiasLinear, WeightNorm
 
 MAX_LOGRATE = 7.0
+
+
+def _set_stationary_bias(readout: StationaryLinear, bias: Array) -> StationaryLinear:
+    layer = readout.layer
+    if isinstance(layer, WeightNorm):
+        layer = eqx.tree_at(lambda l: l.layer.bias, layer, bias)
+    else:
+        layer = eqx.tree_at(lambda l: l.bias, layer, bias)
+    return eqx.tree_at(lambda r: r.layer, readout, layer)
 
 
 class Likelihood(SubclassRegistryMixin, ConfModule):
@@ -36,6 +45,8 @@ class Likelihood(SubclassRegistryMixin, ConfModule):
     -------
     eloglik(key, t, moment, y, approx, mc_size)
         Compute expected log-likelihood E_{q(z)}[log p(y|z)].
+    initialize(t, y, u, c)
+        Initialize likelihood parameters from data statistics.
 
     Notes
     -----
@@ -48,6 +59,28 @@ class Likelihood(SubclassRegistryMixin, ConfModule):
     Implementations should handle uncertainty propagation from the
     approximate posterior q(z) through the observation model.
     """
+
+    def initialize(self, t: Array, y: Array, u: Array, c: Array) -> "Likelihood":
+        """
+        Initialize likelihood parameters from data statistics.
+
+        Parameters
+        ----------
+        t : Array
+            Time steps for the sequences.
+        y : Array
+            Observation sequences.
+        u : Array
+            Control input sequences.
+        c : Array
+            Covariate sequences.
+
+        Returns
+        -------
+        Likelihood
+            Updated likelihood instance. Default implementation is a no-op.
+        """
+        return self
 
     @abstractmethod
     def eloglik(
@@ -145,6 +178,36 @@ class Poisson(Likelihood):
             Whether to make parameters static.
         """
         self.readout.set_static(static)  # type: ignore
+
+    def initialize(self, t: Array, y: Array, u: Array, c: Array) -> "Poisson":
+        """
+        Initialize readout biases from observation means.
+
+        Parameters
+        ----------
+        t : Array
+            Time steps for the sequences.
+        y : Array
+            Observation sequences.
+        u : Array
+            Control input sequences.
+        c : Array
+            Covariate sequences.
+
+        Returns
+        -------
+        Poisson
+            Updated Poisson likelihood with initialized biases.
+        """
+        mean_y = jnp.mean(y, axis=0)
+        if isinstance(self.readout, VariantBiasLinear):
+            biases = jnp.log(jnp.maximum(mean_y, 1e-6))
+            readout = eqx.tree_at(lambda r: r.biases, self.readout, biases)
+        else:
+            mean_y = jnp.mean(mean_y, axis=0)
+            bias = jnp.log(jnp.maximum(mean_y, 1e-6))
+            readout = _set_stationary_bias(self.readout, bias)
+        return eqx.tree_at(lambda m: m.readout, self, readout)
 
     def eloglik(
         self, key: Array, t: Array, moment: Array, y: Array, approx, mc_size: int
@@ -271,6 +334,34 @@ class DiagGaussian(Likelihood):
         Applies positive constraint to ensure valid variance values.
         """
         return constrain_positive(self.unconstrained_cov)
+
+    def initialize(self, t: Array, y: Array, u: Array, c: Array) -> "DiagGaussian":
+        """
+        Initialize readout biases from observation means.
+
+        Parameters
+        ----------
+        t : Array
+            Time steps for the sequences.
+        y : Array
+            Observation sequences.
+        u : Array
+            Control input sequences.
+        c : Array
+            Covariate sequences.
+
+        Returns
+        -------
+        DiagGaussian
+            Updated Gaussian likelihood with initialized biases.
+        """
+        mean_y = jnp.mean(y, axis=0)
+        if isinstance(self.readout, VariantBiasLinear):
+            readout = eqx.tree_at(lambda r: r.biases, self.readout, mean_y)
+        else:
+            bias = jnp.mean(mean_y, axis=0)
+            readout = _set_stationary_bias(self.readout, bias)
+        return eqx.tree_at(lambda m: m.readout, self, readout)
 
     def eloglik(
         self,

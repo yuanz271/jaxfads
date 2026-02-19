@@ -207,13 +207,10 @@ class XFADS(ConfModule):
 
         Notes
         -----
-        Initializes observation model biases based on empirical mean of
-        observations. Particularly useful for Poisson observations where
-        biases are set to log-mean rates.
+        Delegates initialization to the likelihood implementation.
         """
-        mean_y = jnp.mean(y, axis=0)
-        biases = jnp.log(jnp.maximum(mean_y, 1e-6))
-        return eqx.tree_at(lambda model: model.likelihood.readout.biases, self, biases)
+        likelihood = self.likelihood.initialize(t, y, u, c)
+        return eqx.tree_at(lambda model: model.likelihood, self, likelihood)
 
     @classmethod
     def load(cls, path: str | Path):

@@ -99,7 +99,7 @@ def make_mlp(
     key, layer_key = jrnd.split(key)
     layers.append(enn.Linear(width, out_size, key=layer_key, use_bias=final_bias))
     if final_activation is not None:
-        layers.append(enn.Lambda(activation))
+        layers.append(enn.Lambda(final_activation))
     if dropout is not None:
         layers.append(enn.Dropout(dropout))
 

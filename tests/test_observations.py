@@ -7,24 +7,24 @@ from jaxfads.distributions import DiagMVN
 from jaxfads.observations import DiagGaussian, Poisson
 
 
-def _poisson_conf(state_dim: int, observation_dim: int):
+def _poisson_conf(state_dim: int, observation_dim: int, *, n_steps: int = 0):
     return OmegaConf.create(
         dict(
             state_dim=state_dim,
             observation_dim=observation_dim,
-            n_steps=0,
+            n_steps=n_steps,
             norm_readout=False,
         )
     )
 
 
-def _gaussian_conf(state_dim: int, observation_dim: int):
+def _gaussian_conf(state_dim: int, observation_dim: int, *, n_steps: int = 0):
     return OmegaConf.create(
         dict(
             state_dim=state_dim,
             observation_dim=observation_dim,
             cov=[1.0] * observation_dim,
-            n_steps=0,
+            n_steps=n_steps,
             norm_readout=False,
         )
     )
@@ -62,3 +62,55 @@ def test_diag_gaussian_eloglik_shape_and_finite():
     ll = model.eloglik(key, jnp.array(0), moment, y, DiagMVN, mc_size=1)
     chex.assert_shape(ll, ())
     chex.assert_tree_all_finite(ll)
+
+
+def test_poisson_initialize_biases():
+    key = jrnd.key(2)
+    state_dim = 2
+    observation_dim = 3
+    time_steps = 4
+    batch = 2
+    t = jnp.arange(time_steps)
+    y = jnp.ones((batch, time_steps, observation_dim))
+    u = jnp.zeros((batch, time_steps, 1))
+    c = jnp.zeros((batch, time_steps, 1))
+
+    conf = _poisson_conf(state_dim, observation_dim, n_steps=0)
+    model = Poisson(conf, key)
+    initialized = model.initialize(t, y, u, c)
+    chex.assert_trees_all_close(
+        initialized.readout.layer.bias, jnp.zeros(observation_dim)
+    )
+
+    conf = _poisson_conf(state_dim, observation_dim, n_steps=time_steps)
+    model = Poisson(conf, key)
+    initialized = model.initialize(t, y, u, c)
+    chex.assert_trees_all_close(
+        initialized.readout.biases, jnp.zeros((time_steps, observation_dim))
+    )
+
+
+def test_diag_gaussian_initialize_biases():
+    key = jrnd.key(3)
+    state_dim = 2
+    observation_dim = 3
+    time_steps = 4
+    batch = 2
+    t = jnp.arange(time_steps)
+    y = jnp.zeros((batch, time_steps, observation_dim))
+    u = jnp.zeros((batch, time_steps, 1))
+    c = jnp.zeros((batch, time_steps, 1))
+
+    conf = _gaussian_conf(state_dim, observation_dim, n_steps=0)
+    model = DiagGaussian(conf, key)
+    initialized = model.initialize(t, y, u, c)
+    chex.assert_trees_all_close(
+        initialized.readout.layer.bias, jnp.zeros(observation_dim)
+    )
+
+    conf = _gaussian_conf(state_dim, observation_dim, n_steps=time_steps)
+    model = DiagGaussian(conf, key)
+    initialized = model.initialize(t, y, u, c)
+    chex.assert_trees_all_close(
+        initialized.readout.biases, jnp.zeros((time_steps, observation_dim))
+    )
