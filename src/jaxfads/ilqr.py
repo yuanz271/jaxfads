@@ -47,8 +47,8 @@ def rollout(x0, u, c, f):
 
     Returns
     -------
-    Array, shape (T, D_x)
-        State trajectory excluding the final x_{T+1}.
+    Array, shape (T+1, D_x)
+        State trajectory [x_0, ..., x_T] including the terminal state.
     """
 
     def step(x_t, inputs):
@@ -56,9 +56,9 @@ def rollout(x0, u, c, f):
         x_tp1 = f(x_t, u_t, c_t)
         return x_tp1, x_t
 
-    _, x = lax.scan(step, init=x0, xs=(u, c))
+    x_T, x = lax.scan(step, init=x0, xs=(u, c))
 
-    return x
+    return jnp.vstack((x, x_T[None]))
 
 
 def cost_function(x, u, target, Q, R):
@@ -67,33 +67,41 @@ def cost_function(x, u, target, Q, R):
 
     Parameters
     ----------
-    x : Array, shape (T, D_x)
-        State trajectory.
+    x : Array, shape (T+1, D_x)
+        State trajectory [x_0, ..., x_T].
     u : Array, shape (T, D_u)
         Control trajectory.
-    target : Array, shape (T, D_x)
+    target : Array, shape (T+1, D_x)
         Target state trajectory.
-    Q : Array, shape (T, D_x, D_x)
-        State cost matrices (PD), one per time step.
+    Q : Array, shape (T+1, D_x, D_x)
+        State cost matrices (PD), one per time step (including terminal).
     R : Array, shape (T, D_u, D_u)
         Control cost matrices (PD), one per time step.
 
     Returns
     -------
     Array
-        Scalar total cost 0.5 * sum_t(||x_t - target_t||_Q^2 + ||u_t||_R^2).
+        Scalar total cost: 0.5 * [sum_{t=0}^{T-1}(||x_t - target_t||_Q^2 + ||u_t||_R^2)
+        + ||x_T - target_T||_Q^2] (terminal state cost, no control cost).
     """
-    Qcho = jnp.linalg.cholesky(Q, upper=True)
     Rcho = jnp.linalg.cholesky(R, upper=True)
 
-    def step_cost(x, u, target, Qcho, Rcho):
+    # Stage costs for t = 0, ..., T-1 (state + control)
+    Qcho_stage = jnp.linalg.cholesky(Q[:-1], upper=True)
+
+    def stage_cost(x, u, target, Qcho, Rcho):
         vx = Qcho @ (x - target)
         vu = Rcho @ u
         return jnp.inner(vx, vx) + jnp.inner(vu, vu)
 
-    costs = vmap(step_cost)(x, u, target, Qcho, Rcho)
+    stage_costs = vmap(stage_cost)(x[:-1], u, target[:-1], Qcho_stage, Rcho)
 
-    return jnp.sum(0.5 * costs)
+    # Terminal cost for x_T (state only, no control)
+    Qcho_T = jnp.linalg.cholesky(Q[-1], upper=True)
+    vx_T = Qcho_T @ (x[-1] - target[-1])
+    terminal_cost = jnp.inner(vx_T, vx_T)
+
+    return 0.5 * (jnp.sum(stage_costs) + terminal_cost)
 
 
 def backward_pass(
@@ -115,18 +123,18 @@ def backward_pass(
 
     Parameters
     ----------
-    x : Array, shape (T, D_x)
-        Current state rollout.
+    x : Array, shape (T+1, D_x)
+        Current state rollout [x_0, ..., x_T].
     u : Array, shape (T, D_u)
         Current control rollout.
     c : Array, shape (T, D_c)
         Covariates.
-    target : Array, shape (T, D_x)
+    target : Array, shape (T+1, D_x)
         Target states.
-    Q : Array, shape (D_x, D_x)
-        State cost matrix.
-    R : Array, shape (D_u, D_u)
-        Control cost matrix.
+    Q : Array, shape (T+1, D_x, D_x)
+        State cost matrices (including terminal).
+    R : Array, shape (T, D_u, D_u)
+        Control cost matrices.
     Df : callable
         Linearization function returning `(F_x, F_u)` at `(x_t, u_t, c_t)`.
     initial_damping : float, default=1e-3
@@ -218,12 +226,16 @@ def backward_pass(
 
         return (V_x, V_xx, damping), (k_t, K_t)
 
-    # Terminal cost derivatives.
+    # Terminal cost derivatives (from x_T).
     V_x = Q[-1] @ (x[-1] - target[-1])  # Gradient at final step.
     V_xx = Q[-1]  # Hessian at final step.
 
+    # Scan over T stage steps (x[0..T-1], u[0..T-1], etc.)
     _, (k, K) = lax.scan(
-        step, init=(V_x, V_xx, damping), xs=(x, u, c, target, Q, R), reverse=True
+        step,
+        init=(V_x, V_xx, damping),
+        xs=(x[:-1], u, c, target[:-1], Q[:-1], R),
+        reverse=True,
     )
 
     return k, K
@@ -241,18 +253,18 @@ def line_search(alpha, k, K, x_optimal, u_optimal, c, target, Q, R, f):
         Feedforward gains.
     K : Array, shape (T, D_u, D_x)
         Feedback gains.
-    x_optimal : Array, shape (T, D_x)
-        Current best trajectory.
+    x_optimal : Array, shape (T+1, D_x)
+        Current best trajectory [x_0, ..., x_T].
     u_optimal : Array, shape (T, D_u)
         Current best controls.
     c : Array, shape (T, D_c)
         Covariates.
-    target : Array, shape (T, D_x)
+    target : Array, shape (T+1, D_x)
         Target trajectory.
-    Q : Array, shape (D_x, D_x)
-        State cost matrix.
-    R : Array, shape (D_u, D_u)
-        Control cost matrix.
+    Q : Array, shape (T+1, D_x, D_x)
+        State cost matrices (including terminal).
+    R : Array, shape (T, D_u, D_u)
+        Control cost matrices.
     f : callable
         Dynamics function.
 
@@ -260,7 +272,7 @@ def line_search(alpha, k, K, x_optimal, u_optimal, c, target, Q, R, f):
     -------
     new_cost : Array
         Scalar cost after applying the step.
-    x_new : Array, shape (T, D_x)
+    x_new : Array, shape (T+1, D_x)
         New state trajectory.
     u_new : Array, shape (T, D_u)
         New control trajectory.
@@ -275,9 +287,10 @@ def line_search(alpha, k, K, x_optimal, u_optimal, c, target, Q, R, f):
 
         return x_tp1, (x_t, u_t)
 
-    _, (x_new, u_new) = lax.scan(
-        step, init=x_optimal[0], xs=(k, K, x_optimal, u_optimal, c)
+    x_T, (x_stage, u_new) = lax.scan(
+        step, init=x_optimal[0], xs=(k, K, x_optimal[:-1], u_optimal, c)
     )
+    x_new = jnp.vstack((x_stage, x_T[None]))
 
     new_cost = cost_function(x_new, u_new, target, Q, R)
 
@@ -336,12 +349,12 @@ def ilqr(x0, u, c, target, Q, R, f, Df, max_iter=100, tol=1e-6, verbose=False):
         Initial control sequence.
     c : Array, shape (T, D_c)
         Covariate sequence.
-    target : Array, shape (T, D_x)
-        Target state trajectory.
+    target : Array, shape (T+1, D_x)
+        Target state trajectory (including terminal target).
     Q : Array, shape (D_x, D_x)
-        State cost matrix (PD).
+        State cost matrix (PD), broadcast to T+1 steps.
     R : Array, shape (D_u, D_u)
-        Control cost matrix (PD).
+        Control cost matrix (PD), broadcast to T steps.
     f : callable
         Dynamics function mapping `(x_t, u_t, c_t) -> x_{t+1}`.
     Df : callable
@@ -357,8 +370,8 @@ def ilqr(x0, u, c, target, Q, R, f, Df, max_iter=100, tol=1e-6, verbose=False):
     -------
     u_optimal : Array, shape (T, D_u)
         Optimized control sequence.
-    x_optimal : Array, shape (T, D_x)
-        Corresponding state trajectory.
+    x_optimal : Array, shape (T+1, D_x)
+        Corresponding state trajectory [x_0, ..., x_T].
     success : bool
         Whether a successful line search step occurred in the last iteration.
     """
@@ -368,7 +381,7 @@ def ilqr(x0, u, c, target, Q, R, f, Df, max_iter=100, tol=1e-6, verbose=False):
     u_optimal = u
 
     T = len(u)
-    Q = jnp.broadcast_to(Q, (T,) + (Q.shape[-2:]))
+    Q = jnp.broadcast_to(Q, (T + 1,) + (Q.shape[-2:]))
     R = jnp.broadcast_to(R, (T,) + (R.shape[-2:]))
 
     x_optimal = rollout(x0, u_optimal, c, f)

@@ -220,7 +220,7 @@ __all__ = [
 ]
 
 
-class Poisson:
+class Poisson(eqx.Module, strict=True):
     """
     Poisson observation model for count data in XFADS.
 
@@ -246,7 +246,9 @@ class Poisson:
     and δ_t accounts for uncertainty propagation from the latent state.
     """
 
-    def __init__(self, conf, key):
+    conf: Any = eqx.field(static=True)
+
+    def __init__(self, conf, key):  # pyright: ignore[reportMissingSuperCall]
         self.conf = conf
 
     def readout_init_target(self, mean_y: Array) -> Array:
@@ -321,7 +323,7 @@ class Poisson:
         return ll
 
 
-class DiagGaussian:
+class DiagGaussian(eqx.Module, strict=True):
     """
     Diagonal Gaussian observation model for continuous data in XFADS.
 
@@ -354,9 +356,10 @@ class DiagGaussian:
     and σ²_i are observation noise variances.
     """
 
-    unconstrained_cov: Array = eqx.field(static=False)
+    unconstrained_cov: Array
+    conf: Any = eqx.field(static=True)
 
-    def __init__(self, conf, key):
+    def __init__(self, conf, key):  # pyright: ignore[reportMissingSuperCall]
         self.conf = conf
         cov = jnp.array(conf.get("cov", jnp.ones(conf.observation_dim)))
         self.unconstrained_cov = unconstrain_positive(cov)
