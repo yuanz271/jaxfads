@@ -106,7 +106,7 @@ def batch_elbo(
     Parameters
     ----------
     model : XFADS
-        The XFADS model containing likelihood and hyperparameters.
+        The XFADS model containing observation model and hyperparameters.
     key : PRNGKeyArray
         Random key for stochastic computations.
     times : Array, shape (T,)
@@ -133,7 +133,7 @@ def batch_elbo(
         jax.vmap(
             partial(
                 vi.elbo,
-                eloglik=model.likelihood.eloglik,
+                eloglik=model.observation.eloglik,
                 approx=model.approx,
                 mc_size=model.conf.mc_size,
             )

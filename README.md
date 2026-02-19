@@ -40,6 +40,7 @@ conf = DictConfig({
     "approx": "DiagMVN",
     "forward": "Linear",
     "observation": "Poisson",
+    "observation_model": "DefaultObservationModel",
 })
 
 key = jr.key(0)

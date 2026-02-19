@@ -332,6 +332,26 @@ class StationaryLinear(Module):
         """
         return self.layer.weight
 
+    def initialize(self, bias: Array) -> "StationaryLinear":
+        """
+        Initialize the bias term.
+
+        Parameters
+        ----------
+        bias : Array
+            Bias vector of shape (observation_dim,).
+
+        Returns
+        -------
+        StationaryLinear
+            Updated layer with bias set.
+        """
+        if isinstance(self.layer, WeightNorm):
+            layer = eqx.tree_at(lambda l: l.layer.bias, self.layer, bias)
+        else:
+            layer = eqx.tree_at(lambda l: l.bias, self.layer, bias)
+        return eqx.tree_at(lambda r: r.layer, self, layer)
+
 
 class VariantBiasLinear(Module):
     """
@@ -446,6 +466,22 @@ class VariantBiasLinear(Module):
         for future functionality to control parameter training.
         """
         pass
+
+    def initialize(self, biases: Array) -> "VariantBiasLinear":
+        """
+        Initialize bias terms.
+
+        Parameters
+        ----------
+        biases : Array
+            Bias array of shape (n_biases, observation_dim).
+
+        Returns
+        -------
+        VariantBiasLinear
+            Updated layer with biases set.
+        """
+        return eqx.tree_at(lambda r: r.biases, self, biases)
 
 
 def gauss_rbf(x, c, s):

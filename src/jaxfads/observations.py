@@ -1,13 +1,14 @@
 """
 Observation/emission models for XFADS.
 
-This module implements various observation models that define the relationship
+This module implements observation components that define the relationship
 between latent states and observed data. It provides likelihood functions for
-different data types including count data (Poisson) and continuous data
-(Gaussian) with support for time-varying parameters.
+count data (Poisson) and continuous data (Gaussian), plus an
+``ObservationModel`` wrapper that combines a likelihood with a readout module
+for parameter initialization and expected log-likelihood computation.
 """
 
-from abc import abstractmethod
+from abc import ABC, abstractmethod
 
 import equinox as eqx
 import tensorflow_probability.substrates.jax.distributions as tfp
@@ -19,18 +20,42 @@ from gearax.modules import ConfModule
 
 from .constraints import constrain_positive, unconstrain_positive
 from .distributions import Approx
-from .nn import StationaryLinear, VariantBiasLinear, WeightNorm
+from .nn import StationaryLinear, VariantBiasLinear
 
 MAX_LOGRATE = 7.0
 
 
-def _set_stationary_bias(readout: StationaryLinear, bias: Array) -> StationaryLinear:
-    layer = readout.layer
-    if isinstance(layer, WeightNorm):
-        layer = eqx.tree_at(lambda l: l.layer.bias, layer, bias)
-    else:
-        layer = eqx.tree_at(lambda l: l.bias, layer, bias)
-    return eqx.tree_at(lambda r: r.layer, readout, layer)
+def make_readout(conf, key: Array) -> StationaryLinear | VariantBiasLinear:
+    """
+    Construct a readout module from observation configuration.
+
+    Parameters
+    ----------
+    conf : DictConfig
+        Observation configuration containing readout settings.
+    key : Array
+        PRNG key for parameter initialization.
+
+    Returns
+    -------
+    StationaryLinear or VariantBiasLinear
+        Readout module configured for stationary or time-varying biases.
+    """
+    n_steps = conf.get("n_steps", 0)
+    if n_steps > 0:
+        return VariantBiasLinear(
+            conf.state_dim,
+            conf.observation_dim,
+            n_steps,
+            key=key,
+            norm_readout=conf.norm_readout,
+        )
+    return StationaryLinear(
+        conf.state_dim,
+        conf.observation_dim,
+        key=key,
+        norm_readout=conf.norm_readout,
+    )
 
 
 class Likelihood(SubclassRegistryMixin, ConfModule):
@@ -43,10 +68,12 @@ class Likelihood(SubclassRegistryMixin, ConfModule):
 
     Methods
     -------
-    eloglik(key, t, moment, y, approx, mc_size)
+    eloglik(key, t, moment, y, approx, mc_size, readout)
         Compute expected log-likelihood E_{q(z)}[log p(y|z)].
     initialize(t, y, u, c)
         Initialize likelihood parameters from data statistics.
+    readout_init_target(mean_y)
+        Transform mean observations into readout initialization targets.
 
     Notes
     -----
@@ -82,12 +109,127 @@ class Likelihood(SubclassRegistryMixin, ConfModule):
         """
         return self
 
+    def readout_init_target(self, mean_y: Array) -> Array:
+        """
+        Transform mean observations into readout initialization targets.
+
+        Parameters
+        ----------
+        mean_y : Array
+            Mean observations over the batch dimension.
+
+        Returns
+        -------
+        Array
+            Initialization targets for the readout biases.
+        """
+        return mean_y
+
     @abstractmethod
     def eloglik(
-        self, key: Array, t: Array, moment: Array, y: Array, approx, mc_size: int
+        self,
+        key: Array,
+        t: Array,
+        moment: Array,
+        y: Array,
+        approx,
+        mc_size: int,
+        readout,
     ) -> Array:
         """
         Compute expected log-likelihood of observations.
+
+        Parameters
+        ----------
+        key : Array
+            JAX PRNG key for stochastic computation (if needed).
+        t : Array
+            Time index for time-varying parameters.
+        moment : Array
+            Moment parameters of the latent state distribution q(z_t).
+        y : Array
+            Observed data at time t.
+        approx : type[Approx]
+            Exponential family approximation class defining q(z).
+        mc_size : int
+            Number of Monte Carlo samples (for stochastic approximations).
+        readout : callable
+            Readout module mapping latent states to observation parameters.
+
+        Returns
+        -------
+        Array
+            Expected log-likelihood E_{q(z_t)}[log p(y_t | z_t)].
+        """
+        ...
+
+
+class ObservationModel(SubclassRegistryMixin, ConfModule, ABC):
+    """
+    Abstract observation model interface.
+
+    Observation models combine readouts and likelihoods to compute expected
+    log-likelihoods and initialize observation parameters.
+    """
+
+    readout: eqx.AbstractVar[object]
+    likelihood: eqx.AbstractVar[Likelihood]
+
+    @abstractmethod
+    def eloglik(
+        self,
+        key: Array,
+        t: Array,
+        moment: Array,
+        y: Array,
+        approx: type[Approx],
+        mc_size: int,
+    ) -> Array:
+        """
+        Compute expected log-likelihood for observations.
+        """
+        ...
+
+    @abstractmethod
+    def initialize(self, t: Array, y: Array, u: Array, c: Array) -> "ObservationModel":
+        """
+        Initialize observation parameters from data statistics.
+        """
+        ...
+
+
+class DefaultObservationModel(ObservationModel):
+    """
+    Default observation model composed of a likelihood and readout.
+
+    This wrapper owns the readout module and the likelihood, delegating
+    expected log-likelihood computations and coordinating initialization.
+    """
+
+    readout: StationaryLinear | VariantBiasLinear
+    likelihood: Likelihood
+
+    def __init__(
+        self,
+        conf,
+        readout: StationaryLinear | VariantBiasLinear,
+        likelihood: Likelihood,
+    ):
+        self.conf = conf
+        self.readout = readout
+        self.likelihood = likelihood
+
+    def eloglik(
+        self,
+        key: Array,
+        t: Array,
+        moment: Array,
+        y: Array,
+        approx: type[Approx],
+        mc_size: int,
+    ) -> Array:
+        """
+        Compute expected log-likelihood using the bound likelihood.
 
         Parameters
         ----------
@@ -109,79 +251,13 @@ class Likelihood(SubclassRegistryMixin, ConfModule):
         Array
             Expected log-likelihood E_{q(z_t)}[log p(y_t | z_t)].
         """
-        ...
+        return self.likelihood.eloglik(key, t, moment, y, approx, mc_size, self.readout)
 
-
-class Poisson(Likelihood):
-    """
-    Poisson observation model for count data in XFADS.
-
-    Implements Poisson likelihood for discrete count observations with
-    log-linear dependence on latent states. Suitable for neural spike
-    counts, word counts, or other non-negative integer data.
-
-    Parameters
-    ----------
-    conf : DictConfig
-        Configuration containing:
-        - state_dim: Dimensionality of latent states
-        - observation_dim: Number of observed count variables
-        - n_steps: Number of time steps (>0 for time-varying biases)
-        - norm_readout: Whether to use weight normalization
-    key : Array
-        Random key for parameter initialization.
-
-    Attributes
-    ----------
-    readout : StationaryLinear or VariantBiasLinear
-        Linear readout layer mapping states to log-rates.
-
-    Notes
-    -----
-    The Poisson model assumes:
-    y_t | z_t ~ Poisson(λ_t)
-    log(λ_t) = C z_t + b_t + δ_t
-
-    where C is the readout matrix, b_t are (optional) time-varying biases,
-    and δ_t accounts for uncertainty propagation from the latent state.
-    """
-
-    readout: StationaryLinear | VariantBiasLinear
-
-    def __init__(self, conf, key):
-        self.conf = conf
-        n_steps = conf.get("n_steps", 0)
-
-        if n_steps > 0:
-            self.readout = VariantBiasLinear(
-                conf.state_dim,
-                conf.observation_dim,
-                n_steps,
-                key=key,
-                norm_readout=conf.norm_readout,
-            )
-        else:
-            self.readout = StationaryLinear(
-                conf.state_dim,
-                conf.observation_dim,
-                key=key,
-                norm_readout=conf.norm_readout,
-            )
-
-    def set_static(self, static=True) -> None:
+    def initialize(
+        self, t: Array, y: Array, u: Array, c: Array
+    ) -> "DefaultObservationModel":
         """
-        Set readout parameters as static (non-trainable).
-
-        Parameters
-        ----------
-        static : bool, default=True
-            Whether to make parameters static.
-        """
-        self.readout.set_static(static)  # type: ignore
-
-    def initialize(self, t: Array, y: Array, u: Array, c: Array) -> "Poisson":
-        """
-        Initialize readout biases from observation means.
+        Initialize likelihood and readout parameters from data statistics.
 
         Parameters
         ----------
@@ -196,21 +272,92 @@ class Poisson(Likelihood):
 
         Returns
         -------
-        Poisson
-            Updated Poisson likelihood with initialized biases.
+        DefaultObservationModel
+            Updated observation model with initialized components.
         """
-        mean_y = jnp.mean(y, axis=0)
-        if isinstance(self.readout, VariantBiasLinear):
-            biases = jnp.log(jnp.maximum(mean_y, 1e-6))
-            readout = eqx.tree_at(lambda r: r.biases, self.readout, biases)
-        else:
-            mean_y = jnp.mean(mean_y, axis=0)
-            bias = jnp.log(jnp.maximum(mean_y, 1e-6))
-            readout = _set_stationary_bias(self.readout, bias)
-        return eqx.tree_at(lambda m: m.readout, self, readout)
+        likelihood = self.likelihood.initialize(t, y, u, c)
+        readout = self.readout
+        initializer = getattr(readout, "initialize", None)
+        if initializer is not None:
+            mean_y = jnp.mean(y, axis=0)
+            target = likelihood.readout_init_target(mean_y)
+            if isinstance(readout, VariantBiasLinear):
+                readout = initializer(target)
+            else:
+                if target.ndim > 1:
+                    target = jnp.mean(target, axis=0)
+                readout = initializer(target)
+        return eqx.tree_at(
+            lambda model: (model.readout, model.likelihood),
+            self,
+            (readout, likelihood),
+        )
+
+
+__all__ = [
+    "DefaultObservationModel",
+    "ObservationModel",
+    "Poisson",
+    "DiagGaussian",
+    "make_readout",
+    "Likelihood",
+]
+
+
+class Poisson(Likelihood):
+    """
+    Poisson observation model for count data in XFADS.
+
+    Implements Poisson likelihood for discrete count observations with
+    log-linear dependence on latent states. Suitable for neural spike
+    counts, word counts, or other non-negative integer data.
+
+    Parameters
+    ----------
+    conf : DictConfig
+        Configuration containing:
+        - observation_dim: Number of observed count variables
+    key : Array
+        Random key for parameter initialization (unused).
+
+    Notes
+    -----
+    The Poisson model assumes:
+    y_t | z_t ~ Poisson(λ_t)
+    log(λ_t) = C z_t + b_t + δ_t
+
+    where C is the readout matrix, b_t are (optional) time-varying biases,
+    and δ_t accounts for uncertainty propagation from the latent state.
+    """
+
+    def __init__(self, conf, key):
+        self.conf = conf
+
+    def readout_init_target(self, mean_y: Array) -> Array:
+        """
+        Transform mean observations into log-rate initialization targets.
+
+        Parameters
+        ----------
+        mean_y : Array
+            Mean observations over the batch dimension.
+
+        Returns
+        -------
+        Array
+            Log-mean targets for initializing the readout biases.
+        """
+        return jnp.log(jnp.maximum(mean_y, 1e-6))
 
     def eloglik(
-        self, key: Array, t: Array, moment: Array, y: Array, approx, mc_size: int
+        self,
+        key: Array,
+        t: Array,
+        moment: Array,
+        y: Array,
+        approx,
+        mc_size: int,
+        readout,
     ) -> Array:
         """
         Compute expected log-likelihood for Poisson observations.
@@ -229,6 +376,8 @@ class Poisson(Likelihood):
             Exponential family approximation class.
         mc_size : int
             Number of Monte Carlo samples (unused for analytic computation).
+        readout : callable
+            Readout module mapping latent states to log-rates.
 
         Returns
         -------
@@ -244,9 +393,9 @@ class Poisson(Likelihood):
         correction for the exponential nonlinearity.
         """
         mean_z, cov_z = approx.moment_to_canon(moment)
-        eta = self.readout(t, mean_z)
+        eta = readout(t, mean_z)
         V = jnp.diag(cov_z)
-        C = self.readout.weight
+        C = readout.weight
         cvc = jnp.diag(C @ V @ C.T)
         loglam = eta + 0.5 * cvc
         # loglam = jnp.where(loglam < MAX_LOGRATE, loglam, jnp.log(loglam))
@@ -268,20 +417,15 @@ class DiagGaussian(Likelihood):
     ----------
     conf : DictConfig
         Configuration containing:
-        - state_dim: Dimensionality of latent states
         - observation_dim: Number of observed continuous variables
         - cov: Initial observation noise variance (scalar or vector)
-        - n_steps: Number of time steps (>0 for time-varying biases)
-        - norm_readout: Whether to use weight normalization
     key : Array
-        Random key for parameter initialization.
+        Random key for parameter initialization (unused).
 
     Attributes
     ----------
     unconstrained_cov : Array, shape (observation_dim,)
         Unconstrained observation noise parameters.
-    readout : StationaryLinear or VariantBiasLinear
-        Linear readout layer mapping states to observation means.
 
     Notes
     -----
@@ -295,30 +439,11 @@ class DiagGaussian(Likelihood):
     """
 
     unconstrained_cov: Array = eqx.field(static=False)
-    readout: StationaryLinear | VariantBiasLinear
 
     def __init__(self, conf, key):
         self.conf = conf
         cov = jnp.array(conf.get("cov", jnp.ones(conf.observation_dim)))
         self.unconstrained_cov = unconstrain_positive(cov)
-
-        n_steps = conf.get("n_steps", 0)
-
-        if n_steps > 0:
-            self.readout = VariantBiasLinear(
-                conf.state_dim,
-                conf.observation_dim,
-                n_steps,
-                key=key,
-                norm_readout=conf.norm_readout,
-            )
-        else:
-            self.readout = StationaryLinear(
-                conf.state_dim,
-                conf.observation_dim,
-                key=key,
-                norm_readout=conf.norm_readout,
-            )
 
     def cov(self):
         """
@@ -335,34 +460,6 @@ class DiagGaussian(Likelihood):
         """
         return constrain_positive(self.unconstrained_cov)
 
-    def initialize(self, t: Array, y: Array, u: Array, c: Array) -> "DiagGaussian":
-        """
-        Initialize readout biases from observation means.
-
-        Parameters
-        ----------
-        t : Array
-            Time steps for the sequences.
-        y : Array
-            Observation sequences.
-        u : Array
-            Control input sequences.
-        c : Array
-            Covariate sequences.
-
-        Returns
-        -------
-        DiagGaussian
-            Updated Gaussian likelihood with initialized biases.
-        """
-        mean_y = jnp.mean(y, axis=0)
-        if isinstance(self.readout, VariantBiasLinear):
-            readout = eqx.tree_at(lambda r: r.biases, self.readout, mean_y)
-        else:
-            bias = jnp.mean(mean_y, axis=0)
-            readout = _set_stationary_bias(self.readout, bias)
-        return eqx.tree_at(lambda m: m.readout, self, readout)
-
     def eloglik(
         self,
         key: Array,
@@ -371,6 +468,7 @@ class DiagGaussian(Likelihood):
         y: Array,
         approx: type[Approx],
         mc_size: int,
+        readout,
     ) -> Array:
         """
         Compute expected log-likelihood for Gaussian observations.
@@ -389,6 +487,8 @@ class DiagGaussian(Likelihood):
             Exponential family approximation class.
         mc_size : int
             Number of Monte Carlo samples (unused for analytic computation).
+        readout : callable
+            Readout module mapping latent states to observation means.
 
         Returns
         -------
@@ -406,8 +506,8 @@ class DiagGaussian(Likelihood):
         and observation noise.
         """
         mean_z, cov_z = approx.moment_to_canon(moment)
-        mean_y = self.readout(t, mean_z)
-        C = self.readout.weight  # left matrix
+        mean_y = readout(t, mean_z)
+        C = readout.weight  # left matrix
         cov_y = C @ approx.full_cov(cov_z) @ C.T + jnp.diag(self.cov())
         ll = tfp.MultivariateNormalFullCovariance(mean_y, cov_y).log_prob(y)
         return ll

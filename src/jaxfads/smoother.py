@@ -22,7 +22,12 @@ from .core import Mode
 from .distributions import Approx
 from .dynamics import Dynamics
 from .nn import DataMasker
-from .observations import Likelihood
+from .observations import (
+    DefaultObservationModel,
+    Likelihood,
+    ObservationModel,
+    make_readout,
+)
 from .util import vmap_with_key
 from .logging import get_logger
 
@@ -48,15 +53,16 @@ class XFADS(ConfModule):
         - mc_size: Number of Monte Carlo samples
         - approx: Exponential family approximation type
         - forward: Forward dynamics model type
-        - observation: Observation model type
+        - observation: Likelihood type
+        - observation_model: Observation model wrapper type
         - mode: Inference mode ('pseudo', 'bifilter' not tested)
 
     Attributes
     ----------
     forward : Dynamics
         Forward dynamics model for state transitions.
-    likelihood : Likelihood
-        Observation/emission model.
+    observation : ObservationModel
+        Observation model with likelihood and readout.
     alpha_encoder : AlphaEncoder
         Neural encoder for observation information updates.
     beta_encoder : BetaEncoder
@@ -104,7 +110,7 @@ class XFADS(ConfModule):
 
     forward: Dynamics
     # backward: Dynamics | None
-    likelihood: Likelihood
+    observation: ObservationModel
     alpha_encoder: Callable
     beta_encoder: Callable
     masker: DataMasker
@@ -134,15 +140,19 @@ class XFADS(ConfModule):
         dropout = self.conf.dropout
         forward = self.conf.forward
         observation = self.conf.observation
+        observation_model = self.conf.get(
+            "observation_model", DefaultObservationModel.__name__
+        )
 
         key = jrnd.key(seed)
 
         logger.info(
-            "XFADS init: mode=%s approx=%s forward=%s observation=%s state_dim=%s obs_dim=%s mc_size=%s dropout=%s seed=%s",
+            "XFADS init: mode=%s approx=%s forward=%s observation=%s observation_model=%s state_dim=%s obs_dim=%s mc_size=%s dropout=%s seed=%s",
             str(self.conf.mode),
             str(self.conf.approx),
             str(forward),
             str(observation),
+            str(observation_model),
             str(self.conf.state_dim),
             str(self.conf.observation_dim),
             str(self.conf.mc_size),
@@ -159,9 +169,19 @@ class XFADS(ConfModule):
         )
 
         key, ky = jrnd.split(key)
-        self.likelihood = Likelihood.get_subclass(observation)(
+        readout = make_readout(self.conf.obs_conf, ky)
+
+        key, ky = jrnd.split(key)
+        likelihood = Likelihood.get_subclass(observation)(
             self.conf.obs_conf,
             key=ky,
+        )
+
+        observation_model_cls = ObservationModel.get_subclass(observation_model)
+        self.observation = observation_model_cls(
+            self.conf.obs_conf,
+            readout=readout,
+            likelihood=likelihood,
         )
 
         key, ky = jrnd.split(key)
@@ -176,8 +196,7 @@ class XFADS(ConfModule):
             ky,
         )
 
-        # if "l" in static_params:
-        #     self.likelihood.set_static()
+        # TODO: add hooks to freeze observation parameters if needed.
         # if "s" in static_params:
         #     self.forward.set_static()
 
@@ -207,10 +226,10 @@ class XFADS(ConfModule):
 
         Notes
         -----
-        Delegates initialization to the likelihood implementation.
+        Delegates initialization to the observation model.
         """
-        likelihood = self.likelihood.initialize(t, y, u, c)
-        return eqx.tree_at(lambda model: model.likelihood, self, likelihood)
+        observation = self.observation.initialize(t, y, u, c)
+        return eqx.tree_at(lambda model: model.observation, self, observation)
 
     @classmethod
     def load(cls, path: str | Path):
