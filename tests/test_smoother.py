@@ -15,7 +15,7 @@ class Mock(Dynamics):
 
     def __init__(self, conf: DictConfig, key: Array):
         self.conf = conf
-        self.noise = None  # type: ignore
+        self.noise = None
         self.layer = None
 
     @override
