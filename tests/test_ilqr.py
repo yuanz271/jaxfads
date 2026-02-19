@@ -5,7 +5,7 @@ import jax
 from jax import numpy as jnp, vmap
 # import matplotlib.pyplot as plt
 
-from jaxfads.ilqr import ilqr
+from jaxfads.ilqr import ilqr, cost_function
 
 
 def test_ilqr():
@@ -63,3 +63,24 @@ def test_ilqr():
     # plt.grid(True)
     # plt.savefig("test_copilot.pdf")
     # plt.close()
+
+
+def test_cost_function_matches_quadratic_form():
+    """cost_function must compute 0.5 * sum_t (x-target)^T Q (x-target) + u^T R u."""
+    T, D_x, D_u = 4, 2, 1
+    x = jnp.array([[1.0, 2.0], [0.5, 1.5], [0.0, 1.0], [-0.5, 0.5]])
+    u = jnp.ones((T, D_u))
+    target = jnp.zeros((T, D_x))
+    Q = jnp.broadcast_to(jnp.diag(jnp.array([2.0, 3.0])), (T, D_x, D_x))
+    R = jnp.broadcast_to(jnp.eye(D_u) * 0.5, (T, D_u, D_u))
+
+    cost = cost_function(x, u, target, Q, R)
+
+    # Manual computation
+    expected = 0.0
+    for t in range(T):
+        dx = x[t] - target[t]
+        expected += 0.5 * (dx @ Q[t] @ dx + u[t] @ R[t] @ u[t])
+    expected = jnp.array(expected)
+
+    np.testing.assert_allclose(float(cost), float(expected), rtol=1e-5)

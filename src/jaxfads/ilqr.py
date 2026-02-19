@@ -73,10 +73,10 @@ def cost_function(x, u, target, Q, R):
         Control trajectory.
     target : Array, shape (T, D_x)
         Target state trajectory.
-    Q : Array, shape (D_x, D_x)
-        State cost matrix (PD).
-    R : Array, shape (D_u, D_u)
-        Control cost matrix (PD).
+    Q : Array, shape (T, D_x, D_x)
+        State cost matrices (PD), one per time step.
+    R : Array, shape (T, D_u, D_u)
+        Control cost matrices (PD), one per time step.
 
     Returns
     -------
@@ -87,7 +87,7 @@ def cost_function(x, u, target, Q, R):
     Rcho = jnp.linalg.cholesky(R, upper=True)
 
     def step_cost(x, u, target, Qcho, Rcho):
-        vx = Qcho @ x - target
+        vx = Qcho @ (x - target)
         vu = Rcho @ u
         return jnp.inner(vx, vx) + jnp.inner(vu, vu)
 

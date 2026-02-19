@@ -16,8 +16,7 @@ from jax import numpy as jnp
 from jax import random as jrnd
 
 from .base import ObservationModel
-from .constraints import constrain_positive, unconstrain_positive
-from .constraints import _EPS
+from .constraints import _EPS, constrain_positive, unconstrain_positive
 from .distributions import Approx
 from .nn import StationaryLinear, VariantBiasLinear
 

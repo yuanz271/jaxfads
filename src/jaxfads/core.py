@@ -123,6 +123,8 @@ def filter(
     return nature_f, moment_f, moment_p
 
 
+# NOTE: bismooth() requires model.backward (a Dynamics instance) which is
+# not yet implemented on XFADS.  Do not call until backward dynamics are added.
 def bismooth(
     model,
     key: Array,
