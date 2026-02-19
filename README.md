@@ -9,7 +9,6 @@ XFADS is a JAX-based library for Bayesian state-space modeling using variational
 - [Overview](#overview)
 - [Features](#features)
 - [Installation](#installation)
-- [Project Layout](#project-layout)
 - [Citation & Resources](#citation--resources)
 
 ## Overview
@@ -33,15 +32,6 @@ pip install git+https://github.com/yuanz271/jaxfads.git
 ```
 
 `gearax` is installed from its GitHub repository at a pinned commit during installation.
-
-## Project Layout
-
-- `src/jaxfads/core.py`: Filtering primitives and shared interfaces.
-- `src/jaxfads/smoother.py`: XFADS orchestrator and smoothing logic.
-- `src/jaxfads/dynamics.py`: State-transition parameterizations.
-- `src/jaxfads/observations.py`: Observation model components.
-- `src/jaxfads/nn.py` and `src/jaxfads/encoders.py`: Neural network building blocks.
-- `tests/`: Unit tests mirroring the public API surface.
 
 ## Citation & Resources
 
