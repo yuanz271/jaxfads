@@ -454,31 +454,42 @@ class FullMVN(Approx):
 
     @classmethod
     def constrain_moment(cls, unconstrained: Array) -> Array:
-        """See base class. Builds PSD covariance via diag + low-rank."""
-        n = jnp.size(unconstrained)
-        # n = m + m + m
-        # m = sqrt(n + 1) - 1
-        m = n // 3
+        """See base class. Builds PSD covariance via Cholesky LL^T.
 
-        loc, diag, lora = jnp.split(unconstrained, [m, m + m])
-        L = jnp.outer(lora, lora)
-        V = jnp.diag(constrain_positive(diag)) + L
-        v = V.flatten()
-        return jnp.concatenate((loc, v))
+        Input layout: [mean (D), lower-triangular entries (D²)].
+        The D² block is reshaped to (D, D), zeroed above the diagonal,
+        and Σ = LL^T is computed (PSD by construction).
+        """
+        n = jnp.size(unconstrained)
+        m = cls.variable_size(n)
+        loc, flat_L = jnp.split(unconstrained, [m])
+        L = jnp.tril(jnp.reshape(flat_L, (m, m)))
+        V = L @ L.T
+        return jnp.concatenate((loc, V.flatten()))
 
     @classmethod
     def constrain_natural(cls, unconstrained: Array) -> Array:
-        """See base class. Builds negative definite precision."""
-        n = jnp.size(unconstrained)
-        # n = m + m + m
-        # m = sqrt(n + 1) - 1
-        m = n // 3
+        """See base class. Builds negative definite precision via Cholesky.
 
-        loc, diag, lora = jnp.split(unconstrained, [m, m + m])
-        L = jnp.outer(lora, lora)
-        V = jnp.diag(constrain_positive(diag)) + L
-        v = -V.flatten()  # negative definite
-        return jnp.concatenate((loc, v))
+        Input layout: [nat1 (D), lower-triangular entries (D²)].
+        Produces nat2 = -LL^T (negative semi-definite by construction).
+        """
+        n = jnp.size(unconstrained)
+        m = cls.variable_size(n)
+        nat1, flat_L = jnp.split(unconstrained, [m])
+        L = jnp.tril(jnp.reshape(flat_L, (m, m)))
+        V = L @ L.T
+        return jnp.concatenate((nat1, (-V).flatten()))
+
+    @classmethod
+    def unconstrain_natural(cls, natural: Array) -> Array:
+        """See base class. Recovers Cholesky factor L from nat2 = -LL^T."""
+        n = jnp.size(natural)
+        m = cls.variable_size(n)
+        nat1, nat2_flat = jnp.split(natural, [m])
+        neg_nat2 = jnp.reshape(-nat2_flat, (m, m))
+        L = jnp.linalg.cholesky(neg_nat2 + 1e-6 * jnp.eye(m))
+        return jnp.concatenate((nat1, L.flatten()))
 
     @classmethod
     def noise_moment(cls, noise_cov) -> Array:
@@ -496,6 +507,17 @@ class LoRaMVN(Approx):
 
     This provides a trade-off between the expressiveness of full
     covariance and the efficiency of diagonal covariance.
+
+    .. warning::
+
+        **Incomplete implementation.** Only ``constrain_moment`` and
+        ``noise_moment`` are implemented. All other ``Approx`` methods
+        (``natural_to_moment``, ``moment_to_natural``, ``sample_by_moment``,
+        ``param_size``, ``kl``, ``moment_to_canon``, ``canon_to_moment``,
+        ``full_cov``, ``constrain_natural``, ``unconstrain_natural``,
+        ``prior_natural``) raise ``NotImplementedError``. Do not select
+        this class as the approximation family until the remaining methods
+        are filled in.
 
     Notes
     -----
@@ -518,22 +540,93 @@ class LoRaMVN(Approx):
     """
 
     @classmethod
-    def constrain_moment(cls, unconstrained: Array) -> Array:
-        """See base class. Builds PSD covariance via scalar diag + rank-1."""
-        n = jnp.size(unconstrained)
-        # n = m + 1 + m
-        m = (n - 1) // 2
+    def natural_to_moment(cls, natural: Array) -> Array:
+        """See base class."""
+        raise NotImplementedError("LoRaMVN.natural_to_moment is not yet implemented.")
 
-        loc, diag, lora = jnp.split(unconstrained, [m, m + 1])
+    @classmethod
+    def moment_to_natural(cls, moment: Array) -> Array:
+        """See base class."""
+        raise NotImplementedError("LoRaMVN.moment_to_natural is not yet implemented.")
+
+    @classmethod
+    def sample_by_moment(cls, key: Array, moment: Array, mc_size: int) -> Array:
+        """See base class."""
+        raise NotImplementedError("LoRaMVN.sample_by_moment is not yet implemented.")
+
+    @classmethod
+    def param_size(cls, state_dim: int) -> int:
+        """See base class."""
+        raise NotImplementedError("LoRaMVN.param_size is not yet implemented.")
+
+    @classmethod
+    def kl(cls, moment1: Array, moment2: Array) -> Array:
+        """See base class."""
+        raise NotImplementedError("LoRaMVN.kl is not yet implemented.")
+
+    @classmethod
+    def moment_to_canon(cls, moment: Array) -> tuple[Array, Array]:
+        """See base class."""
+        raise NotImplementedError("LoRaMVN.moment_to_canon is not yet implemented.")
+
+    @classmethod
+    def canon_to_moment(cls, mean: Array, cov: Array) -> Array:
+        """See base class."""
+        raise NotImplementedError("LoRaMVN.canon_to_moment is not yet implemented.")
+
+    @classmethod
+    def full_cov(cls, cov: Array) -> Array:
+        """See base class."""
+        raise NotImplementedError("LoRaMVN.full_cov is not yet implemented.")
+
+    @classmethod
+    def constrain_moment(cls, unconstrained: Array) -> Array:
+        """See base class. Builds PSD covariance via diag + rank-1.
+
+        Input layout: [mean (D), diag (D), low-rank factor (D)].
+        Produces Σ = diag(d) + vv^T.
+        """
+        n = jnp.size(unconstrained)
+        # n = m + m + m
+        m = n // 3
+
+        loc, diag, lora = jnp.split(unconstrained, [m, m + m])
         L = jnp.outer(lora, lora)
         V = jnp.diag(constrain_positive(diag)) + L
         v = V.flatten()
         return jnp.concatenate((loc, v))
 
     @classmethod
+    def constrain_natural(cls, unconstrained: Array) -> Array:
+        """See base class. Builds negative definite precision via diag + rank-1.
+
+        Input layout: [nat1 (D), diag (D), low-rank factor (D)].
+        Produces nat2 = -(diag(d) + vv^T) (negative definite).
+        """
+        n = jnp.size(unconstrained)
+        # n = m + m + m
+        m = n // 3
+
+        loc, diag, lora = jnp.split(unconstrained, [m, m + m])
+        L = jnp.outer(lora, lora)
+        V = jnp.diag(constrain_positive(diag)) + L
+        v = -V.flatten()  # negative definite
+        return jnp.concatenate((loc, v))
+
+    @classmethod
+    def unconstrain_natural(cls, natural: Array) -> Array:
+        """See base class."""
+        raise NotImplementedError("LoRaMVN.unconstrain_natural is not yet implemented.")
+
+    @classmethod
     def noise_moment(cls, noise_cov) -> Array:
         """See base class. Converts diagonal noise to full matrix."""
         return jnp.diag(noise_cov)
+
+    @classmethod
+    def prior_natural(cls, state_dim: int) -> Array:
+        """See base class."""
+        raise NotImplementedError("LoRaMVN.prior_natural is not yet implemented.")
 
 
 class DiagMVN(Approx):

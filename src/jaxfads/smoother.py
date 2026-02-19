@@ -117,7 +117,7 @@ class XFADS(ConfModule):
     masker: DataMasker
     unconstrained_prior_natural: Array
 
-    def __init__(self, conf, key):
+    def __init__(self, conf, key=None):  # key unused; seed from conf for serializable reproducibility
         """
         Initialize XFADS model components.
 
@@ -194,8 +194,8 @@ class XFADS(ConfModule):
 
         Parameters
         ----------
-        t : Array, shape (T,)
-            Time steps for the sequences.
+        t : Array, shape (N, T)
+            Time steps for each sequence in the batch.
         y : Array, shape (N, T, D_obs)
             Observation sequences.
         u : Array, shape (N, T, D_u)
@@ -286,8 +286,9 @@ class XFADS(ConfModule):
 
         Parameters
         ----------
-        t : Array, shape (T,)
-            Time steps for the sequence.
+        t : Array, shape (N, T)
+            Time steps for each sequence in the batch. Each row is passed
+            to the per-sequence filter/smoother after vmapping.
         y : Array, shape (N, T, D_obs)
             Observation sequences where N is batch size, T is sequence length,
             and D_obs is observation dimensionality.

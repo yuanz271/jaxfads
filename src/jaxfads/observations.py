@@ -310,7 +310,7 @@ class Poisson:
         """
         mean_z, cov_z = approx.moment_to_canon(moment)
         eta = readout(t, mean_z)
-        V = jnp.diag(cov_z)
+        V = approx.full_cov(cov_z)
         C = readout.weight
         cvc = jnp.diag(C @ V @ C.T)
         loglam = eta + 0.5 * cvc

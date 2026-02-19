@@ -5,18 +5,10 @@ This module provides bijective transformations between constrained and
 unconstrained parameter spaces, enabling gradient-based optimization
 of parameters with domain restrictions (e.g., positive variances).
 
-Notes
------
-Two positivity approaches are provided:
-
-1. Square transformation (constrain_positive/unconstrain_positive):
-   Simpler but has zero gradient at x=0.
-
-2. Softplus transformation (Positivity class):
-   Smooth everywhere with non-zero gradients.
+Uses softplus / inverse-softplus for positivity constraints, which have
+non-zero gradients everywhere.
 """
 
-import equinox as eqx
 import jax
 from jax import Array
 from jax import numpy as jnp
@@ -27,7 +19,7 @@ EPS = jnp.finfo(jnp.float32).eps
 
 def constrain_positive(x: Array) -> Array:
     """
-    Constrain values to be positive using square transformation.
+    Constrain values to be positive using softplus transformation.
 
     Parameters
     ----------
@@ -37,27 +29,20 @@ def constrain_positive(x: Array) -> Array:
     Returns
     -------
     Array
-        Positive values computed as x^2 + eps for numerical stability.
+        Positive values computed as log(1 + exp(x)).
 
     Notes
     -----
-    This function ensures all output values are strictly positive by
-    applying a square transformation and adding a small epsilon value
-    to prevent numerical issues at zero.
+    Uses softplus, which has non-zero gradient everywhere (sigmoid(x)),
+    avoiding the zero-gradient problem of the square transformation at
+    the origin.
     """
-    # x0 = MAX_EXP
-    # is_too_large = x > x0
-    # expx0 = jnp.exp(x0)
-    # clipped = jnp.where(is_too_large, x0, x)
-    # expx = jnp.exp(clipped)
-    # taylor = expx0 + expx0 * (x - x0)
-    # return jnp.where(is_too_large, taylor, expx)
-    return jnp.square(x) + EPS
+    return jax.nn.softplus(x)
 
 
 def unconstrain_positive(x: Array) -> Array:
     """
-    Unconstrain positive values using square root transformation.
+    Unconstrain positive values using inverse softplus.
 
     Parameters
     ----------
@@ -67,15 +52,14 @@ def unconstrain_positive(x: Array) -> Array:
     Returns
     -------
     Array
-        Unconstrained values computed as sqrt(x).
+        Unconstrained values such that softplus(result) ≈ x.
 
     Notes
     -----
     This is the inverse of constrain_positive, mapping positive values
     back to the unconstrained space for optimization.
     """
-    # return jnp.log(x + EPS)
-    return jnp.sqrt(x)
+    return softplus_inverse(x)
 
 
 def softplus_inverse(x: Array):
@@ -114,89 +98,4 @@ def softplus_inverse(x: Array):
     )
 
 
-class AbstractConstraint(eqx.Module):
-    """
-    Abstract base class for parameter constraints.
 
-    This class defines the interface for constraint transformations that
-    map between constrained and unconstrained parameter spaces.
-
-    Methods
-    -------
-    constrain(unconstrained)
-        Transform unconstrained parameters to constrained space.
-    unconstrain(constrained)
-        Transform constrained parameters to unconstrained space.
-    __call__(unconstrained)
-        Convenience method that calls constrain().
-    """
-
-    def constrain(self, unconstrained: Array) -> Array:
-        """
-        Transform unconstrained parameters to constrained space.
-
-        Parameters
-        ----------
-        unconstrained : Array
-            Parameters in unconstrained space (full real line).
-
-        Returns
-        -------
-        Array
-            Parameters in constrained space (e.g., positive reals).
-        """
-        ...
-
-    def unconstrain(self, constrained: Array) -> Array:
-        """
-        Transform constrained parameters to unconstrained space.
-
-        Parameters
-        ----------
-        constrained : Array
-            Parameters in constrained space.
-
-        Returns
-        -------
-        Array
-            Parameters in unconstrained space for optimization.
-        """
-        ...
-
-    def __call__(self, unconstrained: Array) -> Array:
-        """
-        Apply constraint transformation.
-
-        Alias for ``constrain``.
-        """
-        return self.constrain(unconstrained)
-
-
-class Positivity(AbstractConstraint):
-    """
-    Positivity constraint using softplus transformation.
-
-    This constraint ensures parameters remain positive by using the
-    softplus function: softplus(x) = log(1 + exp(x)).
-
-    Methods
-    -------
-    constrain(unconstrained)
-        Apply softplus to ensure positivity.
-    unconstrain(constrained)
-        Apply inverse softplus to map back to unconstrained space.
-
-    Notes
-    -----
-    The softplus function is smooth and differentiable everywhere,
-    making it suitable for gradient-based optimization while ensuring
-    all outputs are strictly positive.
-    """
-
-    def constrain(self, unconstrained: Array) -> Array:
-        """See base class. Applies softplus: log(1 + exp(x))."""
-        return jax.nn.softplus(unconstrained)
-
-    def unconstrain(self, constrained: Array) -> Array:
-        """See base class. Applies inverse softplus."""
-        return softplus_inverse(constrained)

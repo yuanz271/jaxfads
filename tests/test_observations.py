@@ -3,7 +3,7 @@ from jax import numpy as jnp
 from jax import random as jrnd
 from omegaconf import OmegaConf
 
-from jaxfads.distributions import DiagMVN
+from jaxfads.distributions import DiagMVN, FullMVN
 from jaxfads.observations import GLM
 
 
@@ -53,6 +53,23 @@ def test_poisson_eloglik_shape_and_finite():
     y = jnp.ones((observation_dim,))
 
     ll = observation.eloglik(key, jnp.array(0), moment, y, DiagMVN, mc_size=1)
+    chex.assert_shape(ll, ())
+    chex.assert_tree_all_finite(ll)
+
+
+def test_poisson_eloglik_full_mvn():
+    key = jrnd.key(10)
+    state_dim = 2
+    observation_dim = 3
+    conf = _poisson_conf(state_dim, observation_dim)
+    observation = _make_observation(conf, key, likelihood="Poisson")
+
+    mean = jnp.zeros(state_dim)
+    cov = jnp.eye(state_dim)
+    moment = FullMVN.canon_to_moment(mean, cov)
+    y = jnp.ones((observation_dim,))
+
+    ll = observation.eloglik(key, jnp.array(0), moment, y, FullMVN, mc_size=1)
     chex.assert_shape(ll, ())
     chex.assert_tree_all_finite(ll)
 

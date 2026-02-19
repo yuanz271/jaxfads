@@ -1,8 +1,9 @@
 from jax import numpy as jnp
+from jax import random as jrnd
 import chex
 import tensorflow_probability.substrates.jax.distributions as tfp
 
-from jaxfads.distributions import DiagMVN
+from jaxfads.distributions import DiagMVN, FullMVN, LoRaMVN
 
 
 # def test_mvn(spec):
@@ -148,6 +149,106 @@ def test_diagmvn_kl_matches_closed_form():
     # KL(p, p) == 0
     kl_self = DiagMVN.kl(moment1, moment1)
     chex.assert_trees_all_close(kl_self, jnp.array(0.0), atol=1e-6)
+
+
+def test_fullmvn_constrain_moment():
+    """FullMVN.constrain_moment produces valid moment params (PSD covariance)."""
+    state_dim = 3
+    param_size = FullMVN.param_size(state_dim)  # D + D² = 12
+    unconstrained = jrnd.normal(jrnd.key(0), (param_size,))
+
+    moment = FullMVN.constrain_moment(unconstrained)
+    chex.assert_shape(moment, (param_size,))
+    chex.assert_tree_all_finite(moment)
+
+    mean, cov = FullMVN.moment_to_canon(moment)
+    chex.assert_shape(mean, (state_dim,))
+    chex.assert_shape(cov, (state_dim, state_dim))
+
+    # Covariance must be symmetric and positive definite
+    chex.assert_trees_all_close(cov, cov.T, atol=1e-6)
+    eigenvalues = jnp.linalg.eigvalsh(cov)
+    assert jnp.all(eigenvalues > 0), f"Non-PD covariance: eigenvalues={eigenvalues}"
+
+
+def test_fullmvn_constrain_natural():
+    """FullMVN.constrain_natural produces valid natural params (negative definite nat2)."""
+    state_dim = 3
+    param_size = FullMVN.param_size(state_dim)  # D + D² = 12
+    unconstrained = jrnd.normal(jrnd.key(1), (param_size,))
+
+    natural = FullMVN.constrain_natural(unconstrained)
+    chex.assert_shape(natural, (param_size,))
+    chex.assert_tree_all_finite(natural)
+
+    # nat2 block should be negative definite (all eigenvalues < 0)
+    nat1, nat2_flat = jnp.split(natural, [state_dim])
+    nat2 = jnp.reshape(nat2_flat, (state_dim, state_dim))
+    eigenvalues = jnp.linalg.eigvalsh(nat2)
+    assert jnp.all(eigenvalues < 0), f"nat2 not negative definite: eigenvalues={eigenvalues}"
+
+    # Constrained natural params should convert to finite moments
+    moment = FullMVN.natural_to_moment(natural)
+    chex.assert_tree_all_finite(moment)
+
+    # The moment -> natural roundtrip should be stable
+    mean, cov = FullMVN.moment_to_canon(moment)
+    eigenvalues_cov = jnp.linalg.eigvalsh(cov)
+    assert jnp.all(eigenvalues_cov > 0), f"Recovered covariance not PD: {eigenvalues_cov}"
+
+
+def test_fullmvn_unconstrain_natural_roundtrip():
+    """unconstrain_natural inverts constrain_natural for FullMVN."""
+    state_dim = 3
+    # Start from a known valid natural (the prior)
+    natural = FullMVN.prior_natural(state_dim)
+    unconstrained = FullMVN.unconstrain_natural(natural)
+    chex.assert_tree_all_finite(unconstrained)
+
+    # constrain should recover a valid natural that maps to the same distribution
+    natural_rt = FullMVN.constrain_natural(unconstrained)
+    chex.assert_tree_all_finite(natural_rt)
+
+    # Both should give the same moments
+    moment = FullMVN.natural_to_moment(natural)
+    moment_rt = FullMVN.natural_to_moment(natural_rt)
+    chex.assert_trees_all_close(moment, moment_rt, atol=1e-4)
+
+
+def test_loramvn_constrain_moment():
+    """LoRaMVN.constrain_moment produces valid moment params (PSD covariance)."""
+    state_dim = 3
+    # LoRaMVN input layout: (D, D, D) = 3D
+    input_size = 3 * state_dim
+    unconstrained = jrnd.normal(jrnd.key(2), (input_size,))
+
+    moment = LoRaMVN.constrain_moment(unconstrained)
+    chex.assert_tree_all_finite(moment)
+
+    # Output is (D + D²) = mean + flattened covariance
+    mean, cov_flat = jnp.split(moment, [state_dim])
+    cov = jnp.reshape(cov_flat, (state_dim, state_dim))
+
+    chex.assert_shape(mean, (state_dim,))
+    chex.assert_shape(cov, (state_dim, state_dim))
+    chex.assert_trees_all_close(cov, cov.T, atol=1e-6)
+    eigenvalues = jnp.linalg.eigvalsh(cov)
+    assert jnp.all(eigenvalues > 0), f"Non-PD covariance: eigenvalues={eigenvalues}"
+
+
+def test_loramvn_constrain_natural():
+    """LoRaMVN.constrain_natural produces valid natural params (negative definite nat2)."""
+    state_dim = 3
+    input_size = 3 * state_dim
+    unconstrained = jrnd.normal(jrnd.key(3), (input_size,))
+
+    natural = LoRaMVN.constrain_natural(unconstrained)
+    chex.assert_tree_all_finite(natural)
+
+    nat1, nat2_flat = jnp.split(natural, [state_dim])
+    nat2 = jnp.reshape(nat2_flat, (state_dim, state_dim))
+    eigenvalues = jnp.linalg.eigvalsh(nat2)
+    assert jnp.all(eigenvalues < 0), f"nat2 not negative definite: eigenvalues={eigenvalues}"
 
 
 def test_lowrankcov(capsys):
