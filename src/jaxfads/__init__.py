@@ -26,7 +26,14 @@ Examples
 ...     'mc_size': 100,
 ...     'approx': 'DiagMVN',
 ...     'forward': 'Linear',
-...     'observation': 'Poisson'
+...     'obs_conf': {
+...         'model': 'GLM',
+...         'observation_dim': 50,
+...         'state_dim': 10,
+...         'likelihood': 'Poisson',
+...         'cov': [1.0] * 50,
+...         'norm_readout': False,
+...     },
 ... })
 >>>
 >>> # Initialize model
@@ -36,12 +43,10 @@ Examples
 
 from .base import Dynamics, Noise, ObservationModel
 from .logging import configure_logging, get_logger
-from .observations import Likelihood
 from .smoother import XFADS
 
 __all__ = [
     "Dynamics",
-    "Likelihood",
     "Noise",
     "ObservationModel",
     "XFADS",

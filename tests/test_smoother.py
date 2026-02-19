@@ -33,7 +33,7 @@ def test_constructor():
     state_noise = 1.0
     mc_size = 10
     seed = 0
-    observation = "Poisson"
+    likelihood = "Poisson"
     dropout = 0.5
     width = 16
     depth = 2
@@ -49,7 +49,6 @@ def test_constructor():
             approx="DiagMVN",
             mc_size=mc_size,
             seed=seed,
-            observation=observation,
             n_steps=T,
             fb_penalty=0,
             noise_penalty=0,
@@ -79,11 +78,13 @@ def test_constructor():
             ),
             obs_conf=OmegaConf.create(
                 dict(
+                    model="GLM",
                     observation_dim=y_size,
                     state_dim=z_size,
                     emission_noise=emission_noise,
                     norm_readout=normed_readout,
                     dropout=dropout,
+                    likelihood=likelihood,
                 )
             ),
         )

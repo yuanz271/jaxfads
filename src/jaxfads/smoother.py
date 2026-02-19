@@ -23,7 +23,6 @@ from .distributions import Approx
 from .base import Dynamics
 from .nn import DataMasker
 from .base import ObservationModel
-from .observations import GLM
 from .util import vmap_with_key
 from .logging import get_logger
 
@@ -49,8 +48,7 @@ class XFADS(ConfModule):
         - mc_size: Number of Monte Carlo samples
         - approx: Exponential family approximation type
         - forward: Forward dynamics model type
-        - observation: Likelihood type
-        - observation_model: Observation model wrapper type
+        - obs_conf: Observation model config
         - mode: Inference mode ('pseudo', 'bifilter' not tested)
 
     Attributes
@@ -89,7 +87,14 @@ class XFADS(ConfModule):
     ...     'mc_size': 100,
     ...     'approx': 'DiagMVN',
     ...     'forward': 'Linear',
-    ...     'observation': 'Poisson'
+    ...     'obs_conf': {
+    ...         'model': 'GLM',
+    ...         'observation_dim': 50,
+    ...         'state_dim': 10,
+    ...         'likelihood': 'Poisson',
+    ...         'cov': [1.0] * 50,
+    ...         'norm_readout': False,
+    ...     },
     ... })
     >>>
     >>> key = jrnd.key(42)
@@ -135,17 +140,15 @@ class XFADS(ConfModule):
         seed = self.conf.seed
         dropout = self.conf.dropout
         forward = self.conf.forward
-        observation_model = self.conf.get("observation_model", GLM.__name__)
 
         key = jrnd.key(seed)
 
         logger.info(
-            "XFADS init: mode=%s approx=%s forward=%s observation=%s observation_model=%s state_dim=%s obs_dim=%s mc_size=%s dropout=%s seed=%s",
+            "XFADS init: mode=%s approx=%s forward=%s observation_model=%s state_dim=%s obs_dim=%s mc_size=%s dropout=%s seed=%s",
             str(self.conf.mode),
             str(self.conf.approx),
             str(forward),
-            str(self.conf.observation),
-            str(observation_model),
+            str(self.conf.obs_conf.model),
             str(self.conf.state_dim),
             str(self.conf.observation_dim),
             str(self.conf.mc_size),
@@ -162,7 +165,7 @@ class XFADS(ConfModule):
         )
 
         key, ky = jrnd.split(key)
-        observation_model_cls = ObservationModel.get_subclass(observation_model)
+        observation_model_cls = ObservationModel.get_subclass(self.conf.obs_conf.model)
         self.observation = observation_model_cls(self.conf.obs_conf, key=ky)
 
         key, ky = jrnd.split(key)

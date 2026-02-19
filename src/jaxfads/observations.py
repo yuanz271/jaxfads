@@ -6,18 +6,14 @@ relationship between latent states and observed data. Abstract interfaces
 are defined in ``jaxfads.base``.
 """
 
-from abc import abstractmethod
 from collections.abc import Callable
-from typing import Protocol
+from typing import Any, Protocol
 
 import equinox as eqx
 import tensorflow_probability.substrates.jax.distributions as tfp
 from jax import Array
 from jax import numpy as jnp
 from jax import random as jrnd
-
-from gearax.mixin import SubclassRegistryMixin
-from gearax.modules import ConfModule
 
 from .base import ObservationModel
 from .constraints import constrain_positive, unconstrain_positive
@@ -106,42 +102,6 @@ class Likelihood(Protocol):
         ...
 
 
-class LikelihoodRegistry(SubclassRegistryMixin, ConfModule):
-    """
-    Registry base class for likelihood implementations.
-    """
-
-    def initialize(
-        self, t: Array, y: Array, u: Array, c: Array
-    ) -> "LikelihoodRegistry":
-        """
-        Initialize likelihood parameters from data statistics.
-        """
-        return self
-
-    def readout_init_target(self, mean_y: Array) -> Array:
-        """
-        Transform mean observations into readout initialization targets.
-        """
-        return mean_y
-
-    @abstractmethod
-    def eloglik(
-        self,
-        key: Array,
-        t: Array,
-        moment: Array,
-        y: Array,
-        approx: type[Approx],
-        mc_size: int,
-        readout: Callable[..., Array],
-    ) -> Array:
-        """
-        Compute expected log-likelihood of observations.
-        """
-        ...
-
-
 class GLM(ObservationModel):
     """
     GLM observation model composed of a likelihood and readout.
@@ -151,18 +111,26 @@ class GLM(ObservationModel):
     """
 
     readout: StationaryLinear | VariantBiasLinear
-    likelihood: Likelihood
+    likelihood: Any
 
     def __init__(self, conf, key: Array):
         self.conf = conf
         key, readout_key = jrnd.split(key)
         self.readout = make_readout(conf, readout_key)
         key, likelihood_key = jrnd.split(key)
-        likelihood_name = conf.get("observation", "Poisson")
-        self.likelihood = LikelihoodRegistry.get_subclass(likelihood_name)(
-            conf,
-            key=likelihood_key,
-        )
+        likelihood_name = conf.likelihood
+        if likelihood_name == "Poisson":
+            self.likelihood = Poisson(
+                conf,
+                key=likelihood_key,
+            )
+        elif likelihood_name == "DiagGaussian":
+            self.likelihood = DiagGaussian(
+                conf,
+                key=likelihood_key,
+            )
+        else:
+            raise ValueError(f"Unsupported observation likelihood '{likelihood_name}'.")
 
     def eloglik(
         self,
@@ -218,18 +186,23 @@ class GLM(ObservationModel):
         GLM
             Updated observation model with initialized components.
         """
-        likelihood = self.likelihood.initialize(t, y, u, c)
+        likelihood = self.likelihood
         readout = self.readout
-        initializer = getattr(readout, "initialize", None)
-        if initializer is not None:
+
+        likelihood_initializer = getattr(likelihood, "initialize", None)
+        if likelihood_initializer is not None:
+            likelihood = likelihood_initializer(t, y, u, c)
+
+        readout_initializer = getattr(readout, "initialize", None)
+        if readout_initializer is not None:
             mean_y = jnp.mean(y, axis=0)
             target = likelihood.readout_init_target(mean_y)
             if isinstance(readout, VariantBiasLinear):
-                readout = initializer(target)
+                readout = readout_initializer(target)
             else:
                 if target.ndim > 1:
                     target = jnp.mean(target, axis=0)
-                readout = initializer(target)
+                readout = readout_initializer(target)
         return eqx.tree_at(
             lambda model: (model.readout, model.likelihood),
             self,
@@ -244,11 +217,10 @@ __all__ = [
     "DiagGaussian",
     "make_readout",
     "Likelihood",
-    "LikelihoodRegistry",
 ]
 
 
-class Poisson(LikelihoodRegistry):
+class Poisson:
     """
     Poisson observation model for count data in XFADS.
 
@@ -349,7 +321,7 @@ class Poisson(LikelihoodRegistry):
         return ll
 
 
-class DiagGaussian(LikelihoodRegistry):
+class DiagGaussian:
     """
     Diagonal Gaussian observation model for continuous data in XFADS.
 
@@ -456,13 +428,19 @@ class DiagGaussian(LikelihoodRegistry):
         ll = tfp.MultivariateNormalFullCovariance(mean_y, cov_y).log_prob(y)
         return ll
 
-    def set_static(self, static=True) -> None:
+    def readout_init_target(self, mean_y: Array) -> Array:
         """
-        Set observation noise parameters as static (non-trainable).
+        Transform mean observations into readout initialization targets.
+        """
+        return mean_y
 
-        Parameters
-        ----------
-        static : bool, default=True
-            Whether to make parameters static.
-        """
-        self.__dataclass_fields__["unconstrained_cov"].metadata = {"static": static}
+    # def set_static(self, static=True) -> None:
+    #     """
+    #     Set observation noise parameters as static (non-trainable).
+
+    #     Parameters
+    #     ----------
+    #     static : bool, default=True
+    #         Whether to make parameters static.
+    #     """
+    #     self.__dataclass_fields__["unconstrained_cov"].metadata = {"static": static}

@@ -39,8 +39,14 @@ conf = DictConfig({
     "mc_size": 100,
     "approx": "DiagMVN",
     "forward": "Linear",
-    "observation": "Poisson",
-    "observation_model": "GLM",
+    "obs_conf": {
+        "model": "GLM",
+        "observation_dim": 50,
+        "state_dim": 10,
+        "likelihood": "Poisson",
+        "cov": [1.0] * 50,
+        "norm_readout": False,
+    },
 })
 
 key = jr.key(0)

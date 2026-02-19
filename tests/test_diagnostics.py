@@ -46,7 +46,6 @@ def model_and_batch():
             "approx": "DiagMVN",
             "mc_size": 1,
             "seed": 0,
-            "observation": "Poisson",
             "n_steps": 10,
             "fb_penalty": 0,
             "noise_penalty": 0.01,
@@ -74,11 +73,13 @@ def model_and_batch():
             ),
             "obs_conf": OmegaConf.create(
                 {
+                    "model": "GLM",
                     "observation_dim": 10,
                     "state_dim": 2,
                     "emission_noise": 1.0,
                     "norm_readout": False,
                     "dropout": 0.0,
+                    "likelihood": "Poisson",
                 }
             ),
         }

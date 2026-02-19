@@ -401,8 +401,6 @@ def main() -> None:
             "approx": "DiagMVN",
             "mc_size": 1,
             "seed": 0,
-            "observation": "DiagGaussian",
-            "observation_model": "GLM",
             "n_steps": T,
             "fb_penalty": 0.0,
             "noise_penalty": 0.01,
@@ -424,7 +422,8 @@ def main() -> None:
                 "dropout": None,
             },
             "obs_conf": {
-                "observation": "DiagGaussian",
+                "model": "GLM",
+                "likelihood": "DiagGaussian",
                 "observation_dim": obs_dim,
                 "state_dim": state_dim,
                 "cov": [float(sigma_obs**2)] * obs_dim,
