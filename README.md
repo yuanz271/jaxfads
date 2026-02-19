@@ -9,6 +9,7 @@ XFADS is a JAX-based library for Bayesian state-space modeling using variational
 - [Overview](#overview)
 - [Features](#features)
 - [Installation](#installation)
+- [Documentation](#documentation)
 - [Citation & Resources](#citation--resources)
 
 ## Overview
@@ -32,6 +33,10 @@ pip install git+https://github.com/yuanz271/jaxfads.git
 ```
 
 `gearax` is installed from its GitHub repository at a pinned commit during installation.
+
+## Documentation
+
+- [Writing Custom Dynamics Modules](docs/dynamics.md)
 
 ## Citation & Resources
 
