@@ -136,6 +136,7 @@ def configure_logging(
         else:
             for handler in list(logger.handlers):
                 if isinstance(handler, logging.FileHandler):
+                    handler.close()
                     logger.removeHandler(handler)
             fh = logging.FileHandler(resolved, encoding="utf-8")
             fh.setLevel(level)
