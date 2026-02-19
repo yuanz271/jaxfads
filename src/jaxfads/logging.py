@@ -90,7 +90,7 @@ def configure_logging(
     """
     env_level = os.environ.get("JAXFADS_LOG_LEVEL")
     if env_level:
-        level = env_level
+        level = env_level.upper()
 
     logger = logging.getLogger(_BASE_LOGGER_NAME)
     logger.setLevel(level)
@@ -127,13 +127,16 @@ def configure_logging(
         file_path = env_file if env_file else None
 
     if file_path is not None:
-        path = Path(file_path)
+        path = Path(file_path).expanduser()
         path.parent.mkdir(parents=True, exist_ok=True)
         resolved = str(path.resolve())
         existing = _find_handler(logger, logging.FileHandler, baseFilename=resolved)
         if existing is not None:
             existing.setLevel(level)
         else:
+            for handler in list(logger.handlers):
+                if isinstance(handler, logging.FileHandler):
+                    logger.removeHandler(handler)
             fh = logging.FileHandler(resolved, encoding="utf-8")
             fh.setLevel(level)
             fh.setFormatter(formatter)
