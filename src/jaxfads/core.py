@@ -9,6 +9,7 @@ using variational inference in exponential family approximations.
 from enum import StrEnum, auto
 from functools import partial
 
+import equinox as eqx
 import jax
 from jax import Array
 from jax import numpy as jnp
@@ -108,8 +109,11 @@ def filter(
         return (key, nature_t), (moment_p_t, nature_p_t, nature_t)
 
     key, ky = jrnd.split(key)
+    scan_body = eqx.filter_checkpoint(
+        partial(ff, expected_moment=expected_moment_forward)
+    )
     _, (moment_p, _, nature_f) = scan(
-        partial(ff, expected_moment=expected_moment_forward),
+        scan_body,
         init=(ky, nature_f_1),
         xs=(alpha[1:], u[:-1], c[:-1]),  # t = 2 ... T+1
     )
@@ -215,6 +219,7 @@ def bismooth(
         return (key_tp1, nature_f_t), (moment_p_t, nature_p_t, nature_f_t)
 
     # Forward
+    # TODO: checkpoint scan body when bismooth is implemented
     key, forward_key = jrnd.split(key)
     _, (_, _, nature_f) = scan(
         partial(ff, expected_moment=expected_moment_forward),

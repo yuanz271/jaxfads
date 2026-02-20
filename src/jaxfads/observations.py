@@ -17,10 +17,22 @@ from jax import random as jrnd
 
 from .base import ObservationModel
 from .constraints import _EPS, constrain_positive, unconstrain_positive
-from .distributions import Approx
+from .distributions import Approx, DiagMVN
 from .nn import StationaryLinear, VariantBiasLinear
 
 _MAX_LOGRATE = 7.0
+
+
+def _quadratic_diag(C: Array, cov_z: Array, approx: type[Approx]) -> Array:
+    """Compute diag(C @ Σ_z @ C.T) without materialising (D_obs, D_obs).
+
+    For :class:`DiagMVN` this is O(D_obs · D_z) via ``(C² @ v)``.
+    For other families it falls back to ``full_cov``.
+    """
+    if approx is DiagMVN:
+        return (C ** 2) @ cov_z
+    V = approx.full_cov(cov_z)
+    return jnp.sum((C @ V) * C, axis=-1)
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +232,11 @@ def make_readout(conf, key: Array) -> StationaryLinear | VariantBiasLinear:
     )
 
 
+# ---------------------------------------------------------------------------
+# Likelihood protocol and GLM orchestrator
+# ---------------------------------------------------------------------------
+
+
 class Likelihood(Protocol):
     """
     Protocol for observation/emission likelihoods in XFADS.
@@ -294,8 +311,8 @@ class GLM(ObservationModel):
                 conf,
                 key=likelihood_key,
             )
-        elif likelihood_name == "DiagGaussian":
-            self.likelihood = DiagGaussian(
+        elif likelihood_name == "Gaussian":
+            self.likelihood = Gaussian(
                 conf,
                 key=likelihood_key,
             )
@@ -430,11 +447,16 @@ __all__ = [
     "GLM",
     "ObservationModel",
     "Poisson",
-    "DiagGaussian",
+    "Gaussian",
     "make_readout",
     "Likelihood",
     "register_readout_init",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Concrete likelihoods
+# ---------------------------------------------------------------------------
 
 
 class Poisson(eqx.Module, strict=True):
@@ -530,9 +552,8 @@ class Poisson(eqx.Module, strict=True):
         """
         mean_z, cov_z = approx.moment_to_canon(moment)
         eta = readout(t, mean_z)
-        V = approx.full_cov(cov_z)
         C = readout.weight
-        cvc = jnp.diag(C @ V @ C.T)
+        cvc = _quadratic_diag(C, cov_z, approx)
         loglam = eta + 0.5 * cvc
         # loglam = jnp.where(loglam < _MAX_LOGRATE, loglam, jnp.log(loglam))
         loglam = jnp.minimum(loglam, _MAX_LOGRATE)
@@ -541,7 +562,7 @@ class Poisson(eqx.Module, strict=True):
         return ll
 
 
-class DiagGaussian(eqx.Module, strict=True):
+class Gaussian(eqx.Module, strict=True):
     """
     Diagonal Gaussian observation model for continuous data in XFADS.
 
@@ -676,3 +697,4 @@ class DiagGaussian(eqx.Module, strict=True):
     #         Whether to make parameters static.
     #     """
     #     self.__dataclass_fields__["unconstrained_cov"].metadata = {"static": static}
+

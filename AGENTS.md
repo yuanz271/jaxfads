@@ -26,7 +26,7 @@ jaxfads/
 | Filtering/smoothing algorithms | `src/jaxfads/core.py` | `filter()`, `bismooth()` |
 | Main model class | `src/jaxfads/smoother.py` | `XFADS` orchestrator |
 | State transitions | `src/jaxfads/dynamics.py` | `Dynamics`, `DiagGaussian` |
-| Observation models | `src/jaxfads/observations.py` | `Poisson`, `DiagGaussian` |
+| Observation models | `src/jaxfads/observations.py` | `Poisson`, `Gaussian` |
 | Distribution math | `src/jaxfads/distributions.py` | `DiagMVN`, `FullMVN`, `Approx` |
 | Neural blocks | `src/jaxfads/nn.py`, `encoders.py` | MLP, RBF, encoders |
 | Training loop | `src/jaxfads/trainer.py` | `train()`, `batch_elbo()` |
@@ -41,14 +41,14 @@ jaxfads/
 | `core.py` | Filtering primitives | `filter()`, `bismooth()`, `Mode` |
 | `smoother.py` | Main orchestrator | `XFADS` class |
 | `dynamics.py` | State transitions | `Noise`, `DiagGaussian`, `Dynamics`, `predict_moment()`, `sample_expected_moment()` |
-| `observations.py` | Likelihoods | `Poisson`, `DiagGaussian`, `Likelihood` |
+| `observations.py` | Likelihoods | `Poisson`, `Gaussian`, `Likelihood` |
 | `distributions.py` | Approx posteriors | `DiagMVN`, `FullMVN`, `LoRaMVN`, `Approx`, `damping_inv` |
 | `nn.py` | Neural blocks | `make_mlp()`, `gauss_rbf()`, `WeightNorm`, `StationaryLinear`, `VariantBiasLinear`, `RBFN`, `DataMasker` |
 | `encoders.py` | Sequence encoders | `AlphaEncoder`, `BetaEncoder` |
 | `trainer.py` | Training loop | `train()`, `batch_elbo()`, `batch_loss()`, `train_test_split()`, `dataloader()`, `compute_patience()`, `DEFAULT_TRAINER_CONFIG` |
 | `vi.py` | Variational inference | `elbo()` |
 | `util.py` | Helpers | `vmap_with_key()` |
-| `constraints.py` | Parameter constraints | `constrain_positive()`, `unconstrain_positive()`, `softplus_inverse()`, `AbstractConstraint`, `Positivity` |
+| `constraints.py` | Parameter constraints | `constrain_positive()`, `unconstrain_positive()`, `softplus_inverse()` |
 | `ilqr.py` | Iterative LQR | `rollout()`, `cost_function()`, `backward_pass()`, `line_search()`, `arg_first_less_than()`, `arg_smallest_less_than()`, `ilqr()` |
 
 ### Architecture
@@ -79,8 +79,8 @@ Approx (ABC)
 **Observations** (`observations.py`):
 ```
 Likelihood (ABC)
-├── Poisson      # Poisson with neural readout
-└── DiagGaussian # Gaussian with learned noise
+├── Poisson            # Poisson with neural readout
+└── Gaussian           # Gaussian with learned noise
 ```
 
 **Dynamics** (`dynamics.py`):

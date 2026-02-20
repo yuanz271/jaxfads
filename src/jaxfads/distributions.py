@@ -24,6 +24,9 @@ def damping_inv(a: Array, damping: float = _EPS) -> Array:
     """
     Compute the inverse of a matrix with damping for numerical stability.
 
+    Uses ``jnp.linalg.solve`` instead of explicit ``inv`` for better
+    numerical conditioning.
+
     Parameters
     ----------
     a : Array, shape (..., D, D)
@@ -41,7 +44,8 @@ def damping_inv(a: Array, damping: float = _EPS) -> Array:
     The damping term prevents singular matrices and improves numerical
     stability by adding a small positive value to the diagonal elements.
     """
-    return jnp.linalg.inv(a + damping * jnp.eye(a.shape[-1]))
+    eye = jnp.eye(a.shape[-1])
+    return jnp.linalg.solve(a + damping * eye, eye)
 
 
 class Approx(SubclassRegistryMixin, ABC):
@@ -318,6 +322,7 @@ class Approx(SubclassRegistryMixin, ABC):
         ...
 
 
+
 class FullMVN(Approx):
     """
     Full covariance multivariate normal approximation.
@@ -497,6 +502,7 @@ class FullMVN(Approx):
         return jnp.diag(noise_cov)
 
 
+
 class LoRaMVN(Approx):
     """
     Low-rank plus diagonal multivariate normal approximation.
@@ -629,6 +635,7 @@ class LoRaMVN(Approx):
         raise NotImplementedError("LoRaMVN.prior_natural is not yet implemented.")
 
 
+
 class DiagMVN(Approx):
     """
     Diagonal covariance multivariate normal approximation.
@@ -674,12 +681,11 @@ class DiagMVN(Approx):
     def sample_by_moment(
         cls, key: Array, moment: Array, mc_size: int | None = None
     ) -> Array:
-        """See base class. Uses diagonal covariance for efficient sampling."""
+        """See base class. Reparameterized diagonal sampling (O(D), no Cholesky)."""
         mean, cov = cls.moment_to_canon(moment)
-        shape = None if mc_size is None else (mc_size,)
-        return jrnd.multivariate_normal(
-            key, mean, jnp.diag(cov), shape=shape
-        )  # It seems JAX does the reparameterization trick
+        std = jnp.sqrt(jnp.maximum(cov, _EPS))
+        shape = mean.shape if mc_size is None else (mc_size,) + mean.shape
+        return mean + std * jrnd.normal(key, shape)
 
     @classmethod
     def moment_to_canon(cls, moment: Array) -> tuple[Array, Array]:
@@ -768,3 +774,4 @@ class DiagMVN(Approx):
     def noise_moment(cls, noise_cov: Array) -> Array:
         """See base class. Identity for diagonal case."""
         return noise_cov
+

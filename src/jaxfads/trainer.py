@@ -10,7 +10,6 @@ maximizing the Evidence Lower Bound (ELBO) objective.
 from functools import partial
 import time
 
-import equinox as eqx
 import jax
 import numpy as np
 import optax
@@ -168,10 +167,8 @@ def batch_loss(model, batch, key):
     """
     times, observations, controls, covariates = batch
 
-    checkpointed_model = eqx.filter_checkpoint(model)
-
     key, model_key = jr.split(key)
-    _, posterior_moments, prior_moments = checkpointed_model(
+    _, posterior_moments, prior_moments = model(
         times, observations, controls, covariates, key=model_key
     )
 
@@ -326,6 +323,7 @@ def train(model, data, *, conf):
     - Multi-device data parallelism
     - Dynamic batch permutation for better mixing
     """
+    user_set_patience = "patience" in conf
     conf = OmegaConf.merge(DEFAULT_TRAINER_CONFIG, conf)
 
     t0 = time.perf_counter()
@@ -353,7 +351,8 @@ def train(model, data, *, conf):
     train_set, valid_set = train_test_split(
         data, rng=rng, test_size=valid_size, train_size=train_size
     )
-    conf.patience = compute_patience(conf.max_epoch, data_size, batch_size)
+    if not user_set_patience:
+        conf.patience = compute_patience(conf.max_epoch, data_size, batch_size)
 
     logger.info(
         "train start: devices=%d batch_size=%d data=%d train=%d valid=%d max_epoch=%d patience=%d seed=%d",
