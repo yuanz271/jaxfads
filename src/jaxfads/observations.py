@@ -78,6 +78,7 @@ def _init_bias(y: Array, n_steps: int) -> Array:
         Number of time-variant bias steps.  When ``> 0`` a per-step
         mean is returned (for :class:`VariantBiasLinear`); otherwise
         the grand mean is returned (for :class:`StationaryLinear`).
+        When ``> 0``, ``y.shape[1]`` must equal ``n_steps``.
 
     Returns
     -------
@@ -112,7 +113,8 @@ def _fa_weight(
     """
     y_flat = y_centered.reshape(-1, y_centered.shape[-1])
 
-    cov_y = (y_flat.T @ y_flat) / (y_flat.shape[0] - 1)
+    n = y_flat.shape[0]
+    cov_y = (y_flat.T @ y_flat) / jnp.maximum(n - 1, 1)
     cov_signal = cov_y - obs_noise_var * jnp.eye(cov_y.shape[0])
 
     eigvals, eigvecs = jnp.linalg.eigh(cov_signal)

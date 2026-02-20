@@ -520,8 +520,6 @@ class VariantBiasLinear(Module):
         return eqx.tree_at(lambda r: r.biases, self, biases)
 
 
-
-
 def gauss_rbf(x, c, s):
     """
     Gaussian radial basis function kernel.

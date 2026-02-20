@@ -463,3 +463,67 @@ def test_unknown_readout_init_raises():
         assert False, "Should have raised ValueError"
     except ValueError as e:
         assert "nonexistent" in str(e)
+
+
+def test_norm_readout_set_weight_and_bias():
+    """set_weight/set_bias work through NormalizedLinear wrapper."""
+    state_dim, observation_dim = 3, 5
+    conf = OmegaConf.create(dict(
+        model="GLM",
+        state_dim=state_dim,
+        observation_dim=observation_dim,
+        cov=[1.0] * observation_dim,
+        n_steps=0,
+        norm_readout=True,
+        likelihood="DiagGaussian",
+    ))
+    glm = GLM(conf, jrnd.key(0))
+
+    new_weight = jnp.ones((observation_dim, state_dim)) * 2.0
+    new_bias = jnp.ones(observation_dim) * 3.0
+    updated = glm.set_readout(weight=new_weight, bias=new_bias)
+
+    # Weight is normalized (direction preserved, unit norm)
+    expected_dir = new_weight / jnp.linalg.norm(new_weight)
+    chex.assert_trees_all_close(updated.readout.weight, expected_dir, atol=1e-5)
+    # Bias is set exactly
+    chex.assert_trees_all_close(updated.readout.layer.bias, new_bias)
+
+
+def test_norm_readout_fa_init():
+    """FA init sets weight and bias through NormalizedLinear wrapper."""
+    key = jrnd.key(70)
+    state_dim, observation_dim = 2, 6
+    batch, time_steps = 32, 50
+
+    y, _, _ = _make_synthetic_data(
+        key, state_dim, observation_dim, batch, time_steps
+    )
+
+    conf = OmegaConf.create(dict(
+        model="GLM",
+        state_dim=state_dim,
+        observation_dim=observation_dim,
+        cov=[0.01] * observation_dim,
+        n_steps=0,
+        norm_readout=True,
+        likelihood="DiagGaussian",
+    ))
+    glm = GLM(conf, jrnd.key(0))
+    weight_before = glm.readout.weight.copy()
+
+    t = jnp.arange(time_steps)
+    u = jnp.zeros((batch, time_steps, 1))
+    c = jnp.zeros((batch, time_steps, 1))
+    initialized = glm.initialize(t, y, u, c)
+
+    # Weight changed and is unit-norm
+    assert not jnp.allclose(initialized.readout.weight, weight_before)
+    chex.assert_shape(initialized.readout.weight, (observation_dim, state_dim))
+    norm = jnp.linalg.norm(initialized.readout.weight)
+    chex.assert_trees_all_close(norm, 1.0, atol=1e-5)
+    # Bias is mean(y)
+    mean_y = jnp.mean(y.reshape(-1, observation_dim), axis=0)
+    chex.assert_trees_all_close(
+        initialized.readout.layer.bias, mean_y, atol=1e-5
+    )
