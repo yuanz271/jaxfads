@@ -923,12 +923,12 @@ def main() -> None:
     trained_toy = train(toy_model, data, conf=toy_trainer_conf)
 
     # Post-training evaluation
-    post_flow = flow_metrics_vdp_vs_model(
+    post_flow_toy = flow_metrics_vdp_vs_model(
         trained_toy, mu=mu, dt=dt, xlim=xlim, vlim=vlim, grid=grid
     )
     print(
         "flow metrics after training: "
-        f"nrmse={post_flow.nrmse:.4f}, mean_angle={post_flow.mean_angle_rad:.4f} rad"
+        f"nrmse={post_flow_toy.nrmse:.4f}, mean_angle={post_flow_toy.mean_angle_rad:.4f} rad"
     )
 
     key, infer_key = jr.split(key)
@@ -936,21 +936,21 @@ def main() -> None:
         times, observations, inputs, covariates, key=infer_key
     )
     trained_means, trained_covs = mean_and_cov_vmap(trained_moments)
-    trained_rmse = jnp.sqrt(jnp.mean((trained_means - latent_states) ** 2))
-    print(f"posterior rmse after training: {float(trained_rmse):.6f}")
+    toy_post_rmse = float(jnp.sqrt(jnp.mean((trained_means - latent_states) ** 2)))
+    print(f"posterior rmse after training: {toy_post_rmse:.6f}")
 
     # Readout evaluation (true readout is known for Case 1)
     C_toy = trained_toy.observation.readout.weight
     readout_layer = trained_toy.observation.readout.layer
     b_toy = readout_layer.layer.bias if hasattr(readout_layer, "layer") else readout_layer.bias
-    readout_C_rmse = jnp.sqrt(jnp.mean((C_toy - C) ** 2))
-    readout_b_rmse = jnp.sqrt(jnp.mean((b_toy - b) ** 2))
-    print(f"readout C rmse: {float(readout_C_rmse):.6f}")
-    print(f"readout b rmse: {float(readout_b_rmse):.6f}")
+    toy_C_rmse = float(jnp.sqrt(jnp.mean((C_toy - C) ** 2)))
+    toy_b_rmse = float(jnp.sqrt(jnp.mean((b_toy - b) ** 2)))
+    print(f"readout C rmse: {toy_C_rmse:.6f}")
+    print(f"readout b rmse: {toy_b_rmse:.6f}")
     # Observation reconstruction
     y_hat = trained_means @ C_toy.T + b_toy
-    obs_rmse = jnp.sqrt(jnp.mean((y_hat - observations) ** 2))
-    print(f"observation reconstruction rmse: {float(obs_rmse):.6f}")
+    toy_obs_rmse = float(jnp.sqrt(jnp.mean((y_hat - observations) ** 2)))
+    print(f"observation reconstruction rmse: {toy_obs_rmse:.6f}")
 
     plot_posterior("toy", trained_means, trained_covs, latent_states, trial, T, out_dir)
     plot_flow_field(
@@ -1032,8 +1032,8 @@ def main() -> None:
     print(f"alignment offset d: {np.asarray(aff.d)}")
 
     aligned_means = align(aff, trained_means)
-    aligned_rmse = jnp.sqrt(jnp.mean((aligned_means - latent_states) ** 2))
-    print(f"posterior rmse (aligned): {float(aligned_rmse):.6f}")
+    mlp_post_rmse = float(jnp.sqrt(jnp.mean((aligned_means - latent_states) ** 2)))
+    print(f"posterior rmse (aligned): {mlp_post_rmse:.6f}")
 
     # --- Readout evaluation ---
     # The model learns C_learned in its own latent space.  The effective
@@ -1045,22 +1045,22 @@ def main() -> None:
     A_inv = jnp.linalg.inv(aff.A)
     C_eff = C_learned @ A_inv  # (obs_dim, state_dim)
     b_eff = b_learned + C_learned @ (-A_inv @ aff.d)
-    readout_C_rmse = jnp.sqrt(jnp.mean((C_eff - C) ** 2))
-    readout_b_rmse = jnp.sqrt(jnp.mean((b_eff - b) ** 2))
-    print(f"readout C rmse (aligned): {float(readout_C_rmse):.6f}")
-    print(f"readout b rmse (aligned): {float(readout_b_rmse):.6f}")
+    mlp_C_rmse = float(jnp.sqrt(jnp.mean((C_eff - C) ** 2)))
+    mlp_b_rmse = float(jnp.sqrt(jnp.mean((b_eff - b) ** 2)))
+    print(f"readout C rmse (aligned): {mlp_C_rmse:.6f}")
+    print(f"readout b rmse (aligned): {mlp_b_rmse:.6f}")
     # Observation reconstruction (no ground-truth needed)
     y_hat = trained_means @ C_learned.T + b_learned
-    obs_rmse = jnp.sqrt(jnp.mean((y_hat - observations) ** 2))
-    print(f"observation reconstruction rmse: {float(obs_rmse):.6f}")
+    mlp_obs_rmse = float(jnp.sqrt(jnp.mean((y_hat - observations) ** 2)))
+    print(f"observation reconstruction rmse: {mlp_obs_rmse:.6f}")
 
-    post_flow = flow_metrics_vdp_vs_model(
+    post_flow_mlp = flow_metrics_vdp_vs_model(
         trained_mlp, mu=mu, dt=dt, xlim=xlim, vlim=vlim, grid=grid,
         alignment=aff,
     )
     print(
         "flow metrics (aligned): "
-        f"nrmse={post_flow.nrmse:.4f}, mean_angle={post_flow.mean_angle_rad:.4f} rad"
+        f"nrmse={post_flow_mlp.nrmse:.4f}, mean_angle={post_flow_mlp.mean_angle_rad:.4f} rad"
     )
 
     # Plots use aligned posterior means so they share the true scale
@@ -1076,6 +1076,28 @@ def main() -> None:
     # Save/load roundtrip skipped for MLPDynamics: the class is defined in this
     # example file, so a saved model cannot be loaded from a different script
     # without also defining/importing MLPDynamics.
+
+    # ===================================================================
+    # Summary table
+    # ===================================================================
+    print("\n" + "=" * 72)
+    print("Summary  (MLP metrics use Procrustes alignment; obs noise σ ="
+          f" {sigma_obs})")
+    print("=" * 72)
+    header = f"{'Metric':<30s} {'ToyDynamics':>14s} {'MLPDynamics':>14s}"
+    print(header)
+    print("-" * len(header))
+    rows = [
+        ("Posterior RMSE", toy_post_rmse, mlp_post_rmse),
+        ("Readout C RMSE", toy_C_rmse, mlp_C_rmse),
+        ("Readout b RMSE", toy_b_rmse, mlp_b_rmse),
+        ("Obs recon RMSE", toy_obs_rmse, mlp_obs_rmse),
+        ("Flow NRMSE", post_flow_toy.nrmse, post_flow_mlp.nrmse),
+        ("Flow angle (rad)", post_flow_toy.mean_angle_rad, post_flow_mlp.mean_angle_rad),
+    ]
+    for name, v1, v2 in rows:
+        print(f"{name:<30s} {v1:>14.4f} {v2:>14.4f}")
+    print("=" * len(header))
 
 
 if __name__ == "__main__":
