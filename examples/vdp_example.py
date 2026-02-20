@@ -483,100 +483,6 @@ def align(alignment: AffineAlignment, z: jax.Array) -> jax.Array:
 # ---------------------------------------------------------------------------
 
 
-def _set_readout(model, C: jax.Array, b: jax.Array):
-    """Replace the readout weight and bias inside an XFADS model.
-
-    Parameters
-    ----------
-    model : XFADS
-        Model whose readout will be replaced.
-    C : Array, shape (obs_dim, state_dim)
-        Readout weight matrix.
-    b : Array, shape (obs_dim,)
-        Readout bias vector.
-
-    Returns
-    -------
-    XFADS
-        Model with updated readout parameters.
-    """
-    import equinox as eqx
-
-    readout = model.observation.readout
-    if hasattr(readout.layer, "layer"):
-        # WeightNorm wrapper
-        new_readout = eqx.tree_at(
-            lambda r: r.layer.layer.weight, readout, C
-        )
-    else:
-        new_readout = eqx.tree_at(lambda r: r.layer.weight, readout, C)
-    new_readout = new_readout.initialize(b)
-
-    return eqx.tree_at(lambda m: m.observation.readout, model, new_readout)
-
-
-def fa_init_readout(
-    model, observations: jax.Array, obs_noise_var: float
-):
-    """Initialise the observation readout via Factor Analysis.
-
-    Estimates the loading matrix C and bias b from the generative model
-    ``y = C z + b + ε``, where ``z ~ N(0, I)`` and ``ε ~ N(0, σ²I)``.
-
-    Steps
-    -----
-    1. Centre observations → sample covariance Σ_y.
-    2. Subtract known noise floor:  Σ_signal = Σ_y − σ²I.
-    3. Eigendecompose Σ_signal; take top-k eigenvectors scaled by
-       √eigenvalue to obtain the FA loading matrix C.
-    4. Set readout weight = C, bias = mean(y).
-
-    The resulting C spans the correct data subspace.  When paired with
-    known dynamics that break the rotation symmetry (e.g. Van der Pol),
-    the remaining rotation ambiguity is resolved during training.
-
-    Parameters
-    ----------
-    model : XFADS
-        Model whose readout will be replaced.
-    observations : Array, shape (N, T, obs_dim)
-        Observed data.
-    obs_noise_var : float
-        Known observation noise variance σ².
-
-    Returns
-    -------
-    XFADS
-        Model with FA-initialised readout.
-    """
-    state_dim = model.conf.state_dim
-    y = observations.reshape(-1, observations.shape[-1])  # (N*T, obs_dim)
-    mean_y = jnp.mean(y, axis=0)
-    y_centered = y - mean_y
-
-    # Sample covariance minus observation noise floor
-    cov_y = (y_centered.T @ y_centered) / (len(y_centered) - 1)
-    cov_signal = cov_y - obs_noise_var * jnp.eye(cov_y.shape[0])
-
-    # Eigendecomposition (ascending order → reverse for descending)
-    eigvals, eigvecs = jnp.linalg.eigh(cov_signal)
-    eigvals = eigvals[::-1]
-    eigvecs = eigvecs[:, ::-1]
-
-    # FA loadings: C = V_k @ diag(sqrt(max(λ_k, 0)))
-    top_vals = jnp.maximum(eigvals[:state_dim], 0.0)
-    C_fa = eigvecs[:, :state_dim] * jnp.sqrt(top_vals)  # (obs_dim, state_dim)
-
-    # Resolve sign ambiguity: for each latent dimension, choose the sign
-    # that makes the column positively correlated with the data projection.
-    # This is a standard heuristic (sklearn PCA uses it too).
-    z_proj = y_centered @ C_fa  # (N*T, state_dim)
-    signs = jnp.sign(jnp.sum(z_proj**3, axis=0))  # skewness-based sign
-    signs = jnp.where(signs == 0, 1.0, signs)
-    C_fa = C_fa * signs
-
-    return _set_readout(model, C_fa, mean_y)
-
 
 # ---------------------------------------------------------------------------
 # Plotting helpers
@@ -830,6 +736,7 @@ def main() -> None:
         "cov": [float(sigma_obs**2)] * obs_dim,
         "norm_readout": False,
         "dropout": 0.0,
+        "readout_init_conf": {"obs_noise_var": float(sigma_obs**2)},
     }
 
     n_devices = len(jax.devices())
@@ -891,7 +798,7 @@ def main() -> None:
     )
 
     true_model = XFADS(true_model_conf, jr.key(123))
-    true_model = fa_init_readout(true_model, observations, sigma_obs**2)
+    true_model = true_model.initialize(times, observations, inputs, covariates)
 
     def moment_to_mean_and_cov(moment_vec):
         mean, cov = true_model.approx.moment_to_canon(moment_vec)
@@ -1006,6 +913,7 @@ def main() -> None:
     )
 
     mlp_model = XFADS(mlp_model_conf, jr.key(456))
+    mlp_model = mlp_model.initialize(times, observations, inputs, covariates)
 
     # Training
     mlp_trainer_conf = OmegaConf.create(

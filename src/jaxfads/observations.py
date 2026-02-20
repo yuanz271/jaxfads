@@ -23,6 +23,168 @@ from .nn import StationaryLinear, VariantBiasLinear
 _MAX_LOGRATE = 7.0
 
 
+# ---------------------------------------------------------------------------
+# Readout initializer registry
+# ---------------------------------------------------------------------------
+
+_READOUT_INIT: dict[str, Callable[[Array, Any], tuple[Array | None, Array]]] = {}
+
+
+def register_readout_init(name: str) -> Callable:
+    """
+    Register a readout initializer by name.
+
+    The decorated function must have signature
+    ``(y: Array, conf) -> (C | None, bias)`` where *C* is the weight
+    matrix (or ``None`` to leave weights unchanged) and *bias* is the
+    readout bias in observation space.  ``GLM.initialize`` applies the
+    likelihood's link function (e.g. ``log`` for Poisson) to *bias*
+    before setting it on the readout.
+
+    Parameters
+    ----------
+    name : str
+        Key used to look up the initializer from configuration
+        (``obs_conf.readout_init``).
+
+    Returns
+    -------
+    Callable
+        Decorator that registers the function.
+
+    Examples
+    --------
+    >>> @register_readout_init("pca")
+    ... def _pca_init(y, conf):
+    ...     ...
+    ...     return C_pca, mean_y
+    """
+
+    def decorator(fn: Callable) -> Callable:
+        _READOUT_INIT[name] = fn
+        return fn
+
+    return decorator
+
+
+def _init_bias(y: Array, n_steps: int) -> Array:
+    """Compute mean bias from observations.
+
+    Parameters
+    ----------
+    y : Array, shape (N, T, obs_dim)
+        Observations.
+    n_steps : int
+        Number of time-variant bias steps.  When ``> 0`` a per-step
+        mean is returned (for :class:`VariantBiasLinear`); otherwise
+        the grand mean is returned (for :class:`StationaryLinear`).
+
+    Returns
+    -------
+    Array
+        Bias of shape ``(obs_dim,)`` (stationary) or
+        ``(T, obs_dim)`` (time-variant).
+    """
+    if n_steps > 0:
+        return jnp.mean(y, axis=0)  # (T, obs_dim)
+    return jnp.mean(y.reshape(-1, y.shape[-1]), axis=0)  # (obs_dim,)
+
+
+def _fa_weight(
+    y_centered: Array, state_dim: int, obs_noise_var: float
+) -> Array:
+    """Estimate Factor Analysis loading matrix from centred data.
+
+    Parameters
+    ----------
+    y_centered : Array, shape (N, T, obs_dim) or (N*T, obs_dim)
+        Observations with bias removed.
+    state_dim : int
+        Number of latent dimensions (columns of the loading matrix).
+    obs_noise_var : float
+        Isotropic observation noise variance to subtract.  Use ``0.0``
+        to degrade gracefully to PCA.
+
+    Returns
+    -------
+    Array, shape (obs_dim, state_dim)
+        Loading matrix with sign disambiguation via skewness.
+    """
+    y_flat = y_centered.reshape(-1, y_centered.shape[-1])
+
+    cov_y = (y_flat.T @ y_flat) / (y_flat.shape[0] - 1)
+    cov_signal = cov_y - obs_noise_var * jnp.eye(cov_y.shape[0])
+
+    eigvals, eigvecs = jnp.linalg.eigh(cov_signal)
+    eigvals = eigvals[::-1]
+    eigvecs = eigvecs[:, ::-1]
+
+    top_vals = jnp.maximum(eigvals[:state_dim], 0.0)
+    C_fa = eigvecs[:, :state_dim] * jnp.sqrt(top_vals)  # (obs_dim, state_dim)
+
+    # Sign disambiguation via skewness
+    z_proj = y_flat @ C_fa
+    signs = jnp.sign(jnp.sum(z_proj**3, axis=0))
+    signs = jnp.where(signs == 0, 1.0, signs)
+    return C_fa * signs
+
+
+def _resolve_obs_noise_var(conf: Any) -> float:
+    """Resolve observation noise variance from config.
+
+    Resolution chain:
+    ``readout_init_conf.obs_noise_var`` → ``mean(conf.cov)`` → ``0.0``.
+
+    Parameters
+    ----------
+    conf : DictConfig
+        Observation configuration.
+
+    Returns
+    -------
+    float
+        Scalar observation noise variance.
+    """
+    init_conf = conf.get("readout_init_conf", None)
+    if init_conf is not None and init_conf.get("obs_noise_var", None) is not None:
+        return float(init_conf.obs_noise_var)
+    if conf.get("cov", None) is not None:
+        return float(jnp.mean(jnp.asarray(conf.cov)))
+    return 0.0
+
+
+@register_readout_init("fa")
+def _fa_init(y: Array, conf: Any) -> tuple[Array, Array]:
+    """Factor Analysis readout initializer.
+
+    Estimates the loading matrix *C* and bias *b* in two stages:
+
+    1. **Bias** — per-step or grand mean of the observations.
+    2. **Weight** — eigendecomposition of the signal covariance after
+       subtracting isotropic observation noise.
+
+    The ``obs_noise_var`` is resolved via :func:`_resolve_obs_noise_var`.
+
+    Parameters
+    ----------
+    y : Array, shape (N, T, obs_dim)
+        Observations.
+    conf : DictConfig
+        Observation configuration (``obs_conf``).
+
+    Returns
+    -------
+    C : Array, shape (obs_dim, state_dim)
+        Factor Analysis loading matrix.
+    bias : Array
+        Mean observations — shape ``(obs_dim,)`` or ``(T, obs_dim)``.
+    """
+    bias = _init_bias(y, conf.get("n_steps", 0))
+    y_centered = y - bias
+    C = _fa_weight(y_centered, conf.state_dim, _resolve_obs_noise_var(conf))
+    return C, bias
+
+
 def make_readout(conf, key: Array) -> StationaryLinear | VariantBiasLinear:
     """
     Construct a readout module from observation configuration.
@@ -64,6 +226,23 @@ class Likelihood(Protocol):
     observations given latent state distributions.
     """
 
+    @staticmethod
+    def link(y: Array) -> Array:
+        """
+        Link function mapping observations to natural parameter space.
+
+        Parameters
+        ----------
+        y : Array
+            Values in observation space.
+
+        Returns
+        -------
+        Array
+            Transformed values in natural parameter space.
+        """
+        ...
+
     def initialize(self, t: Array, y: Array, u: Array, c: Array) -> "Likelihood":
         """
         Initialize likelihood parameters from data statistics.
@@ -72,17 +251,6 @@ class Likelihood(Protocol):
         -------
         Likelihood
             Updated likelihood instance. Default implementation is a no-op.
-        """
-        ...
-
-    def readout_init_target(self, mean_y: Array) -> Array:
-        """
-        Transform mean observations into readout initialization targets.
-
-        Returns
-        -------
-        Array
-            Initialization targets for the readout biases.
         """
         ...
 
@@ -166,16 +334,55 @@ class GLM(ObservationModel):
         """
         return self.likelihood.eloglik(key, t, moment, y, approx, mc_size, self.readout)
 
+    def set_readout(
+        self, weight: Array | None = None, bias: Array | None = None
+    ) -> "GLM":
+        """
+        Manually set readout weight and/or bias.
+
+        Parameters
+        ----------
+        weight : Array or None, optional
+            Weight matrix of shape (observation_dim, state_dim).
+            If ``None``, the weight is left unchanged.
+        bias : Array or None, optional
+            Bias vector of shape (observation_dim,) for
+            :class:`StationaryLinear`, or (n_biases, observation_dim) for
+            :class:`VariantBiasLinear`.  If ``None``, the bias is left
+            unchanged.
+
+        Returns
+        -------
+        GLM
+            Updated observation model.
+        """
+        readout = self.readout
+        if weight is not None:
+            readout = readout.set_weight(weight)
+        if bias is not None:
+            readout = readout.set_bias(bias)
+        return eqx.tree_at(lambda m: m.readout, self, readout)
+
     def initialize(self, t: Array, y: Array, u: Array, c: Array) -> "GLM":
         """
         Initialize likelihood and readout parameters from data statistics.
+
+        The readout initialization strategy is controlled by the
+        ``readout_init`` key in the observation configuration:
+
+        - ``"fa"`` (default): Factor Analysis — estimates weight *C* and
+          bias *b* from data covariance.
+        - ``None``: skip readout initialization entirely.
+
+        Custom initializers can be added via
+        :func:`register_readout_init`.
 
         Parameters
         ----------
         t : Array
             Time steps for the sequences.
         y : Array
-            Observation sequences.
+            Observation sequences, shape (N, T, obs_dim).
         u : Array
             Control input sequences.
         c : Array
@@ -189,20 +396,27 @@ class GLM(ObservationModel):
         likelihood = self.likelihood
         readout = self.readout
 
+        # --- likelihood init (existing) ---------------------------------
         likelihood_initializer = getattr(likelihood, "initialize", None)
         if likelihood_initializer is not None:
             likelihood = likelihood_initializer(t, y, u, c)
 
-        readout_initializer = getattr(readout, "initialize", None)
-        if readout_initializer is not None:
-            mean_y = jnp.mean(y, axis=0)
-            target = likelihood.readout_init_target(mean_y)
-            if isinstance(readout, VariantBiasLinear):
-                readout = readout_initializer(target)
-            else:
-                if target.ndim > 1:
-                    target = jnp.mean(target, axis=0)
-                readout = readout_initializer(target)
+        # --- readout init -----------------------------------------------
+        init_name = self.conf.get("readout_init", "fa")
+
+        if init_name is not None:
+            if init_name not in _READOUT_INIT:
+                raise ValueError(
+                    f"Unknown readout_init '{init_name}'. "
+                    f"Registered: {list(_READOUT_INIT)}."
+                )
+            init_fn = _READOUT_INIT[init_name]
+            weight, bias = init_fn(y, self.conf)
+
+            if weight is not None:
+                readout = readout.set_weight(weight)
+            readout = readout.set_bias(likelihood.link(bias))
+
         return eqx.tree_at(
             lambda model: (model.readout, model.likelihood),
             self,
@@ -217,6 +431,7 @@ __all__ = [
     "DiagGaussian",
     "make_readout",
     "Likelihood",
+    "register_readout_init",
 ]
 
 
@@ -251,21 +466,22 @@ class Poisson(eqx.Module, strict=True):
     def __init__(self, conf, key):  # pyright: ignore[reportMissingSuperCall]
         self.conf = conf
 
-    def readout_init_target(self, mean_y: Array) -> Array:
+    @staticmethod
+    def link(y: Array) -> Array:
         """
-        Transform mean observations into log-rate initialization targets.
+        Log link function for Poisson observations.
 
         Parameters
         ----------
-        mean_y : Array
-            Mean observations over the batch dimension.
+        y : Array
+            Values in observation space (rates / counts).
 
         Returns
         -------
         Array
-            Log-mean targets for initializing the readout biases.
+            Log-transformed values in natural parameter space.
         """
-        return jnp.log(jnp.maximum(mean_y, _EPS))
+        return jnp.log(jnp.maximum(y, _EPS))
 
     def eloglik(
         self,
@@ -364,6 +580,23 @@ class DiagGaussian(eqx.Module, strict=True):
         cov = jnp.array(conf.get("cov", jnp.ones(conf.observation_dim)))
         self.unconstrained_cov = unconstrain_positive(cov)
 
+    @staticmethod
+    def link(y: Array) -> Array:
+        """
+        Identity link function for Gaussian observations.
+
+        Parameters
+        ----------
+        y : Array
+            Values in observation space.
+
+        Returns
+        -------
+        Array
+            Same values (identity transform).
+        """
+        return y
+
     def cov(self):
         """
         Get the observation noise covariance.
@@ -430,12 +663,6 @@ class DiagGaussian(eqx.Module, strict=True):
         cov_y = C @ approx.full_cov(cov_z) @ C.T + jnp.diag(self.cov())
         ll = tfp.MultivariateNormalFullCovariance(mean_y, cov_y).log_prob(y)
         return ll
-
-    def readout_init_target(self, mean_y: Array) -> Array:
-        """
-        Transform mean observations into readout initialization targets.
-        """
-        return mean_y
 
     # def set_static(self, static=True) -> None:
     #     """
