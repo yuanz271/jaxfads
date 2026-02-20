@@ -3,9 +3,9 @@
 Demonstrates variational Bayesian state-space modeling on a 2D Van der Pol
 latent with 10D Gaussian observations.  Two cases are shown:
 
-1. **ToyDynamics** — exact Van der Pol RK4 step (no model mismatch).
-   The readout is initialised to the true observation matrix so that
-   learning is concentrated in the encoder.
+1. **VDPDynamics** — exact Van der Pol RK4 step (no model mismatch).
+   The readout is initialised via Factor Analysis; the encoder and
+   readout are learned from data.
 
 2. **MLPDynamics** — a trainable residual MLP that must learn the dynamics
    from data.  Because both the readout and dynamics are free, the latent
@@ -218,7 +218,7 @@ def _check_toydynamics_matches_rk4(
             self.input_dim = input_dim
             self.context_dim = context_dim
 
-    dyn = ToyDynamics(Cfg(mu=mu, dt=dt, cov=cov), key=jr.key(1))
+    dyn = VDPDynamics(Cfg(mu=mu, dt=dt, cov=cov), key=jr.key(1))
 
     key = jr.key(2)
     z = jr.normal(key, (32, 2))
@@ -361,7 +361,7 @@ def flow_metrics_vdp_vs_model(
 # ---------------------------------------------------------------------------
 
 
-class ToyDynamics(Dynamics):
+class VDPDynamics(Dynamics):
     noise: DiagGaussian
     mu: float
     dt: float
@@ -858,18 +858,18 @@ def main() -> None:
     data = (times, observations, inputs, covariates)
 
     # ===================================================================
-    # Case 1: ToyDynamics (exact Van der Pol — no model mismatch)
+    # Case 1: VDPDynamics (exact Van der Pol — no model mismatch)
     # ===================================================================
     print("\n" + "=" * 60)
-    print("Case 1: ToyDynamics (exact Van der Pol)")
+    print("Case 1: VDPDynamics (exact Van der Pol)")
     print("=" * 60)
 
-    toy_model_conf = OmegaConf.create(
+    true_model_conf = OmegaConf.create(
         {
             "mode": "pseudo",
             "observation_dim": obs_dim,
             "state_dim": state_dim,
-            "forward": "ToyDynamics",
+            "forward": "VDPDynamics",
             "approx": "DiagMVN",
             "mc_size": 1,
             "seed": 0,
@@ -883,85 +883,82 @@ def main() -> None:
                 "context_dim": 0,
                 "mu": mu,
                 "dt": dt,
-                "cov": 0.0,
+                "cov": 1.0,
             },
             "enc_conf": enc_conf,
             "obs_conf": obs_conf,
         }
     )
 
-    toy_model = XFADS(toy_model_conf, jr.key(123))
-    toy_model = _set_readout(toy_model, jnp.array(C), jnp.array(b))
+    true_model = XFADS(true_model_conf, jr.key(123))
+    true_model = fa_init_readout(true_model, observations, sigma_obs**2)
 
     def moment_to_mean_and_cov(moment_vec):
-        mean, cov = toy_model.approx.moment_to_canon(moment_vec)
+        mean, cov = true_model.approx.moment_to_canon(moment_vec)
         return mean, cov
 
     mean_and_cov_vmap = jax.vmap(jax.vmap(moment_to_mean_and_cov, in_axes=0), in_axes=0)
 
-    # Pre-training inference
-    key, infer_key = jr.split(key)
-    _, posterior_moment_params, _ = toy_model(
-        times, observations, inputs, covariates, key=infer_key
-    )
-    posterior_means, _ = mean_and_cov_vmap(posterior_moment_params)
-    posterior_rmse = jnp.sqrt(jnp.mean((posterior_means - latent_states) ** 2))
-    print(f"posterior rmse before training: {float(posterior_rmse):.6f}")
-
-    pre_flow = flow_metrics_vdp_vs_model(
-        toy_model, mu=mu, dt=dt, xlim=xlim, vlim=vlim, grid=grid
-    )
-    print(
-        "flow metrics before training: "
-        f"nrmse={pre_flow.nrmse:.4f}, mean_angle={pre_flow.mean_angle_rad:.4f} rad"
-    )
-
     # Training
-    toy_trainer_conf = OmegaConf.create(
-        {**base_trainer_conf, "max_epoch": 100}
+    true_trainer_conf = OmegaConf.create(
+        {**base_trainer_conf, "max_epoch": 300}
     )
-    trained_toy = train(toy_model, data, conf=toy_trainer_conf)
+    trained_true = train(true_model, data, conf=true_trainer_conf)
 
-    # Post-training evaluation
-    post_flow_toy = flow_metrics_vdp_vs_model(
-        trained_toy, mu=mu, dt=dt, xlim=xlim, vlim=vlim, grid=grid
-    )
-    print(
-        "flow metrics after training: "
-        f"nrmse={post_flow_toy.nrmse:.4f}, mean_angle={post_flow_toy.mean_angle_rad:.4f} rad"
-    )
-
+    # Post-training inference
     key, infer_key = jr.split(key)
-    _, trained_moments, _ = trained_toy(
+    _, trained_moments, _ = trained_true(
         times, observations, inputs, covariates, key=infer_key
     )
     trained_means, trained_covs = mean_and_cov_vmap(trained_moments)
-    toy_post_rmse = float(jnp.sqrt(jnp.mean((trained_means - latent_states) ** 2)))
-    print(f"posterior rmse after training: {toy_post_rmse:.6f}")
 
-    # Readout evaluation (true readout is known for Case 1)
-    C_toy = trained_toy.observation.readout.weight
-    readout_layer = trained_toy.observation.readout.layer
-    b_toy = readout_layer.layer.bias if hasattr(readout_layer, "layer") else readout_layer.bias
-    toy_C_rmse = float(jnp.sqrt(jnp.mean((C_toy - C) ** 2)))
-    toy_b_rmse = float(jnp.sqrt(jnp.mean((b_toy - b) ** 2)))
-    print(f"readout C rmse: {toy_C_rmse:.6f}")
-    print(f"readout b rmse: {toy_b_rmse:.6f}")
+    # Procrustes alignment (FA-init readout leaves an affine ambiguity)
+    flat_true = latent_states.reshape(-1, state_dim)
+    flat_inf = trained_means.reshape(-1, state_dim)
+    vdp_aff = procrustes_affine(flat_true, flat_inf)
+    aligned_means = align(vdp_aff, trained_means)
+    print(f"alignment matrix A:\n{np.asarray(vdp_aff.A)}")
+    print(f"alignment offset d: {np.asarray(vdp_aff.d)}")
+
+    true_post_rmse = float(jnp.sqrt(jnp.mean((aligned_means - latent_states) ** 2)))
+    print(f"posterior rmse (aligned): {true_post_rmse:.6f}")
+
+    post_flow_true = flow_metrics_vdp_vs_model(
+        trained_true, mu=mu, dt=dt, xlim=xlim, vlim=vlim, grid=grid,
+    )
+    print(
+        "flow metrics: "
+        f"nrmse={post_flow_true.nrmse:.4f}, mean_angle={post_flow_true.mean_angle_rad:.4f} rad"
+    )
+
+    # Readout evaluation (aligned back to true coordinates)
+    C_true_learned = trained_true.observation.readout.weight
+    readout_layer = trained_true.observation.readout.layer
+    b_true_learned = readout_layer.layer.bias if hasattr(readout_layer, "layer") else readout_layer.bias
+    A_inv = jnp.linalg.inv(vdp_aff.A)
+    C_eff = C_true_learned @ A_inv
+    b_eff = b_true_learned + C_true_learned @ (-A_inv @ vdp_aff.d)
+    true_C_rmse = float(jnp.sqrt(jnp.mean((C_eff - C) ** 2)))
+    true_b_rmse = float(jnp.sqrt(jnp.mean((b_eff - b) ** 2)))
+    print(f"readout C rmse (aligned): {true_C_rmse:.6f}")
+    print(f"readout b rmse (aligned): {true_b_rmse:.6f}")
     # Observation reconstruction
-    y_hat = trained_means @ C_toy.T + b_toy
-    toy_obs_rmse = float(jnp.sqrt(jnp.mean((y_hat - observations) ** 2)))
-    print(f"observation reconstruction rmse: {toy_obs_rmse:.6f}")
+    y_hat = trained_means @ C_true_learned.T + b_true_learned
+    true_obs_rmse = float(jnp.sqrt(jnp.mean((y_hat - observations) ** 2)))
+    print(f"observation reconstruction rmse: {true_obs_rmse:.6f}")
 
-    plot_posterior("toy", trained_means, trained_covs, latent_states, trial, T, out_dir)
+    plot_posterior(
+        "true", aligned_means, trained_covs, latent_states, trial, T, out_dir,
+    )
     plot_flow_field(
-        "toy", trained_toy, latent_states[trial], trained_means[trial],
+        "true", trained_true, latent_states[trial], aligned_means[trial],
         mu, dt, xlim, vlim, grid, out_dir,
     )
 
     # Save / load roundtrip
     with TemporaryDirectory() as tmp:
-        path = Path(tmp) / "toy_model.zip"
-        XFADS.save(trained_toy, path)
+        path = Path(tmp) / "true_model.zip"
+        XFADS.save(trained_true, path)
         reloaded_model = XFADS.load(path)
 
         key, reload_key = jr.split(key)
@@ -1081,19 +1078,19 @@ def main() -> None:
     # Summary table
     # ===================================================================
     print("\n" + "=" * 72)
-    print("Summary  (MLP metrics use Procrustes alignment; obs noise σ ="
+    print("Summary  (posteriors/readout use Procrustes alignment; obs noise σ ="
           f" {sigma_obs})")
     print("=" * 72)
-    header = f"{'Metric':<30s} {'ToyDynamics':>14s} {'MLPDynamics':>14s}"
+    header = f"{'Metric':<30s} {'VDPDynamics':>14s} {'MLPDynamics':>14s}"
     print(header)
     print("-" * len(header))
     rows = [
-        ("Posterior RMSE", toy_post_rmse, mlp_post_rmse),
-        ("Readout C RMSE", toy_C_rmse, mlp_C_rmse),
-        ("Readout b RMSE", toy_b_rmse, mlp_b_rmse),
-        ("Obs recon RMSE", toy_obs_rmse, mlp_obs_rmse),
-        ("Flow NRMSE", post_flow_toy.nrmse, post_flow_mlp.nrmse),
-        ("Flow angle (rad)", post_flow_toy.mean_angle_rad, post_flow_mlp.mean_angle_rad),
+        ("Posterior RMSE", true_post_rmse, mlp_post_rmse),
+        ("Readout C RMSE", true_C_rmse, mlp_C_rmse),
+        ("Readout b RMSE", true_b_rmse, mlp_b_rmse),
+        ("Obs recon RMSE", true_obs_rmse, mlp_obs_rmse),
+        ("Flow NRMSE", post_flow_true.nrmse, post_flow_mlp.nrmse),
+        ("Flow angle (rad)", post_flow_true.mean_angle_rad, post_flow_mlp.mean_angle_rad),
     ]
     for name, v1, v2 in rows:
         print(f"{name:<30s} {v1:>14.4f} {v2:>14.4f}")
