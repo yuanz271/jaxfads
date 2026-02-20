@@ -45,7 +45,7 @@ Pass a `DictConfig` (or plain dict) as `conf`. Missing keys are filled from
 | `seed` | `0` | Random seed for shuffling and noise |
 | `valid_ratio` | `0.2` | Fraction of data used for validation |
 | `validation_size` | `80` | Fixed validation set size (overrides `valid_ratio` when > 0) |
-| `patience` | `10` | Early-stopping patience in epochs (auto-computed if not set) |
+| `patience` | auto | Early-stopping patience in epochs; auto-computed from training budget when not provided |
 
 ### Example
 
