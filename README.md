@@ -16,7 +16,7 @@ XFADS is a JAX-based library for Bayesian state-space modeling using variational
 
 XFADS provides a unified framework for building differentiable dynamical systems where both the latent transitions and observation models can be learned. The package focuses on scalable variational smoothing techniques, enabling practitioners to prototype custom exponential-family models without re-implementing inference algorithms.
 
-For a runnable walkthrough, see `examples/toy_example.py`.
+For a runnable walkthrough, see `examples/vdp_example.py`.
 
 ## Features
 

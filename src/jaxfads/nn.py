@@ -129,33 +129,27 @@ def _norm_except_axis(
         return jax.vmap(norm, in_axes=axis, out_axes=axis)(v)
 
 
-class WeightNorm(Module):
+class NormalizedLinear(Module):
     """
-    Weight normalization wrapper for linear layers.
+    Linear layer wrapper that normalizes the weight matrix.
 
-    Weight normalization reparameterizes weight vectors by decoupling their
-    direction from their magnitude, improving training dynamics and convergence
-    properties. This is particularly useful for deep networks and recurrent
-    architectures.
+    Wraps an ``enn.Linear`` layer and projects its weight matrix to unit
+    norm in the forward pass.  This resolves the scale ambiguity between
+    the readout matrix and the latent state: only the *direction* of the
+    weight is identifiable, so the magnitude is fixed to one.
+
+    The wrapper contains no additional trainable parameters — the
+    underlying ``layer`` holds all learnable weights and biases.
 
     Parameters
     ----------
     layer : enn.Linear
-        The linear layer to apply weight normalization to.
+        The linear layer to wrap.
     weight_name : str, default="weight"
-        Name of the layer's weight parameter to normalize.
+        Name of the weight attribute on *layer* to normalize.
     axis : int or None, default=None
-        Axis along which to preserve the norm. If None, normalize globally.
-
-    Notes
-    -----
-    Weight normalization reparameterizes weights as w = g * (v / ||v||),
-    where g is a learnable scalar and v is the weight vector.
-
-    References
-    ----------
-    Salimans, T., & Kingma, D. P. (2016). Weight normalization: A simple
-    reparameterization to accelerate training of deep neural networks.
+        Axis to exclude from the norm computation.  ``None`` normalizes
+        globally (Frobenius norm → 1).
     """
 
     layer: enn.Linear
@@ -169,16 +163,17 @@ class WeightNorm(Module):
         axis: int | None = None,
     ):
         """
-        Initialize weight normalization wrapper.
+        Initialize normalized linear wrapper.
 
         Parameters
         ----------
         layer : enn.Linear
-            The linear layer to wrap and normalize.
+            The linear layer to wrap.
         weight_name : str, default="weight"
-            Name of the layer's weight parameter to normalize.
+            Name of the weight attribute to normalize.
         axis : int or None, default=None
-            Axis to exclude from norm computation. If None, normalize globally.
+            Axis to exclude from the norm computation.  ``None``
+            normalizes globally.
         """
         self.layer = layer
         self.weight_name = weight_name
@@ -186,17 +181,17 @@ class WeightNorm(Module):
 
     def _norm(self, w):
         """
-        Compute norm of weight array for normalization.
+        Compute the norm used for weight normalization.
 
         Parameters
         ----------
         w : Array
-            Weight array to normalize.
+            Weight array.
 
         Returns
         -------
         Array
-            Norm values for normalization.
+            Norm value(s) with shape suitable for broadcasting.
         """
         return _norm_except_axis(
             w, norm=partial(jnp.linalg.norm, keepdims=True), axis=self.axis
@@ -205,12 +200,13 @@ class WeightNorm(Module):
     @property
     def weight(self) -> Array:
         """
-        Get the normalized weight matrix.
+        Get the unit-norm weight matrix.
 
         Returns
         -------
         Array
-            Weight matrix normalized to unit norm along specified axes.
+            ``w / ||w||`` where *w* is the raw weight from the wrapped
+            layer.
         """
         w = getattr(self.layer, self.weight_name)
         w = w / (self._norm(w) + _EPS)
@@ -225,14 +221,14 @@ class WeightNorm(Module):
         Returns
         -------
         Array or None
-            Bias vector, or None if the layer has no bias.
+            Bias vector, or ``None`` if the layer has no bias.
         """
         return self.layer.bias
 
-    @jax.named_scope("xfads.nn.WeightNorm")
+    @jax.named_scope("xfads.nn.NormalizedLinear")
     def __call__(self, x: Array) -> Array:
         """
-        Apply weight-normalized linear transformation.
+        Apply the normalized linear transformation.
 
         Parameters
         ----------
@@ -242,8 +238,7 @@ class WeightNorm(Module):
         Returns
         -------
         Array
-            Output array of shape (..., output_dim) after applying the
-            weight-normalized linear transformation.
+            ``(w / ||w||) @ x + bias``.
         """
         weight: Array = self.weight
         layer: Callable = eqx.tree_at(
@@ -254,11 +249,10 @@ class WeightNorm(Module):
 
 class StationaryLinear(Module):
     """
-    Linear layer with time-invariant parameters for state-space models.
+    Time-invariant readout layer for state-space models.
 
-    This layer implements a standard linear transformation that doesn't depend
-    on time indices, suitable for stationary observation models in dynamical
-    systems.
+    Maps latent states to observations via a linear transformation whose
+    parameters do not depend on time.
 
     Parameters
     ----------
@@ -269,15 +263,16 @@ class StationaryLinear(Module):
     key : Array
         PRNGKey for parameter initialization.
     norm_readout : bool, default=False
-        Whether to apply weight normalization to improve training stability.
+        Whether to normalize the weight matrix to unit norm for
+        identifiability (wraps the layer with :class:`NormalizedLinear`).
 
     Attributes
     ----------
-    layer : enn.Linear or WeightNorm
+    layer : enn.Linear or NormalizedLinear
         The underlying linear transformation layer.
     """
 
-    layer: enn.Linear | WeightNorm
+    layer: enn.Linear | NormalizedLinear
 
     def __init__(self, state_dim, observation_dim, *, key, norm_readout: bool = False):
         """
@@ -292,12 +287,12 @@ class StationaryLinear(Module):
         key : Array
             PRNGKey for parameter initialization.
         norm_readout : bool, default=False
-            Whether to apply weight normalization.
+            Whether to normalize the weight matrix for identifiability.
         """
         self.layer = enn.Linear(state_dim, observation_dim, key=key, use_bias=True)
 
         if norm_readout:
-            self.layer = WeightNorm(self.layer)
+            self.layer = NormalizedLinear(self.layer)
 
     def __call__(self, idx, x) -> Array:
         """
@@ -329,9 +324,29 @@ class StationaryLinear(Module):
         """
         return self.layer.weight
 
-    def initialize(self, bias: Array) -> "StationaryLinear":
+    def set_weight(self, weight: Array) -> "StationaryLinear":
         """
-        Initialize the bias term.
+        Set the readout weight matrix.
+
+        Parameters
+        ----------
+        weight : Array
+            Weight matrix of shape (observation_dim, state_dim).
+
+        Returns
+        -------
+        StationaryLinear
+            Updated layer with weight set.
+        """
+        if isinstance(self.layer, NormalizedLinear):
+            layer = eqx.tree_at(lambda ly: ly.layer.weight, self.layer, weight)
+        else:
+            layer = eqx.tree_at(lambda ly: ly.weight, self.layer, weight)
+        return eqx.tree_at(lambda r: r.layer, self, layer)
+
+    def set_bias(self, bias: Array) -> "StationaryLinear":
+        """
+        Set the bias vector.
 
         Parameters
         ----------
@@ -343,20 +358,20 @@ class StationaryLinear(Module):
         StationaryLinear
             Updated layer with bias set.
         """
-        if isinstance(self.layer, WeightNorm):
-            layer = eqx.tree_at(lambda layer_: layer_.layer.bias, self.layer, bias)
+        if isinstance(self.layer, NormalizedLinear):
+            layer = eqx.tree_at(lambda ly: ly.layer.bias, self.layer, bias)
         else:
-            layer = eqx.tree_at(lambda layer_: layer_.bias, self.layer, bias)
+            layer = eqx.tree_at(lambda ly: ly.bias, self.layer, bias)
         return eqx.tree_at(lambda r: r.layer, self, layer)
 
 
 class VariantBiasLinear(Module):
     """
-    Linear layer with time-variant bias terms for non-stationary observations.
+    Readout layer with time-variant bias for non-stationary observations.
 
-    This layer implements a linear transformation with different bias terms
-    for different time points or conditions, useful for modeling non-stationary
-    observation patterns in dynamical systems.
+    Shares a single weight matrix across all time steps but uses a
+    different bias vector at each step, suitable for modelling
+    non-stationary baselines in dynamical systems.
 
     Parameters
     ----------
@@ -369,18 +384,19 @@ class VariantBiasLinear(Module):
     key : Array
         PRNGKey for parameter initialization.
     norm_readout : bool, default=False
-        Whether to apply weight normalization to improve training stability.
+        Whether to normalize the weight matrix to unit norm for
+        identifiability (wraps the layer with :class:`NormalizedLinear`).
 
     Attributes
     ----------
     biases : Array
         Array of bias vectors of shape (n_biases, observation_dim).
-    layer : enn.Linear or WeightNorm
+    layer : enn.Linear or NormalizedLinear
         The underlying linear transformation layer (without bias).
     """
 
     biases: Array
-    layer: enn.Linear | WeightNorm
+    layer: enn.Linear | NormalizedLinear
 
     def __init__(
         self, state_dim, observation_dim, n_biases, *, key, norm_readout: bool = False
@@ -399,7 +415,7 @@ class VariantBiasLinear(Module):
         key : Array
             PRNGKey for parameter initialization.
         norm_readout : bool, default=False
-            Whether to apply weight normalization.
+            Whether to normalize the weight matrix for identifiability.
         """
         wkey, bkey = jrnd.split(key, 2)
 
@@ -414,7 +430,7 @@ class VariantBiasLinear(Module):
         )
 
         if norm_readout:
-            self.layer = WeightNorm(self.layer)
+            self.layer = NormalizedLinear(self.layer)
 
     def __call__(self, idx, x) -> Array:
         """
@@ -464,20 +480,43 @@ class VariantBiasLinear(Module):
         """
         pass
 
-    def initialize(self, biases: Array) -> "VariantBiasLinear":
+    def set_weight(self, weight: Array) -> "VariantBiasLinear":
         """
-        Initialize bias terms.
+        Set the readout weight matrix.
+
+        Parameters
+        ----------
+        weight : Array
+            Weight matrix of shape (observation_dim, state_dim).
+
+        Returns
+        -------
+        VariantBiasLinear
+            Updated layer with weight set.
+        """
+        if isinstance(self.layer, NormalizedLinear):
+            layer = eqx.tree_at(lambda ly: ly.layer.weight, self.layer, weight)
+        else:
+            layer = eqx.tree_at(lambda ly: ly.weight, self.layer, weight)
+        return eqx.tree_at(lambda r: r.layer, self, layer)
+
+    def set_bias(self, biases: Array) -> "VariantBiasLinear":
+        """
+        Set the bias terms.
 
         Parameters
         ----------
         biases : Array
-            Bias array of shape (n_biases, observation_dim).
+            Bias array of shape (n_biases, observation_dim) or (observation_dim,).
+            If 1-D, the bias is broadcast to all time steps.
 
         Returns
         -------
         VariantBiasLinear
             Updated layer with biases set.
         """
+        if biases.ndim == 1:
+            biases = jnp.broadcast_to(biases, self.biases.shape).copy()
         return eqx.tree_at(lambda r: r.biases, self, biases)
 
 

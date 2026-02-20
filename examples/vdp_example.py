@@ -1,0 +1,510 @@
+"""Van der Pol example: XFADS with synthetic data.
+
+Two cases:
+
+1. **VDPDynamics** — exact RK4 step (no model mismatch).
+2. **MLPDynamics** — trainable residual MLP learns dynamics from data.
+
+Both use Factor Analysis readout initialisation.  Evaluation uses
+Procrustes alignment to compare inferred latents against ground truth.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+import jax
+import jax.numpy as jnp
+import jax.random as jr
+import matplotlib.pyplot as plt
+import numpy as np
+from equinox import nn as enn
+from omegaconf import OmegaConf
+
+from jaxfads import XFADS, configure_logging
+from jaxfads.base import Dynamics
+from jaxfads.dynamics import DiagGaussian
+from jaxfads.nn import make_mlp
+from jaxfads.observations import GLM  # noqa: F401 — registers GLM
+from jaxfads.trainer import train
+
+
+# ---------------------------------------------------------------------------
+# Van der Pol dynamics
+# ---------------------------------------------------------------------------
+
+
+def vdp_rhs(state: jax.Array, mu: float) -> jax.Array:
+    """Right-hand side of the Van der Pol oscillator."""
+    x, v = state[0], state[1]
+    return jnp.stack([v, mu * (1.0 - x * x) * v - x])
+
+
+def rk4_step(state: jax.Array, dt: float, *, mu: float) -> jax.Array:
+    """Single RK4 integration step."""
+    k1 = vdp_rhs(state, mu)
+    k2 = vdp_rhs(state + 0.5 * dt * k1, mu)
+    k3 = vdp_rhs(state + 0.5 * dt * k2, mu)
+    k4 = vdp_rhs(state + dt * k3, mu)
+    return state + (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
+
+
+def simulate_vdp(
+    key: jax.Array,
+    *,
+    n_trials: int,
+    n_steps: int,
+    dt: float,
+    mu: float,
+    init_radius: float = 2.0,
+) -> jax.Array:
+    """Generate Van der Pol trajectories via RK4.
+
+    Returns
+    -------
+    jax.Array, shape (n_trials, n_steps, 2)
+    """
+    phi = jr.uniform(key, (n_trials,), maxval=2.0 * jnp.pi)
+    z0 = init_radius * jnp.stack([jnp.cos(phi), jnp.sin(phi)], axis=-1)
+
+    def scan_fn(z, _):
+        z_next = rk4_step(z, dt, mu=mu)
+        return z_next, z_next
+
+    _, zs = jax.vmap(
+        lambda z: jax.lax.scan(scan_fn, z, None, length=n_steps)
+    )(z0)
+    return zs
+
+
+# ---------------------------------------------------------------------------
+# Dynamics modules
+# ---------------------------------------------------------------------------
+
+
+class VDPDynamics(Dynamics):
+    """Exact Van der Pol step (no model mismatch)."""
+
+    noise: DiagGaussian
+    mu: float
+    dt: float
+
+    def __init__(self, conf, key):
+        self.conf = conf
+        self.noise = DiagGaussian(jnp.array(conf.cov), conf.state_dim)
+        self.mu, self.dt = float(conf.mu), float(conf.dt)
+
+    def forward(self, z, u, c, *, key=None):
+        return rk4_step(z, self.dt, mu=self.mu)
+
+    def loss(self):
+        return jnp.mean(self.cov())
+
+
+class MLPDynamics(Dynamics):
+    """Trainable residual MLP: z_{t+1} = z + net(z)."""
+
+    noise: DiagGaussian
+    net: enn.Sequential
+
+    def __init__(self, conf, key):
+        self.conf = conf
+        self.noise = DiagGaussian(jnp.array(conf.cov), conf.state_dim)
+        self.net = make_mlp(
+            conf.state_dim, conf.state_dim,
+            width=conf.width, depth=conf.depth, key=key,
+        )
+
+    def forward(self, z, u, c, *, key=None):
+        return z + self.net(z)
+
+    def loss(self):
+        return jnp.mean(self.cov())
+
+
+# ---------------------------------------------------------------------------
+# Procrustes alignment: z_true ≈ A @ z_inferred + d
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class AffineAlignment:
+    """Affine map z_true ≈ A @ z_inferred + d."""
+
+    A: jax.Array  # (D, D) linear part
+    d: jax.Array  # (D,)   translation
+
+
+def procrustes_affine(z_true: jax.Array, z_inferred: jax.Array) -> AffineAlignment:
+    """Least-squares affine fit."""
+    mu_inf, mu_true = z_inferred.mean(0), z_true.mean(0)
+    A_T, *_ = jnp.linalg.lstsq(z_inferred - mu_inf, z_true - mu_true)
+    A = A_T.T
+    return AffineAlignment(A=A, d=mu_true - A @ mu_inf)
+
+
+def align(aff: AffineAlignment, z: jax.Array) -> jax.Array:
+    """Apply alignment: z @ A^T + d."""
+    return z @ aff.A.T + aff.d
+
+
+# ---------------------------------------------------------------------------
+# Flow-field evaluation
+# ---------------------------------------------------------------------------
+
+
+def _model_rhs(model, grid_pts, dt, alignment=None):
+    """Model RHS at grid points, optionally through alignment map."""
+    u0, c0 = jnp.zeros((0,)), jnp.zeros((0,))
+
+    def step(z):
+        return model.forward(z, u0, c0)
+
+    if alignment is not None:
+        A_inv = jnp.linalg.inv(alignment.A)
+        pts = (grid_pts - alignment.d) @ A_inv.T
+        pred = jax.vmap(step)(pts)
+        return (pred - pts) @ alignment.A.T / dt
+
+    pred = jax.vmap(step)(grid_pts)
+    return (pred - grid_pts) / dt
+
+
+def flow_metrics(model, *, mu, dt, xlim, vlim, grid=25, alignment=None):
+    """NRMSE and mean angle between true and model flow fields."""
+    xs = jnp.linspace(*xlim, grid)
+    vs = jnp.linspace(*vlim, grid)
+    X, V = jnp.meshgrid(xs, vs, indexing="xy")
+    pts = jnp.stack([X, V], axis=-1).reshape(-1, 2)
+
+    true_rhs = jax.vmap(lambda s: vdp_rhs(s, mu))(pts)
+    inf_rhs = _model_rhs(model, pts, dt, alignment)
+
+    nrmse = float(jnp.sqrt(
+        jnp.mean(jnp.sum((inf_rhs - true_rhs) ** 2, -1))
+        / (jnp.mean(jnp.sum(true_rhs ** 2, -1)) + 1e-8)
+    ))
+    dot = jnp.sum(inf_rhs * true_rhs, -1)
+    norms = jnp.linalg.norm(inf_rhs, -1) * jnp.linalg.norm(true_rhs, -1) + 1e-8
+    angle = float(jnp.mean(jnp.arccos(jnp.clip(dot / norms, -1, 1))))
+    return nrmse, angle
+
+
+# ---------------------------------------------------------------------------
+# Evaluation (shared by both cases)
+# ---------------------------------------------------------------------------
+
+
+def _readout_bias(model):
+    """Extract readout bias (handles NormalizedLinear wrapper)."""
+    layer = model.observation.readout.layer
+    return layer.layer.bias if hasattr(layer, "layer") else layer.bias
+
+
+def evaluate(
+    name, trained, latent_states, observations, data,
+    C_true, b_true, *, key, approx, mu, dt, xlim, vlim, grid,
+    align_flow=True,
+):
+    """Infer, align, compute metrics, and print results.
+
+    Parameters
+    ----------
+    align_flow : bool, default=True
+        Whether to pass the Procrustes alignment to flow-field
+        evaluation.  Set ``False`` when the dynamics operate in the
+        true coordinate system (e.g. VDPDynamics).
+
+    Returns dict with metric values, aligned means, covariances, and
+    the Procrustes alignment.
+    """
+    times, obs, inputs, covs = data
+    D = latent_states.shape[-1]
+
+    # Inference
+    _, moments, _ = trained(times, obs, inputs, covs, key=key)
+    means, post_covs = jax.vmap(jax.vmap(approx.moment_to_canon))(moments)
+
+    # Procrustes alignment
+    aff = procrustes_affine(latent_states.reshape(-1, D), means.reshape(-1, D))
+    aligned = align(aff, means)
+
+    # Metrics
+    post_rmse = float(jnp.sqrt(jnp.mean((aligned - latent_states) ** 2)))
+
+    C_l, b_l = trained.observation.readout.weight, _readout_bias(trained)
+    A_inv = jnp.linalg.inv(aff.A)
+    C_eff = C_l @ A_inv
+    b_eff = b_l + C_l @ (-A_inv @ aff.d)
+    C_rmse = float(jnp.sqrt(jnp.mean((C_eff - C_true) ** 2)))
+    b_rmse = float(jnp.sqrt(jnp.mean((b_eff - b_true) ** 2)))
+
+    y_hat = means @ C_l.T + b_l
+    obs_rmse = float(jnp.sqrt(jnp.mean((y_hat - observations) ** 2)))
+
+    flow_aff = aff if align_flow else None
+    nrmse, angle = flow_metrics(
+        trained, mu=mu, dt=dt, xlim=xlim, vlim=vlim, grid=grid, alignment=flow_aff,
+    )
+
+    print(f"\n--- {name} ---")
+    print(f"  posterior RMSE (aligned): {post_rmse:.4f}")
+    print(f"  readout C RMSE: {C_rmse:.4f},  b RMSE: {b_rmse:.4f}")
+    print(f"  obs recon RMSE: {obs_rmse:.4f}")
+    print(f"  flow NRMSE: {nrmse:.4f},  angle: {angle:.4f} rad")
+
+    return dict(
+        post_rmse=post_rmse, C_rmse=C_rmse, b_rmse=b_rmse,
+        obs_rmse=obs_rmse, flow_nrmse=nrmse, flow_angle=angle,
+        aligned_means=aligned, covs=post_covs, alignment=aff,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Plotting
+# ---------------------------------------------------------------------------
+
+
+def plot_posterior(name, means, covs, truth, trial, T, out_dir):
+    """Posterior mean vs truth and ±2σ uncertainty bands."""
+    t = jnp.arange(T)
+    fig, ax = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
+
+    for i, label in enumerate(("x", "v")):
+        ax[0].plot(t, truth[trial, :, i], label=f"true {label}", color=f"C{i}", lw=2)
+        ax[0].plot(
+            t, means[trial, :, i], "--", label=f"inferred {label}", color=f"C{i}",
+        )
+    ax[0].set_title(f"Posterior mean vs truth — {name}")
+    ax[0].legend(ncol=2)
+
+    cov = covs[trial]
+    if cov.ndim == 3:
+        cov = jax.vmap(jnp.diag)(cov)
+    std = jnp.sqrt(jnp.clip(cov, a_min=0.0))
+
+    for i, label in enumerate(("x", "v")):
+        ax[1].plot(t, means[trial, :, i], color=f"C{i}")
+        ax[1].fill_between(
+            t, means[trial, :, i] - 2 * std[:, i],
+            means[trial, :, i] + 2 * std[:, i],
+            color=f"C{i}", alpha=0.2, label=f"{label} ±2σ",
+        )
+    ax[1].set_title(f"Posterior uncertainty — {name}")
+    ax[1].legend(ncol=2)
+
+    plt.tight_layout()
+    fig.savefig(out_dir / f"vdp_example_posterior_{name}.pdf")
+    plt.close(fig)
+
+
+def plot_flow_field(
+    name, model, true_traj, inferred_traj,
+    mu, dt, xlim, vlim, grid, out_dir, *, alignment=None,
+):
+    """Side-by-side streamplots: true vs inferred flow field."""
+    xs = jnp.linspace(*xlim, grid)
+    vs = jnp.linspace(*vlim, grid)
+    X, V = jnp.meshgrid(xs, vs, indexing="xy")
+    pts = jnp.stack([X, V], axis=-1).reshape(-1, 2)
+
+    true_rhs = jax.vmap(lambda s: vdp_rhs(s, mu))(pts)
+    inf_rhs = _model_rhs(model, pts, dt, alignment)
+
+    fig, ax = plt.subplots(1, 2, figsize=(12, 5), sharex=True, sharey=True)
+    for a, rhs, traj, title, color in [
+        (ax[0], true_rhs, true_traj, "True VdP", "C0"),
+        (ax[1], inf_rhs, inferred_traj, f"Inferred — {name}", "C1"),
+    ]:
+        dx = rhs[:, 0].reshape(grid, grid)
+        dv = rhs[:, 1].reshape(grid, grid)
+        a.streamplot(
+            np.asarray(X), np.asarray(V), np.asarray(dx), np.asarray(dv),
+            density=1.2, linewidth=0.8, color=color,
+        )
+        a.plot(np.asarray(traj[:, 0]), np.asarray(traj[:, 1]), color="k", lw=1.2)
+        a.set(title=title, xlim=xlim, ylim=vlim, xlabel="x")
+    ax[0].set_ylabel("v")
+
+    plt.tight_layout()
+    fig.savefig(out_dir / f"vdp_example_flow_{name}.pdf")
+    plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+
+def main() -> None:
+    configure_logging("INFO")
+    print("JAX devices:", jax.devices())
+
+    # ----- Synthesis -----
+    N, T, dt, mu = 128, 400, 0.02, 2.0
+    obs_dim, state_dim = 10, 2
+    sigma_obs = 0.3
+
+    key, k_lat, k_C, k_b, k_y = jr.split(jr.key(0), 5)
+
+    latent_states = simulate_vdp(k_lat, n_trials=N, n_steps=T, dt=dt, mu=mu)
+
+    C_true = np.asarray(0.7 * jr.normal(k_C, (obs_dim, state_dim)))
+    b_true = np.asarray(0.1 * jr.normal(k_b, (obs_dim,)))
+    observations = (
+        latent_states @ C_true.T + b_true
+        + sigma_obs * jr.normal(k_y, (N, T, obs_dim))
+    )
+
+    times = jnp.broadcast_to(jnp.arange(T), (N, T))
+    inputs = jnp.zeros((N, T, 0))
+    covariates = jnp.zeros((N, T, 0))
+    data = (times, observations, inputs, covariates)
+    print(f"latent: {latent_states.shape}, observations: {observations.shape}")
+
+    # ----- Plot synthetic data -----
+    out_dir = Path(__file__).resolve().parent
+
+    fig, ax = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
+    ax[0].plot(latent_states[0, :, 0], label="x")
+    ax[0].plot(latent_states[0, :, 1], label="v")
+    ax[0].set_title("Van der Pol latent (trial 0)")
+    ax[0].legend()
+    for d in range(min(4, obs_dim)):
+        ax[1].plot(observations[0, :, d], label=f"y[{d}]")
+    ax[1].set_title("Observations (first 4 dims)")
+    ax[1].legend(ncol=4)
+    plt.tight_layout()
+    fig.savefig(out_dir / "vdp_example_data.pdf")
+    plt.close(fig)
+
+    # ----- Shared configuration -----
+    xlim, vlim, grid = (-3.0, 3.0), (-3.0, 3.0), 25
+
+    enc_conf = dict(
+        observation_dim=obs_dim, state_dim=state_dim,
+        approx="DiagMVN", width=32, depth=2, dropout=None,
+    )
+    obs_conf = dict(
+        model="GLM", likelihood="DiagGaussian",
+        observation_dim=obs_dim, state_dim=state_dim,
+        cov=[float(sigma_obs ** 2)] * obs_dim,
+        norm_readout=False, dropout=0.0,
+        readout_init_conf=dict(obs_noise_var=float(sigma_obs ** 2)),
+    )
+    shared_conf = dict(
+        mode="pseudo", observation_dim=obs_dim, state_dim=state_dim,
+        approx="DiagMVN", seed=0, n_steps=T,
+        fb_penalty=0.0, noise_penalty=0.01, dropout=0.0,
+        enc_conf=enc_conf, obs_conf=obs_conf,
+    )
+
+    n_devices = len(jax.devices())
+    batch_size = max(n_devices, (32 // n_devices) * n_devices)
+    trainer_conf = OmegaConf.create(dict(
+        seed=0, learning_rate=1e-3, clip_norm=5.0, weight_decay=1e-3,
+        noise_eta=0.0, noise_gamma=0.8, min_epoch=0, max_epoch=300,
+        batch_size=batch_size, validation_size=batch_size, valid_ratio=0.2,
+    ))
+
+    # ===================================================================
+    # Case 1: VDPDynamics (exact Van der Pol)
+    # ===================================================================
+    print("\n" + "=" * 60)
+    print("Case 1: VDPDynamics (exact Van der Pol)")
+    print("=" * 60)
+
+    conf1 = OmegaConf.create({
+        **shared_conf, "forward": "VDPDynamics", "mc_size": 1,
+        "dyn_conf": dict(
+            state_dim=state_dim, input_dim=0, context_dim=0,
+            mu=mu, dt=dt, cov=1.0,
+        ),
+    })
+    model1 = XFADS(conf1, jr.key(123))
+    model1 = model1.initialize(*data)
+    approx = model1.approx  # DiagMVN — shared by both cases
+
+    trained1 = train(model1, data, conf=trainer_conf)
+
+    key, k = jr.split(key)
+    eval_kw = dict(approx=approx, mu=mu, dt=dt, xlim=xlim, vlim=vlim, grid=grid)
+    r1 = evaluate(
+        "VDPDynamics", trained1, latent_states, observations,
+        data, C_true, b_true, key=k, align_flow=False, **eval_kw,
+    )
+    plot_posterior(
+        "vdp", r1["aligned_means"], r1["covs"],
+        latent_states, 0, T, out_dir,
+    )
+    plot_flow_field(
+        "vdp", trained1, latent_states[0], r1["aligned_means"][0],
+        mu, dt, xlim, vlim, grid, out_dir,
+    )
+
+    # Save / load roundtrip
+    with TemporaryDirectory() as tmp:
+        path = Path(tmp) / "model.zip"
+        XFADS.save(trained1, path)
+        reloaded = XFADS.load(path)
+        reloaded(times[:1], observations[:1], inputs[:1], covariates[:1], key=jr.key(99))
+        print("Save/load roundtrip: OK")
+
+    # ===================================================================
+    # Case 2: MLPDynamics (learned dynamics)
+    # ===================================================================
+    print("\n" + "=" * 60)
+    print("Case 2: MLPDynamics (learned dynamics)")
+    print("=" * 60)
+
+    conf2 = OmegaConf.create({
+        **shared_conf, "forward": "MLPDynamics", "mc_size": 4,
+        "dyn_conf": dict(
+            state_dim=state_dim, input_dim=0, context_dim=0,
+            cov=1.0, width=32, depth=1,
+        ),
+    })
+    model2 = XFADS(conf2, jr.key(456))
+    model2 = model2.initialize(*data)
+
+    trained2 = train(model2, data, conf=trainer_conf)
+
+    key, k = jr.split(key)
+    r2 = evaluate(
+        "MLPDynamics", trained2, latent_states, observations,
+        data, C_true, b_true, key=k, **eval_kw,
+    )
+    plot_posterior(
+        "mlp", r2["aligned_means"], r2["covs"],
+        latent_states, 0, T, out_dir,
+    )
+    plot_flow_field(
+        "mlp", trained2, latent_states[0], r2["aligned_means"][0],
+        mu, dt, xlim, vlim, grid, out_dir, alignment=r2["alignment"],
+    )
+
+    # ===================================================================
+    # Summary
+    # ===================================================================
+    print("\n" + "=" * 72)
+    print(f"Summary  (Procrustes-aligned; obs noise σ = {sigma_obs})")
+    print("=" * 72)
+    header = f"{'Metric':<30s} {'VDPDynamics':>14s} {'MLPDynamics':>14s}"
+    print(header)
+    print("-" * len(header))
+    for metric, label in [
+        ("post_rmse", "Posterior RMSE"),
+        ("C_rmse", "Readout C RMSE"),
+        ("b_rmse", "Readout b RMSE"),
+        ("obs_rmse", "Obs recon RMSE"),
+        ("flow_nrmse", "Flow NRMSE"),
+        ("flow_angle", "Flow angle (rad)"),
+    ]:
+        print(f"{label:<30s} {r1[metric]:>14.4f} {r2[metric]:>14.4f}")
+    print("=" * len(header))
+
+
+if __name__ == "__main__":
+    main()
