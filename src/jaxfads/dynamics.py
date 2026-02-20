@@ -152,14 +152,14 @@ def sample_expected_moment(
     safe_moments = jnp.where(valid[:, None], moments, 0.0)
     mc_mean = jnp.sum(safe_moments, axis=0) / jnp.maximum(n_valid, 1.0)
 
-    # Fallback: deterministic prediction at the posterior mean
-    z_mean, _ = approx.moment_to_canon(moment)
-    fallback = predict_moment(
-        z_mean, u[0], c[0], f=f, noise=noise, approx=approx, key=key
-    )
+    # Fallback: deterministic prediction at the posterior mean (deferred)
+    def _fallback(_):
+        z_mean, _ = approx.moment_to_canon(moment)
+        return predict_moment(
+            z_mean, u[0], c[0], f=f, noise=noise, approx=approx, key=key
+        )
 
-    moment = jnp.where(n_valid > 0, mc_mean, fallback)
-    return moment
+    return jax.lax.cond(n_valid > 0, lambda _: mc_mean, _fallback, None)
 
 
 class DiagGaussian(eqx.Module, strict=True):

@@ -42,14 +42,24 @@ Examples
 """
 
 from .base import Dynamics, Noise, ObservationModel
+from .distributions import Approx, DiagMVN, FullMVN
 from .logging import configure_logging, get_logger
 from .smoother import XFADS
+from .trainer import train
 
 __all__ = [
+    # Core model
+    "XFADS",
     "Dynamics",
     "Noise",
     "ObservationModel",
-    "XFADS",
+    # Distributions
+    "Approx",
+    "DiagMVN",
+    "FullMVN",
+    # Training
+    "train",
+    # Logging
     "configure_logging",
     "get_logger",
 ]

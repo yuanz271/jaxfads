@@ -388,7 +388,7 @@ def main() -> None:
         approx="DiagMVN", width=32, depth=2, dropout=None,
     )
     obs_conf = dict(
-        model="GLM", likelihood="DiagGaussian",
+        model="GLM", likelihood="Gaussian",
         observation_dim=obs_dim, state_dim=state_dim,
         cov=[float(sigma_obs ** 2)] * obs_dim,
         norm_readout=False, dropout=0.0,

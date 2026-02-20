@@ -29,7 +29,7 @@ def _gaussian_conf(state_dim: int, observation_dim: int, *, n_steps: int = 0):
             cov=[1.0] * observation_dim,
             n_steps=n_steps,
             norm_readout=False,
-            likelihood="DiagGaussian",
+            likelihood="Gaussian",
         )
     )
 
@@ -79,7 +79,7 @@ def test_diag_gaussian_eloglik_shape_and_finite():
     state_dim = 2
     observation_dim = 3
     conf = _gaussian_conf(state_dim, observation_dim)
-    observation = _make_observation(conf, key, likelihood="DiagGaussian")
+    observation = _make_observation(conf, key, likelihood="Gaussian")
 
     mean = jnp.zeros(state_dim)
     cov = jnp.ones(state_dim)
@@ -131,14 +131,14 @@ def test_diag_gaussian_initialize_biases():
     c = jnp.zeros((batch, time_steps, 1))
 
     conf = _gaussian_conf(state_dim, observation_dim, n_steps=0)
-    observation = _make_observation(conf, key, likelihood="DiagGaussian")
+    observation = _make_observation(conf, key, likelihood="Gaussian")
     initialized = observation.initialize(t, y, u, c)
     chex.assert_trees_all_close(
         initialized.readout.layer.bias, jnp.zeros(observation_dim)
     )
 
     conf = _gaussian_conf(state_dim, observation_dim, n_steps=time_steps)
-    observation = _make_observation(conf, key, likelihood="DiagGaussian")
+    observation = _make_observation(conf, key, likelihood="Gaussian")
     initialized = observation.initialize(t, y, u, c)
     chex.assert_trees_all_close(
         initialized.readout.biases, jnp.zeros((time_steps, observation_dim))
@@ -178,7 +178,7 @@ def test_fa_default_sets_weight_and_bias():
         cov=[obs_noise_var] * observation_dim,
         n_steps=0,
         norm_readout=False,
-        likelihood="DiagGaussian",
+        likelihood="Gaussian",
     ))
     glm = GLM(conf, jrnd.key(0))
     weight_before = glm.readout.weight.copy()
@@ -215,7 +215,7 @@ def test_none_skips_readout_init():
         cov=[1.0] * observation_dim,
         n_steps=0,
         norm_readout=False,
-        likelihood="DiagGaussian",
+        likelihood="Gaussian",
         readout_init=None,
     ))
     glm = GLM(conf, jrnd.key(2))
@@ -256,7 +256,7 @@ def test_set_readout_variant_bias():
         cov=[1.0] * observation_dim,
         n_steps=n_steps,
         norm_readout=False,
-        likelihood="DiagGaussian",
+        likelihood="Gaussian",
     ))
     glm = GLM(conf, jrnd.key(0))
 
@@ -279,7 +279,7 @@ def test_set_readout_variant_bias_broadcast():
         cov=[1.0] * observation_dim,
         n_steps=n_steps,
         norm_readout=False,
-        likelihood="DiagGaussian",
+        likelihood="Gaussian",
     ))
     glm = GLM(conf, jrnd.key(0))
 
@@ -306,7 +306,7 @@ def test_variant_bias_fa_init():
         cov=[0.01] * observation_dim,
         n_steps=time_steps,
         norm_readout=False,
-        likelihood="DiagGaussian",
+        likelihood="Gaussian",
     ))
     glm = GLM(conf, jrnd.key(0))
     weight_before = glm.readout.weight.copy()
@@ -388,7 +388,7 @@ def test_custom_readout_initializer():
             cov=[1.0] * observation_dim,
             n_steps=0,
             norm_readout=False,
-            likelihood="DiagGaussian",
+            likelihood="Gaussian",
             readout_init="_test_custom",
         ))
         glm = GLM(conf, jrnd.key(1))
@@ -424,7 +424,7 @@ def test_fa_init_with_explicit_obs_noise_var():
         cov=[999.0] * observation_dim,
         n_steps=0,
         norm_readout=False,
-        likelihood="DiagGaussian",
+        likelihood="Gaussian",
         readout_init_conf=dict(obs_noise_var=0.01),
     ))
     glm = GLM(conf, jrnd.key(0))
@@ -448,7 +448,7 @@ def test_unknown_readout_init_raises():
         cov=[1.0] * 4,
         n_steps=0,
         norm_readout=False,
-        likelihood="DiagGaussian",
+        likelihood="Gaussian",
         readout_init="nonexistent",
     ))
     glm = GLM(conf, jrnd.key(0))
@@ -475,7 +475,7 @@ def test_norm_readout_set_weight_and_bias():
         cov=[1.0] * observation_dim,
         n_steps=0,
         norm_readout=True,
-        likelihood="DiagGaussian",
+        likelihood="Gaussian",
     ))
     glm = GLM(conf, jrnd.key(0))
 
@@ -507,7 +507,7 @@ def test_norm_readout_fa_init():
         cov=[0.01] * observation_dim,
         n_steps=0,
         norm_readout=True,
-        likelihood="DiagGaussian",
+        likelihood="Gaussian",
     ))
     glm = GLM(conf, jrnd.key(0))
     weight_before = glm.readout.weight.copy()
