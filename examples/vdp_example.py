@@ -634,7 +634,7 @@ def plot_posterior(
     ax[1].legend(ncol=2)
 
     plt.tight_layout()
-    fig.savefig(out_dir / f"toy_example_posterior_{case_name}.pdf")
+    fig.savefig(out_dir / f"vdp_example_posterior_{case_name}.pdf")
     plt.close(fig)
 
 
@@ -721,7 +721,7 @@ def plot_flow_field(
     ax[1].legend(loc="upper right")
 
     plt.tight_layout()
-    fig.savefig(out_dir / f"toy_example_flow_{case_name}.pdf")
+    fig.savefig(out_dir / f"vdp_example_flow_{case_name}.pdf")
     plt.close(fig)
 
 
@@ -805,7 +805,7 @@ def main() -> None:
     ax[1].legend(ncol=4)
 
     plt.tight_layout()
-    fig.savefig(out_dir / "toy_example_data.pdf")
+    fig.savefig(out_dir / "vdp_example_data.pdf")
     plt.close(fig)
 
     # ----- Model configuration -----
