@@ -1,5 +1,8 @@
 """
+Standalone benchmark (not a pytest test).
+
 Proof: checkpoint placement matters for lax.scan memory.
+Run directly:  uv run python tests/bench_checkpoint.py
 
 Compares three gradient-through-scan strategies:
   1. plain    — no checkpoint at all

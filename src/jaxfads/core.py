@@ -219,6 +219,7 @@ def bismooth(
         return (key_tp1, nature_f_t), (moment_p_t, nature_p_t, nature_f_t)
 
     # Forward
+    # TODO: checkpoint scan body when bismooth is implemented
     key, forward_key = jrnd.split(key)
     _, (_, _, nature_f) = scan(
         partial(ff, expected_moment=expected_moment_forward),
