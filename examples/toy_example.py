@@ -4,11 +4,11 @@ Demonstrates variational Bayesian state-space modeling on a 2D Van der Pol
 latent with 10D Gaussian observations.  Two cases are shown:
 
 1. **ToyDynamics** — exact Van der Pol RK4 step (no model mismatch).
-   The readout is initialised to the true observation matrix, so learning
-   is concentrated in the encoder.
+   The readout is initialised to the true observation matrix so that
+   learning is concentrated in the encoder.
 
 2. **MLPDynamics** — a trainable residual MLP that must learn the dynamics
-   from data.  Because the readout and dynamics are both free, the latent
+   from data.  Because both the readout and dynamics are free, the latent
    space is only determined up to an affine transformation.  Evaluation
    uses Procrustes alignment to map inferred states back to the true
    coordinate system before computing RMSE and flow-field metrics.
@@ -483,12 +483,8 @@ def align(alignment: AffineAlignment, z: jax.Array) -> jax.Array:
 # ---------------------------------------------------------------------------
 
 
-def init_readout(model, C: jax.Array, b: jax.Array):
-    """Set the observation readout weight and bias to known values.
-
-    For synthetic experiments where the true readout is known, this
-    removes the latent-space rotation ambiguity and focuses learning
-    on the dynamics and encoder.
+def _set_readout(model, C: jax.Array, b: jax.Array):
+    """Replace the readout weight and bias inside an XFADS model.
 
     Parameters
     ----------
@@ -498,6 +494,11 @@ def init_readout(model, C: jax.Array, b: jax.Array):
         Readout weight matrix.
     b : Array, shape (obs_dim,)
         Readout bias vector.
+
+    Returns
+    -------
+    XFADS
+        Model with updated readout parameters.
     """
     import equinox as eqx
 
@@ -512,6 +513,69 @@ def init_readout(model, C: jax.Array, b: jax.Array):
     new_readout = new_readout.initialize(b)
 
     return eqx.tree_at(lambda m: m.observation.readout, model, new_readout)
+
+
+def fa_init_readout(
+    model, observations: jax.Array, obs_noise_var: float
+):
+    """Initialise the observation readout via Factor Analysis.
+
+    Estimates the loading matrix C and bias b from the generative model
+    ``y = C z + b + ε``, where ``z ~ N(0, I)`` and ``ε ~ N(0, σ²I)``.
+
+    Steps
+    -----
+    1. Centre observations → sample covariance Σ_y.
+    2. Subtract known noise floor:  Σ_signal = Σ_y − σ²I.
+    3. Eigendecompose Σ_signal; take top-k eigenvectors scaled by
+       √eigenvalue to obtain the FA loading matrix C.
+    4. Set readout weight = C, bias = mean(y).
+
+    The resulting C spans the correct data subspace.  When paired with
+    known dynamics that break the rotation symmetry (e.g. Van der Pol),
+    the remaining rotation ambiguity is resolved during training.
+
+    Parameters
+    ----------
+    model : XFADS
+        Model whose readout will be replaced.
+    observations : Array, shape (N, T, obs_dim)
+        Observed data.
+    obs_noise_var : float
+        Known observation noise variance σ².
+
+    Returns
+    -------
+    XFADS
+        Model with FA-initialised readout.
+    """
+    state_dim = model.conf.state_dim
+    y = observations.reshape(-1, observations.shape[-1])  # (N*T, obs_dim)
+    mean_y = jnp.mean(y, axis=0)
+    y_centered = y - mean_y
+
+    # Sample covariance minus observation noise floor
+    cov_y = (y_centered.T @ y_centered) / (len(y_centered) - 1)
+    cov_signal = cov_y - obs_noise_var * jnp.eye(cov_y.shape[0])
+
+    # Eigendecomposition (ascending order → reverse for descending)
+    eigvals, eigvecs = jnp.linalg.eigh(cov_signal)
+    eigvals = eigvals[::-1]
+    eigvecs = eigvecs[:, ::-1]
+
+    # FA loadings: C = V_k @ diag(sqrt(max(λ_k, 0)))
+    top_vals = jnp.maximum(eigvals[:state_dim], 0.0)
+    C_fa = eigvecs[:, :state_dim] * jnp.sqrt(top_vals)  # (obs_dim, state_dim)
+
+    # Resolve sign ambiguity: for each latent dimension, choose the sign
+    # that makes the column positively correlated with the data projection.
+    # This is a standard heuristic (sklearn PCA uses it too).
+    z_proj = y_centered @ C_fa  # (N*T, state_dim)
+    signs = jnp.sign(jnp.sum(z_proj**3, axis=0))  # skewness-based sign
+    signs = jnp.where(signs == 0, 1.0, signs)
+    C_fa = C_fa * signs
+
+    return _set_readout(model, C_fa, mean_y)
 
 
 # ---------------------------------------------------------------------------
@@ -827,7 +891,7 @@ def main() -> None:
     )
 
     toy_model = XFADS(toy_model_conf, jr.key(123))
-    toy_model = init_readout(toy_model, C, b)
+    toy_model = _set_readout(toy_model, jnp.array(C), jnp.array(b))
 
     def moment_to_mean_and_cov(moment_vec):
         mean, cov = toy_model.approx.moment_to_canon(moment_vec)
@@ -874,6 +938,19 @@ def main() -> None:
     trained_means, trained_covs = mean_and_cov_vmap(trained_moments)
     trained_rmse = jnp.sqrt(jnp.mean((trained_means - latent_states) ** 2))
     print(f"posterior rmse after training: {float(trained_rmse):.6f}")
+
+    # Readout evaluation (true readout is known for Case 1)
+    C_toy = trained_toy.observation.readout.weight
+    readout_layer = trained_toy.observation.readout.layer
+    b_toy = readout_layer.layer.bias if hasattr(readout_layer, "layer") else readout_layer.bias
+    readout_C_rmse = jnp.sqrt(jnp.mean((C_toy - C) ** 2))
+    readout_b_rmse = jnp.sqrt(jnp.mean((b_toy - b) ** 2))
+    print(f"readout C rmse: {float(readout_C_rmse):.6f}")
+    print(f"readout b rmse: {float(readout_b_rmse):.6f}")
+    # Observation reconstruction
+    y_hat = trained_means @ C_toy.T + b_toy
+    obs_rmse = jnp.sqrt(jnp.mean((y_hat - observations) ** 2))
+    print(f"observation reconstruction rmse: {float(obs_rmse):.6f}")
 
     plot_posterior("toy", trained_means, trained_covs, latent_states, trial, T, out_dir)
     plot_flow_field(
@@ -957,6 +1034,25 @@ def main() -> None:
     aligned_means = align(aff, trained_means)
     aligned_rmse = jnp.sqrt(jnp.mean((aligned_means - latent_states) ** 2))
     print(f"posterior rmse (aligned): {float(aligned_rmse):.6f}")
+
+    # --- Readout evaluation ---
+    # The model learns C_learned in its own latent space.  The effective
+    # readout in the true coordinate system is C_eff = C_learned @ A^{-1}.
+    C_learned = trained_mlp.observation.readout.weight
+    mlp_readout_layer = trained_mlp.observation.readout.layer
+    b_learned = (mlp_readout_layer.layer.bias if hasattr(mlp_readout_layer, "layer")
+                 else mlp_readout_layer.bias)
+    A_inv = jnp.linalg.inv(aff.A)
+    C_eff = C_learned @ A_inv  # (obs_dim, state_dim)
+    b_eff = b_learned + C_learned @ (-A_inv @ aff.d)
+    readout_C_rmse = jnp.sqrt(jnp.mean((C_eff - C) ** 2))
+    readout_b_rmse = jnp.sqrt(jnp.mean((b_eff - b) ** 2))
+    print(f"readout C rmse (aligned): {float(readout_C_rmse):.6f}")
+    print(f"readout b rmse (aligned): {float(readout_b_rmse):.6f}")
+    # Observation reconstruction (no ground-truth needed)
+    y_hat = trained_means @ C_learned.T + b_learned
+    obs_rmse = jnp.sqrt(jnp.mean((y_hat - observations) ** 2))
+    print(f"observation reconstruction rmse: {float(obs_rmse):.6f}")
 
     post_flow = flow_metrics_vdp_vs_model(
         trained_mlp, mu=mu, dt=dt, xlim=xlim, vlim=vlim, grid=grid,
