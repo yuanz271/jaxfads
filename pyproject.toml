@@ -1,6 +1,6 @@
 [project]
 name = "jaxfads"
-version = "0.1.0"
+dynamic = ["version"]
 description = "eXponential FAmily Dynamical System"
 authors = [{ name = "yuanz", email = "yuanz271@gmail.com" }]
 license = "MIT"
@@ -36,11 +36,14 @@ dev = [
 ]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project.urls]
 Repository = "https://github.com/yuanz271/jaxfads"
+
+[tool.hatch.version]
+source = "vcs"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/jaxfads"]
