@@ -1,16 +1,13 @@
 """Van der Pol example: XFADS with synthetic data.
 
-Three cases:
+Two cases:
 
 1. **VDPDynamics** — exact RK4 step (no model mismatch).
 2. **MLPDynamics** — trainable MLP learns continuous-time dynamics, integrated with RK4.
-3. **MLPDynamics + KL warmup** — same MLP with KL annealing schedule.
 
-All use Factor Analysis readout initialisation.  Evaluation uses
+Both use Factor Analysis readout initialisation.  Evaluation uses
 Procrustes alignment to compare inferred latents against ground truth.
 """
-
-from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -97,6 +94,10 @@ class VDPDynamics(Dynamics):
         self.noise = DiagGaussian(jnp.array(conf.cov), conf.state_dim)
         self.mu, self.dt = float(conf.mu), float(conf.dt)
 
+    def rhs(self, z):
+        """Continuous-time derivative: Van der Pol RHS."""
+        return vdp_rhs(z, self.mu)
+
     def forward(self, z, u, c, *, key=None):
         return rk4_step(z, self.dt, mu=self.mu)
 
@@ -105,10 +106,10 @@ class VDPDynamics(Dynamics):
 
 
 class MLPDynamics(Dynamics):
-    """Trainable MLP dynamics integrated with RK4.
+    """Trainable MLP dynamics with Euler integration.
 
-    The MLP learns the continuous-time derivative f(z), and ``forward``
-    applies a single RK4 step: z_{t+1} = RK4(z_t, dt, f).
+    The MLP learns the continuous-time derivative ``f(z)``,
+    and ``forward`` applies a single Euler step: ``z + dt · f(z)``.
     """
 
     noise: DiagGaussian
@@ -124,13 +125,12 @@ class MLPDynamics(Dynamics):
             width=conf.width, depth=conf.depth, key=key,
         )
 
+    def rhs(self, z):
+        """Continuous-time derivative f(z)."""
+        return self.net(z)
+
     def forward(self, z, u, c, *, key=None):
-        dt = self.dt
-        k1 = self.net(z)
-        k2 = self.net(z + 0.5 * dt * k1)
-        k3 = self.net(z + 0.5 * dt * k2)
-        k4 = self.net(z + dt * k3)
-        return z + (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
+        return z + self.dt * self.rhs(z)
 
     def loss(self):
         return jnp.mean(self.cov())
@@ -167,40 +167,87 @@ def align(aff: AffineAlignment, z: jax.Array) -> jax.Array:
 # ---------------------------------------------------------------------------
 
 
-def _model_rhs(model, grid_pts, dt, alignment=None):
-    """Model RHS at grid points, optionally through alignment map."""
-    u0, c0 = jnp.zeros((0,)), jnp.zeros((0,))
+def _model_rhs(model, grid_pts, alignment=None):
+    """Evaluate the model's continuous-time derivative on a grid.
 
-    def step(z):
-        return model.forward(z, u0, c0)
+    Parameters
+    ----------
+    model : XFADS
+        Trained model whose ``forward`` module exposes a ``rhs(z)`` method.
+    grid_pts : Array, shape (M, D)
+        Points at which to evaluate the derivative (in true coordinates).
+    alignment : AffineAlignment, optional
+        If provided, grid points are mapped into latent space before
+        evaluation, and the resulting derivatives are mapped back.
+    """
+    rhs_fn = model.forward.rhs
 
     if alignment is not None:
         A_inv = jnp.linalg.inv(alignment.A)
         pts = (grid_pts - alignment.d) @ A_inv.T
-        pred = jax.vmap(step)(pts)
-        return (pred - pts) @ alignment.A.T / dt
+        rhs = jax.vmap(rhs_fn)(pts)
+        return rhs @ alignment.A.T
 
-    pred = jax.vmap(step)(grid_pts)
-    return (pred - grid_pts) / dt
+    return jax.vmap(rhs_fn)(grid_pts)
 
 
-def flow_metrics(model, *, mu, dt, xlim, vlim, grid=25, alignment=None):
-    """NRMSE and mean angle between true and model flow fields."""
+def flow_metrics(model, *, mu, xlim, vlim, data_pts, grid=25, alignment=None):
+    """Density-weighted NRMSE and mean angle between true and model flow fields.
+
+    Parameters
+    ----------
+    model : XFADS
+        Trained model whose dynamics module exposes ``rhs()``.
+    mu : float
+        Van der Pol parameter for the ground-truth RHS.
+    xlim, vlim : tuple[float, float]
+        Axis limits for the evaluation grid.
+    data_pts : Array, shape (M, D)
+        Flattened latent-state samples (in true coordinates) that define
+        the data region.  Grid points are weighted by a Gaussian kernel
+        density estimated from these points, so metrics emphasise the
+        region where the model has seen training data.
+    grid : int, optional
+        Number of grid points per axis.  Default is ``25``.
+    alignment : AffineAlignment, optional
+        Procrustes alignment to map grid points into model latent space.
+
+    Returns
+    -------
+    nrmse : float
+        Density-weighted normalised RMSE of the flow field.
+    angle : float
+        Density-weighted mean angle (rad) between true and inferred flow.
+    """
     xs = jnp.linspace(*xlim, grid)
     vs = jnp.linspace(*vlim, grid)
     X, V = jnp.meshgrid(xs, vs, indexing="xy")
     pts = jnp.stack([X, V], axis=-1).reshape(-1, 2)
 
     true_rhs = jax.vmap(lambda s: vdp_rhs(s, mu))(pts)
-    inf_rhs = _model_rhs(model, pts, dt, alignment)
+    inf_rhs = _model_rhs(model, pts, alignment)
 
+    # Density weights: Gaussian kernel on min distance to data points
+    # bandwidth = median nearest-neighbour distance in data_pts
+    dists = jnp.linalg.norm(pts[:, None, :] - data_pts[None, :, :], axis=-1)  # (grid², M)
+    min_dists = jnp.min(dists, axis=1)  # (grid²,)
+    bandwidth = jnp.median(min_dists)
+    weights = jnp.exp(-0.5 * (min_dists / (bandwidth + 1e-8)) ** 2)
+    weights = weights / (jnp.sum(weights) + 1e-8)
+
+    # Weighted NRMSE
+    sq_err = jnp.sum((inf_rhs - true_rhs) ** 2, -1)
+    sq_true = jnp.sum(true_rhs ** 2, -1)
     nrmse = float(jnp.sqrt(
-        jnp.mean(jnp.sum((inf_rhs - true_rhs) ** 2, -1))
-        / (jnp.mean(jnp.sum(true_rhs ** 2, -1)) + 1e-8)
+        jnp.sum(weights * sq_err) / (jnp.sum(weights * sq_true) + 1e-8)
     ))
+
+    # Weighted mean angle
     dot = jnp.sum(inf_rhs * true_rhs, -1)
-    norms = jnp.linalg.norm(inf_rhs, -1) * jnp.linalg.norm(true_rhs, -1) + 1e-8
-    angle = float(jnp.mean(jnp.arccos(jnp.clip(dot / norms, -1, 1))))
+    norms = jnp.linalg.norm(inf_rhs, axis=-1) * jnp.linalg.norm(true_rhs, axis=-1) + 1e-8
+    angles = jnp.arccos(jnp.clip(dot / norms, -1, 1))
+    angle = float(jnp.sum(weights * angles))
+
     return nrmse, angle
 
 
@@ -217,7 +264,7 @@ def _readout_bias(model):
 
 def evaluate(
     name, trained, latent_states, observations, data,
-    C_true, b_true, *, key, approx, mu, dt, xlim, vlim, grid,
+    C_true, b_true, *, key, approx, mu, xlim, vlim, grid,
     align_flow=True,
 ):
     """Infer, align, compute metrics, and print results.
@@ -257,8 +304,11 @@ def evaluate(
     obs_rmse = float(jnp.sqrt(jnp.mean((y_hat - observations) ** 2)))
 
     flow_aff = aff if align_flow else None
+    # Use true latent states as the data region for density weighting
+    data_pts_flat = latent_states.reshape(-1, D)
     nrmse, angle = flow_metrics(
-        trained, mu=mu, dt=dt, xlim=xlim, vlim=vlim, grid=grid, alignment=flow_aff,
+        trained, mu=mu, xlim=xlim, vlim=vlim, data_pts=data_pts_flat,
+        grid=grid, alignment=flow_aff,
     )
 
     print(f"\n--- {name} ---")
@@ -314,7 +364,7 @@ def plot_posterior(name, means, covs, truth, trial, T, out_dir):
 
 def plot_flow_field(
     name, model, true_traj, inferred_traj,
-    mu, dt, xlim, vlim, grid, out_dir, *, alignment=None,
+    mu, xlim, vlim, grid, out_dir, *, alignment=None,
 ):
     """Side-by-side streamplots: true vs inferred flow field."""
     xs = jnp.linspace(*xlim, grid)
@@ -323,7 +373,7 @@ def plot_flow_field(
     pts = jnp.stack([X, V], axis=-1).reshape(-1, 2)
 
     true_rhs = jax.vmap(lambda s: vdp_rhs(s, mu))(pts)
-    inf_rhs = _model_rhs(model, pts, dt, alignment)
+    inf_rhs = _model_rhs(model, pts, alignment)
 
     fig, ax = plt.subplots(1, 2, figsize=(12, 5), sharex=True, sharey=True)
     for a, rhs, traj, title, color in [
@@ -355,7 +405,7 @@ def main() -> None:
     print("JAX devices:", jax.devices())
 
     # ----- Synthesis -----
-    N, T, dt, mu = 128, 400, 0.02, 2.0
+    N, T, dt, mu = 128, 800, 0.02, 2.0
     obs_dim, state_dim = 10, 2
     sigma_obs = 0.3
 
@@ -363,8 +413,8 @@ def main() -> None:
 
     latent_states = simulate_vdp(k_lat, n_trials=N, n_steps=T, dt=dt, mu=mu)
 
-    C_true = np.asarray(0.7 * jr.normal(k_C, (obs_dim, state_dim)))
-    b_true = np.asarray(0.1 * jr.normal(k_b, (obs_dim,)))
+    C_true = 0.7 * jr.normal(k_C, (obs_dim, state_dim))
+    b_true = 0.1 * jr.normal(k_b, (obs_dim,))
     observations = (
         latent_states @ C_true.T + b_true
         + sigma_obs * jr.normal(k_y, (N, T, obs_dim))
@@ -442,7 +492,7 @@ def main() -> None:
     trained1 = train(model1, data, conf=trainer_conf)
 
     key, k = jr.split(key)
-    eval_kw = dict(approx=approx, mu=mu, dt=dt, xlim=xlim, vlim=vlim, grid=grid)
+    eval_kw = dict(approx=approx, mu=mu, xlim=xlim, vlim=vlim, grid=grid)
     r1 = evaluate(
         "VDPDynamics", trained1, latent_states, observations,
         data, C_true, b_true, key=k, align_flow=False, **eval_kw,
@@ -453,7 +503,7 @@ def main() -> None:
     )
     plot_flow_field(
         "vdp", trained1, latent_states[0], r1["aligned_means"][0],
-        mu, dt, xlim, vlim, grid, out_dir,
+        mu, xlim, vlim, grid, out_dir,
     )
 
     # Save / load roundtrip
@@ -494,51 +544,16 @@ def main() -> None:
     )
     plot_flow_field(
         "mlp", trained2, latent_states[0], r2["aligned_means"][0],
-        mu, dt, xlim, vlim, grid, out_dir, alignment=r2["alignment"],
-    )
-
-    # ===================================================================
-    # Case 3: MLPDynamics with KL warmup
-    # ===================================================================
-    print("\n" + "=" * 60)
-    print("Case 3: MLPDynamics + KL warmup")
-    print("=" * 60)
-
-    # ~10% of total training steps: 0.1 * max_epoch * (train_size // batch_size)
-    train_size = N - batch_size  # N minus validation_size (= batch_size here)
-    n_batches_per_epoch = train_size // batch_size
-    kl_warmup_steps = int(0.1 * trainer_conf.max_epoch * n_batches_per_epoch)
-
-    trainer_conf_warmup = OmegaConf.merge(
-        trainer_conf, {"kl_warmup_steps": kl_warmup_steps},
-    )
-
-    model3 = XFADS(conf2, jr.key(456))
-    model3 = model3.initialize(*data)
-
-    trained3 = train(model3, data, conf=trainer_conf_warmup)
-
-    key, k = jr.split(key)
-    r3 = evaluate(
-        "MLPDynamics+warmup", trained3, latent_states, observations,
-        data, C_true, b_true, key=k, **eval_kw,
-    )
-    plot_posterior(
-        "mlp_warmup", r3["aligned_means"], r3["covs"],
-        latent_states, 0, T, out_dir,
-    )
-    plot_flow_field(
-        "mlp_warmup", trained3, latent_states[0], r3["aligned_means"][0],
-        mu, dt, xlim, vlim, grid, out_dir, alignment=r3["alignment"],
+        mu, xlim, vlim, grid, out_dir, alignment=r2["alignment"],
     )
 
     # ===================================================================
     # Summary
     # ===================================================================
-    print("\n" + "=" * 82)
+    print("\n" + "=" * 72)
     print(f"Summary  (Procrustes-aligned; obs noise σ = {sigma_obs})")
-    print("=" * 82)
-    header = f"{'Metric':<30s} {'VDPDynamics':>14s} {'MLPDynamics':>14s} {'MLP+warmup':>14s}"
+    print("=" * 72)
+    header = f"{'Metric':<30s} {'VDPDynamics':>14s} {'MLPDynamics':>14s}"
     print(header)
     print("-" * len(header))
     for metric, label in [
@@ -549,7 +564,7 @@ def main() -> None:
         ("flow_nrmse", "Flow NRMSE"),
         ("flow_angle", "Flow angle (rad)"),
     ]:
-        print(f"{label:<30s} {r1[metric]:>14.4f} {r2[metric]:>14.4f} {r3[metric]:>14.4f}")
+        print(f"{label:<30s} {r1[metric]:>14.4f} {r2[metric]:>14.4f}")
     print("=" * len(header))
 
 
