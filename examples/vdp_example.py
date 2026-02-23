@@ -1,11 +1,12 @@
 """Van der Pol example: XFADS with synthetic data.
 
-Two cases:
+Three cases:
 
 1. **VDPDynamics** — exact RK4 step (no model mismatch).
 2. **MLPDynamics** — trainable residual MLP learns dynamics from data.
+3. **MLPDynamics + KL warmup** — same MLP with KL annealing schedule.
 
-Both use Factor Analysis readout initialisation.  Evaluation uses
+All use Factor Analysis readout initialisation.  Evaluation uses
 Procrustes alignment to compare inferred latents against ground truth.
 """
 
@@ -486,12 +487,47 @@ def main() -> None:
     )
 
     # ===================================================================
+    # Case 3: MLPDynamics with KL warmup
+    # ===================================================================
+    print("\n" + "=" * 60)
+    print("Case 3: MLPDynamics + KL warmup")
+    print("=" * 60)
+
+    # ~10% of total training steps: 0.1 * max_epoch * (train_size // batch_size)
+    train_size = N - batch_size  # N minus validation_size (= batch_size here)
+    n_batches_per_epoch = train_size // batch_size
+    kl_warmup_steps = int(0.1 * trainer_conf.max_epoch * n_batches_per_epoch)
+
+    trainer_conf_warmup = OmegaConf.merge(
+        trainer_conf, {"kl_warmup_steps": kl_warmup_steps},
+    )
+
+    model3 = XFADS(conf2, jr.key(456))
+    model3 = model3.initialize(*data)
+
+    trained3 = train(model3, data, conf=trainer_conf_warmup)
+
+    key, k = jr.split(key)
+    r3 = evaluate(
+        "MLPDynamics+warmup", trained3, latent_states, observations,
+        data, C_true, b_true, key=k, **eval_kw,
+    )
+    plot_posterior(
+        "mlp_warmup", r3["aligned_means"], r3["covs"],
+        latent_states, 0, T, out_dir,
+    )
+    plot_flow_field(
+        "mlp_warmup", trained3, latent_states[0], r3["aligned_means"][0],
+        mu, dt, xlim, vlim, grid, out_dir, alignment=r3["alignment"],
+    )
+
+    # ===================================================================
     # Summary
     # ===================================================================
-    print("\n" + "=" * 72)
+    print("\n" + "=" * 82)
     print(f"Summary  (Procrustes-aligned; obs noise σ = {sigma_obs})")
-    print("=" * 72)
-    header = f"{'Metric':<30s} {'VDPDynamics':>14s} {'MLPDynamics':>14s}"
+    print("=" * 82)
+    header = f"{'Metric':<30s} {'VDPDynamics':>14s} {'MLPDynamics':>14s} {'MLP+warmup':>14s}"
     print(header)
     print("-" * len(header))
     for metric, label in [
@@ -502,7 +538,7 @@ def main() -> None:
         ("flow_nrmse", "Flow NRMSE"),
         ("flow_angle", "Flow angle (rad)"),
     ]:
-        print(f"{label:<30s} {r1[metric]:>14.4f} {r2[metric]:>14.4f}")
+        print(f"{label:<30s} {r1[metric]:>14.4f} {r2[metric]:>14.4f} {r3[metric]:>14.4f}")
     print("=" * len(header))
 
 
