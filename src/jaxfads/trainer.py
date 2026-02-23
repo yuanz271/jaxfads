@@ -47,6 +47,7 @@ DEFAULT_TRAINER_CONFIG = DictConfig(
         "valid_ratio": 0.2,
         "validation_size": 80,
         "patience": 10,
+        "kl_warmup_steps": 0,
     }
 )
 
@@ -94,7 +95,7 @@ def train_test_split(arrays, *, rng, test_ratio=None, test_size=None, train_size
 
 
 def batch_elbo(
-    model, key, times, posterior_moments, predicted_moments, observations
+    model, key, times, posterior_moments, predicted_moments, observations, *, beta=1.0
 ) -> Array:
     """
     Compute Evidence Lower Bound (ELBO) for batched sequences.
@@ -116,6 +117,8 @@ def batch_elbo(
         Prior/predictive moment parameters.
     observations : Array, shape (N, T, observation_dim)
         Observed data sequences.
+    beta : float, optional
+        KL weight for warm-up annealing, in ``[0, 1]``.  Default is ``1.0``.
 
     Returns
     -------
@@ -135,6 +138,7 @@ def batch_elbo(
                 eloglik=model.observation.eloglik,
                 approx=model.approx,
                 mc_size=model.conf.mc_size,
+                beta=beta,
             )
         )
     )  # (batch, seq)
@@ -144,7 +148,7 @@ def batch_elbo(
     return _elbo(keys, times, posterior_moments, predicted_moments, observations)
 
 
-def batch_loss(model, batch, key, step):
+def batch_loss(model, batch, key, step, *, kl_warmup_steps=0):
     """
     Compute negative ELBO loss for a batch of sequences.
 
@@ -159,8 +163,12 @@ def batch_loss(model, batch, key, step):
     key : Array
         JAX PRNGKey used for stochastic components.
     step : Array
-        Scalar ``jnp.int32`` training step counter (unused currently,
-        reserved for step-dependent schedules such as KL warm-up).
+        Scalar ``jnp.int32`` training step counter provided by the
+        training loop.
+    kl_warmup_steps : int, optional
+        Number of training steps over which the KL weight β is linearly
+        annealed from 0 to 1.  When ``0`` (default) the standard ELBO is
+        used (β = 1 from the start).
 
     Returns
     -------
@@ -168,6 +176,12 @@ def batch_loss(model, batch, key, step):
         Scalar loss equal to the mean negative ELBO over the batch, plus
         optional regularization terms.
     """
+    beta = jnp.where(
+        kl_warmup_steps > 0,
+        jnp.minimum(1.0, step / kl_warmup_steps),
+        1.0,
+    )
+
     times, observations, controls, covariates = batch
 
     key, model_key = jr.split(key)
@@ -177,7 +191,8 @@ def batch_loss(model, batch, key, step):
 
     key, elbo_key = jr.split(key)
     free_energy = -batch_elbo(
-        model, elbo_key, times, posterior_moments, prior_moments, observations
+        model, elbo_key, times, posterior_moments, prior_moments, observations,
+        beta=beta,
     )
 
     loss = (
@@ -358,7 +373,7 @@ def train(model, data, *, conf):
         conf.patience = compute_patience(conf.max_epoch, data_size, batch_size)
 
     logger.info(
-        "train start: devices=%d batch_size=%d data=%d train=%d valid=%d max_epoch=%d patience=%d seed=%d",
+        "train start: devices=%d batch_size=%d data=%d train=%d valid=%d max_epoch=%d patience=%d seed=%d kl_warmup_steps=%d",
         n_devices,
         int(conf.batch_size),
         int(data_size),
@@ -367,6 +382,7 @@ def train(model, data, *, conf):
         int(conf.max_epoch),
         int(conf.patience),
         int(conf.seed),
+        int(conf.kl_warmup_steps),
     )
     logger.debug(
         "sharding: data=%s model=%s",
@@ -391,12 +407,14 @@ def train(model, data, *, conf):
         optax.scale_by_learning_rate(conf.learning_rate),
     )
 
+    loss_fn = partial(batch_loss, kl_warmup_steps=conf.kl_warmup_steps)
+
     model = gt.train(
         model,
         train_set,
         valid_set,
         key,
-        batch_loss,
+        loss_fn,
         dataloader,
         conf.batch_size,
         conf.max_epoch,

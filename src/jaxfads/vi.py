@@ -23,6 +23,7 @@ def elbo(
     approx: type[Approx],
     *,
     mc_size: int,
+    beta: float = 1.0,
 ) -> Array:
     """
     Compute Evidence Lower Bound (ELBO) for a single time point.
@@ -49,24 +50,30 @@ def elbo(
         Exponential family approximation class for KL computation.
     mc_size : int
         Number of Monte Carlo samples for expectation approximation.
+    beta : float, optional
+        KL weight for warm-up annealing, in ``[0, 1]``.  When ``beta < 1``
+        the KL term is down-weighted, allowing the likelihood to drive
+        early learning and reducing the risk of posterior collapse.
+        Default is ``1.0`` (standard ELBO).
 
     Returns
     -------
     Array
-        ELBO value for the single time point.
+        (Weighted) ELBO value for the single time point.
 
     Notes
     -----
     The ELBO decomposes as:
 
-    ELBO_t = E_{q(z_t)}[log p(y_t | z_t)] - KL(q(z_t | y_{1:T}) || p(z_t | y_{1:t-1}))
+    ELBO_t = E_{q(z_t)}[log p(y_t | z_t)] - β · KL(q(z_t | y_{1:T}) || p(z_t | y_{1:t-1}))
 
     where:
     - First term: Expected log-likelihood (reconstruction term)
-    - Second term: KL divergence (regularization term)
+    - Second term: KL divergence (regularization term), scaled by β
 
-    The KL term encourages the posterior to stay close to the prior/predictive
-    distribution, preventing overfitting and ensuring smooth state trajectories.
+    When ``beta = 1`` this is the standard ELBO.  During KL warm-up β is
+    linearly increased from 0 to 1 over a configured number of training
+    steps.
 
     For the full sequence, the total ELBO is the sum over all time points:
     ELBO = Σ_t ELBO_t
@@ -92,4 +99,4 @@ def elbo(
     """
     ell: Array = eloglik(key, t, moment, y, approx, mc_size)
     kl: Array = approx.kl(moment, moment_p)
-    return ell - kl
+    return ell - beta * kl

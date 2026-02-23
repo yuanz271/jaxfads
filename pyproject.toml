@@ -22,7 +22,7 @@ dependencies = [
     "rich>=14.0.0",
     "tensorflow-probability[jax]>=0.24.0,<0.26.0",
     "jax>=0.4.38,<0.7.0",
-    "gearax @ git+https://github.com/yuanz271/gearax.git@744c367db7481897b43135e48ba5903379b9ec04",
+    "gearax @ git+https://github.com/yuanz271/gearax.git@29d694e66adb11c5bf6dd43c52ff5f839cd86f10",
 ]
 
 [dependency-groups]
