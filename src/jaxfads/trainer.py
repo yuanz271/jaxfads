@@ -144,7 +144,7 @@ def batch_elbo(
     return _elbo(keys, times, posterior_moments, predicted_moments, observations)
 
 
-def batch_loss(model, batch, key):
+def batch_loss(model, batch, key, step):
     """
     Compute negative ELBO loss for a batch of sequences.
 
@@ -158,6 +158,9 @@ def batch_loss(model, batch, key):
         matching the training data layout.
     key : Array
         JAX PRNGKey used for stochastic components.
+    step : Array
+        Scalar ``jnp.int32`` training step counter (unused currently,
+        reserved for step-dependent schedules such as KL warm-up).
 
     Returns
     -------

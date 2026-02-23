@@ -132,7 +132,7 @@ def main():
 
     @eqx.filter_jit
     def grad_step(model, batch, key):
-        return eqx.filter_value_and_grad(batch_loss)(model, batch, key)
+        return eqx.filter_value_and_grad(batch_loss)(model, batch, key, jnp.array(0, dtype=jnp.int32))
 
     key, gk = jr.split(key)
 
@@ -156,7 +156,7 @@ def main():
 
     @eqx.filter_jit
     def train_step(model, batch, key, opt_state):
-        loss, grads = eqx.filter_value_and_grad(batch_loss)(model, batch, key)
+        loss, grads = eqx.filter_value_and_grad(batch_loss)(model, batch, key, jnp.array(0, dtype=jnp.int32))
         updates, opt_state = opt.update(grads, opt_state, model)
         model = eqx.apply_updates(model, updates)
         return model, opt_state, loss
@@ -209,7 +209,7 @@ def main():
 
         @eqx.filter_jit
         def grad_t(model, batch, key):
-            return eqx.filter_value_and_grad(batch_loss)(model, batch, key)[0]
+            return eqx.filter_value_and_grad(batch_loss)(model, batch, key, jnp.array(0, dtype=jnp.int32))[0]
 
         key, k = jr.split(key)
         timer(f"T={T_test:>4d}", grad_t, model_t, batch_t, k, repeats=3)
@@ -229,7 +229,7 @@ def main():
 
         @eqx.filter_jit
         def grad_mc(model, batch, key):
-            return eqx.filter_value_and_grad(batch_loss)(model, batch, key)[0]
+            return eqx.filter_value_and_grad(batch_loss)(model, batch, key, jnp.array(0, dtype=jnp.int32))[0]
 
         key, gk = jr.split(key)
         timer(f"mc_size={mc}", grad_mc, model_mc, batch, gk, repeats=3)
