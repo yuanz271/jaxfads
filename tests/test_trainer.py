@@ -6,6 +6,7 @@ from omegaconf import OmegaConf
 from jaxfads.trainer import train
 from jaxfads.smoother import XFADS
 from jaxfads.base import Dynamics, Noise
+import jaxfads.observations  # noqa: F401 — register GLM subclass
 
 
 class MockDynamics(Dynamics):
