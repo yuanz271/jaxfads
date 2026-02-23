@@ -10,7 +10,7 @@ import equinox as eqx
 from jax import Array
 from jax import numpy as jnp
 
-from .constraints import constrain_positive, unconstrain_positive
+from ..constraints import constrain_positive, unconstrain_positive
 
 
 class DiagGaussian(eqx.Module, strict=True):
