@@ -3,7 +3,7 @@
 Three cases:
 
 1. **VDPDynamics** — exact RK4 step (no model mismatch).
-2. **MLPDynamics** — trainable residual MLP learns dynamics from data.
+2. **MLPDynamics** — trainable MLP learns continuous-time dynamics, integrated with RK4.
 3. **MLPDynamics + KL warmup** — same MLP with KL annealing schedule.
 
 All use Factor Analysis readout initialisation.  Evaluation uses
@@ -105,21 +105,32 @@ class VDPDynamics(Dynamics):
 
 
 class MLPDynamics(Dynamics):
-    """Trainable residual MLP: z_{t+1} = z + net(z)."""
+    """Trainable MLP dynamics integrated with RK4.
+
+    The MLP learns the continuous-time derivative f(z), and ``forward``
+    applies a single RK4 step: z_{t+1} = RK4(z_t, dt, f).
+    """
 
     noise: DiagGaussian
     net: enn.Sequential
+    dt: float
 
     def __init__(self, conf, key):
         self.conf = conf
         self.noise = DiagGaussian(jnp.array(conf.cov), conf.state_dim)
+        self.dt = float(conf.dt)
         self.net = make_mlp(
             conf.state_dim, conf.state_dim,
             width=conf.width, depth=conf.depth, key=key,
         )
 
     def forward(self, z, u, c, *, key=None):
-        return z + self.net(z)
+        dt = self.dt
+        k1 = self.net(z)
+        k2 = self.net(z + 0.5 * dt * k1)
+        k3 = self.net(z + 0.5 * dt * k2)
+        k4 = self.net(z + dt * k3)
+        return z + (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
 
     def loss(self):
         return jnp.mean(self.cov())
@@ -464,7 +475,7 @@ def main() -> None:
         **shared_conf, "forward": "MLPDynamics", "mc_size": 4,
         "dyn_conf": dict(
             state_dim=state_dim, input_dim=0, context_dim=0,
-            cov=1.0, width=32, depth=1,
+            cov=1.0, width=32, depth=1, dt=dt,
         ),
     })
     model2 = XFADS(conf2, jr.key(456))
