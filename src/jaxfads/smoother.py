@@ -383,9 +383,10 @@ class XFADS(ConfModule):
         >>>
         >>> natural, mean, pred = model(t, y_batch, u_batch, c_batch, key=key)
         """
-        def _free_to_natural(free):
+        def _free_to_natural(free_flat):
+            free_pytree = self.approx.mean_to_structured(free_flat)
             return self.approx.mean_to_natural(
-                self.approx.structured_to_mean(self.approx.to_structured(free))
+                self.approx.structured_to_mean(self.approx.to_structured(free_pytree))
             )
 
         batch_free_to_natural = vmap(vmap(_free_to_natural))

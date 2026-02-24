@@ -9,6 +9,7 @@ in their respective modules.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Any
 
 from jax import Array
 
@@ -138,91 +139,91 @@ class Approx(SubclassRegistryMixin, ABC):
         ...
 
     @abstractmethod
-    def to_structured(self, free: Array) -> Array:
+    def to_structured(self, free: Any) -> Any:
         """
-        Transform free-form parameters to valid structured parameters.
+        Transform free-form pytree to valid structured pytree.
 
         Parameters
         ----------
-        free : Array
-            Free-form (unconstrained) parameter vector from optimization.
+        free : pytree
+            Free-form (unconstrained) parameter pytree from optimization.
 
         Returns
         -------
-        Array
-            Valid structured parameters (e.g., loc and positive
+        pytree
+            Valid structured parameters (e.g., ``MVNParam`` with positive
             covariance components for MVN).
         """
         ...
 
     @abstractmethod
-    def structured_to_mean(self, structured: Array) -> Array:
+    def structured_to_mean(self, structured: Any) -> Array:
         """
-        Convert structured parameters to mean parameters.
+        Convert structured pytree to flat mean parameters.
 
         Direct path avoiding the roundtrip through natural parameters,
         which may be numerically unstable (e.g. matrix inversion).
 
         Parameters
         ----------
-        structured : Array
-            Valid structured parameter vector (output of
+        structured : pytree
+            Valid structured parameter pytree (output of
             :meth:`to_structured`).
 
         Returns
         -------
         Array
-            Mean parameters (expected sufficient statistics).
+            Flat mean parameters (expected sufficient statistics).
         """
         ...
 
     @abstractmethod
-    def mean_to_structured(self, mean: Array) -> Array:
+    def mean_to_structured(self, mean: Array) -> Any:
         """
-        Convert mean parameters to structured parameters.
+        Convert flat mean parameters to structured pytree.
 
         Inverse of :meth:`structured_to_mean`.
 
         Parameters
         ----------
         mean : Array
-            Mean parameters (expected sufficient statistics).
+            Flat mean parameters (expected sufficient statistics).
 
         Returns
         -------
-        Array
-            Valid structured parameter vector.
+        pytree
+            Valid structured parameter pytree.
         """
         ...
 
     @abstractmethod
-    def to_free(self, structured: Array) -> Array:
+    def to_free(self, structured: Any) -> Any:
         """
-        Transform valid structured parameters to free-form.
+        Transform valid structured pytree to free-form pytree.
 
         Inverse of :meth:`to_structured`.
 
         Parameters
         ----------
-        structured : Array
-            Valid structured parameter vector.
+        structured : pytree
+            Valid structured parameter pytree.
 
         Returns
         -------
-        Array
-            Free-form (unconstrained) parameters suitable for
+        pytree
+            Free-form (unconstrained) parameter pytree suitable for
             optimization.
         """
         ...
 
     @abstractmethod
-    def param_from_conf(self, **kwargs) -> Array:
+    def param_from_conf(self, **kwargs) -> Any:
         """
         Create free-form parameters from a serializable spec.
 
         Each subclass defines which keyword arguments it accepts.
-        The returned array is in free-form (unconstrained), suitable
-        for storage on ``XFADS`` and optimization by SGD.
+        The returned pytree is in free-form (unconstrained), suitable
+        for storage on ``XFADS`` and optimization by optax.
 
         Parameters
         ----------
@@ -232,8 +233,8 @@ class Approx(SubclassRegistryMixin, ABC):
 
         Returns
         -------
-        Array
-            Free-form parameter array.
+        pytree
+            Free-form parameter pytree.
         """
         ...
 

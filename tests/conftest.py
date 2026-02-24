@@ -33,5 +33,5 @@ def make_approx(dim: int, approx_name: str = "MVN", **kwargs) -> Approx:
 
 
 def make_noise_mean(approx: Approx, state_dim: int, cov: float = 1.0):
-    """Create a constrained noise mean array for test use."""
-    return approx.to_structured(approx.param_from_conf(scale=cov))
+    """Create a constrained noise mean array (flat) for test use."""
+    return approx.structured_to_mean(approx.to_structured(approx.param_from_conf(scale=cov)))

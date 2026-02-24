@@ -4,31 +4,36 @@
 
 The distribution system follows a two-layer design:
 
-1. **`Approx` ABC** — defines the exponential-family interface using opaque
-   flat arrays.  It has no knowledge of how parameters are structured
-   internally.
-2. **Subclasses** (e.g. `MVN`) — handle the internal structure of parameters
-   and provide conversions between free-form, structured, natural, and
-   mean representations.
+1. **`Approx` ABC** — defines the exponential-family interface.  Natural
+   and mean parameters are **flat arrays** (required for array arithmetic).
+   Structured and free-form parameters are **pytrees** (distribution-specific
+   layout handled natively by JAX/Equinox).
+2. **Subclasses** (e.g. `MVN`) — define the pytree structure and implement
+   conversions between all four forms.
 
 The core algorithm (`core.py`, `vi.py`) interacts only with the `Approx`
-interface.  Distribution-specific callers (e.g. `observations.py`,
-`smoother.noise_cov`) access subclass methods directly through the
-concrete instance.
+interface.  Distribution-specific callers (e.g. `observations.py`) access
+subclass methods directly through the concrete instance.
 
 ## Parameter Forms
 
 Every exponential-family distribution has four representations:
 
-| Form | Description | Stored? | Example (MVN) |
-|------|-------------|---------|---------------|
-| **Free-form** | Unconstrained array for SGD optimization | ✓ | Raw reals in ℝⁿ |
-| **Structured param** | Valid structured parameters | | `[loc, cov_diag, cov_factor]` with `cov_diag > 0` |
-| **Natural** (η) | Canonical exponential-family parameters | | `[η₁, η₂]` with `η₂` negative definite |
-| **Mean** (μ) | Expected sufficient statistics `E[T(x)]` | | Used for sampling, KL, prediction |
+| Form | Type | Reason | Example (MVN) |
+|------|------|--------|---------------|
+| **Free-form** | pytree | SGD via optax (handles pytrees natively) | `(loc_free, diag_free, factor_free)` |
+| **Structured** | pytree | Human-readable, distribution-specific | `(loc, cov_diag, cov_factor)` with `cov_diag > 0` |
+| **Natural** (η) | flat array | Additive updates in filtering: `η_f = η_p + α` | `[η₁, η₂]` with `η₂` negative definite |
+| **Mean** (μ) | flat array | Averaging in `predict_mean`, TFP for KL/sampling | `[loc, cov_diag, cov_factor]` packed flat |
 
-All arrays stored on `XFADS` are in **free-form**.  Other forms are
-derived at inference time through the conversion methods below.
+**Why natural and mean must be flat:**
+- Natural: additive updates `η_p + α_t` require element-wise addition
+- Mean: averaging `(1/S) Σ μ_θ(z^s)` in `predict_mean`, passed to TFP
+
+**Why structured and free-form are pytrees:**
+- JAX and optax handle pytrees natively — no manual flatten/unflatten
+- Each subclass defines its own pytree structure
+- Constraints (e.g. softplus) apply to individual leaves
 
 ## Conversion Flow
 
@@ -36,64 +41,64 @@ derived at inference time through the conversion methods below.
 param_from_conf(**kwargs)
         │
         ▼
-    free-form  ◄──── stored on XFADS, optimized by SGD
+    free-form (pytree)  ◄──── stored on XFADS, optimized by optax
         │
    to_structured
         │
         ▼
-  structured param  ◄── valid structured parameters
+  structured (pytree)  ◄── valid, human-readable parameters
         │
-        ├── structured_to_natural
+        ├── mean_to_natural ∘ structured_to_mean
         │           │
         │           ▼
-        │       natural  ◄── additive updates in filtering (η_f = η_p + α)
+        │       natural (flat)  ◄── additive updates in filtering
         │           │
         │      natural_to_mean
         │           │
-        └── structured_to_mean (shortcut, numerically stable)
+        └── structured_to_mean (direct, numerically stable)
                     │
                     ▼
-                  mean  ◄── sampling, KL, predict_mean
+              mean (flat)  ◄── sampling, KL, predict_mean
+                    │
+              mean_to_structured
+                    │
+                    ▼
+              structured (pytree)
 ```
 
 Each arrow is an `Approx` method.  The reverse direction is available
-where needed (`to_free`, `mean_to_natural`).
+where needed (`to_free`, `mean_to_natural`, `mean_to_structured`).
 
 ## `Approx` ABC Interface
-
-All methods operate on opaque flat arrays.
 
 ### Initialization
 
 | Method | Signature | Role |
 |--------|-----------|------|
-| `param_from_conf` | `(**kwargs) → free` | Create free-form array from serializable spec |
+| `param_from_conf` | `(**kwargs) → pytree` | Create free-form pytree from serializable spec |
 
-Each subclass defines which kwargs it accepts.  The returned array is
-suitable for storage on `XFADS` and optimization by SGD.
-
-### Structured transforms
+### Structured ↔ free-form (pytree ↔ pytree)
 
 | Method | Signature | Role |
 |--------|-----------|------|
-| `to_structured` | `(free) → param` | Free-form to valid structured parameters |
-| `to_free` | `(param) → free` | Inverse of `to_structured` |
+| `to_structured` | `(free_pytree) → structured_pytree` | Apply constraints (e.g. softplus) |
+| `to_free` | `(structured_pytree) → free_pytree` | Inverse constraints |
 
-### Parameter conversions
+### Structured ↔ mean (pytree ↔ flat)
 
 | Method | Signature | Role |
 |--------|-----------|------|
-| `structured_to_natural` | `(param) → η` | Structured parameters to natural form |
-| `structured_to_mean` | `(param) → μ` | Structured parameters to mean form (shortcut) |
-| `natural_to_mean` | `(η) → μ` | Natural to mean conversion |
-| `mean_to_natural` | `(μ) → η` | Mean to natural conversion |
+| `structured_to_mean` | `(structured_pytree) → μ_flat` | Pack pytree into flat mean array |
+| `mean_to_structured` | `(μ_flat) → structured_pytree` | Unpack flat mean array into pytree |
 
-`structured_to_mean` is a direct path from structured parameters
-to mean form, avoiding the roundtrip through natural parameters
-(`structured → natural → mean`) which may involve numerically unstable
-operations (e.g. matrix inversion for MVN).
+### Natural ↔ mean (flat ↔ flat)
 
-### Inference
+| Method | Signature | Role |
+|--------|-----------|------|
+| `natural_to_mean` | `(η_flat) → μ_flat` | Natural to mean conversion |
+| `mean_to_natural` | `(μ_flat) → η_flat` | Mean to natural conversion |
+
+### Inference (flat arrays)
 
 | Method | Signature | Role |
 |--------|-----------|------|
@@ -105,60 +110,68 @@ operations (e.g. matrix inversion for MVN).
 ### Usage in XFADS
 
 ```python
-# Construction — all stored as free-form
-self.prior_params = self.approx.param_from_conf(scale=1.0)
-self.noise_params = self.approx.param_from_conf(scale=conf.state_noise)
+# Construction — stored as free-form pytrees
+self.prior_free = self.approx.param_from_conf(scale=1.0)
+self.noise_free = self.approx.param_from_conf(scale=conf.state_noise)
 
 # Inference — derive natural/mean on the fly
-prior_natural = self.approx.structured_to_natural(
-    self.approx.to_structured(self.prior_params)
+prior_natural = self.approx.mean_to_natural(
+    self.approx.structured_to_mean(
+        self.approx.to_structured(self.prior_free)
+    )
 )
 noise_mean = self.approx.structured_to_mean(
-    self.approx.to_structured(self.noise_params)
+    self.approx.to_structured(self.noise_free)
 )
 
-# Encoder outputs — network → structured → natural
-alpha = self.approx.structured_to_natural(
-    self.approx.to_structured(encoder(y))
-)
+# Encoder outputs → flat natural params (encoders output flat for additive updates)
+alpha = encoder(y)  # flat natural param updates
+
+# Structured access for inspection
+loc, cov_diag, cov_factor = self.approx.to_structured(self.noise_free)
 ```
 
 ### Notes
 
 - `predict_mean` takes a batch of dynamics locations `(N, D)` and noise
-  mean params.  Each subclass handles sufficient-statistic averaging
-  internally.  The `noise_mean` parameter may be empty (`jnp.array([])`)
-  for families without a separate dispersion parameter.
+  mean params (flat).  Each subclass handles sufficient-statistic
+  averaging internally.
+- Encoder outputs remain flat arrays (natural parameter updates for
+  additive filtering).  They are not pytrees.
 
 ## MVN Subclass
 
 `MVN(dim, rank)` implements the multivariate normal with covariance
 structure `Σ = diag(d) + U Uᵀ`.
 
-### Structured Parameter Layout
+### Pytree Structures
 
+**Structured** (named tuple or plain tuple):
 ```
-[loc(D), cov_diag(D), cov_factor(D × r)]  →  total: D(2 + r)
+(loc: (D,), cov_diag: (D,), cov_factor: (D, r))
 ```
-
 Where `cov_diag > 0` (enforced by softplus in `to_structured`).
 
-### Natural Parameter Layout
+**Free-form** (same shape, unconstrained):
+```
+(loc_free: (D,), diag_free: (D,), factor_free: (D, r))
+```
+Where `diag_free ∈ ℝ` (softplus inverse of `cov_diag`).
 
-- rank 0: `[η₁(D), η₂(D)]` → total: `2D`
-- rank > 0: `[η₁(D), η₂_flat(D²)]` → total: `D + D²`
+### Flat Layouts
+
+**Mean** (flat array): `[loc(D), cov_diag(D), cov_factor_flat(D×r)]` → total `D(2+r)`
+
+**Natural** (flat array):
+- rank 0: `[η₁(D), η₂(D)]` → total `2D`
+- rank > 0: `[η₁(D), η₂_flat(D²)]` → total `D + D²`
 
 ### Additional Methods (not on ABC)
 
 | Method | Role |
 |--------|------|
-| `unpack(μ) → (loc, cov)` | Convert mean params to canonical `(loc, cov)` tuple |
-| `pack(loc, cov) → μ` | Convert canonical form to mean params |
 | `full_cov(cov) → (D, D)` | Materialize full covariance matrix |
 | `mean_size(state_dim) → int` | Mean parameter vector size |
-
-These are used by distribution-specific callers such as observation
-models and the noise regularization loss.
 
 ### Implementation Details
 
@@ -195,8 +208,8 @@ These are fundamentally different:
 The `Observation` ABC defines `eloglik(key, t, mean, y, approx, mc_size)`
 which receives the posterior `approx` instance for sampling.  Concrete
 likelihoods (Poisson, Gaussian) may internally call MVN-specific methods
-(`unpack`, `full_cov`) for analytical moment-matching — that is
-an implementation choice, not forced by the interface.
+for analytical moment-matching — that is an implementation choice, not
+forced by the interface.
 
 Observation subclasses encapsulate their own parameters (readout weights,
 emission noise, etc.) and handle them internally.
@@ -221,8 +234,8 @@ and the given posterior approximation.
 
 1. Subclass `Approx` in a new module under `src/jaxfads/distributions/`.
 2. Implement all abstract methods from the ABC.
-3. Define any distribution-specific methods (e.g. structured form
-   conversions) as regular methods on the subclass.
+3. Define any distribution-specific methods (e.g. `full_cov` for MVN)
+   as regular methods on the subclass.
 4. Re-export from `src/jaxfads/distributions/__init__.py`.
 5. Add tests in `tests/test_distribution.py`.
 6. The subclass is automatically discoverable via

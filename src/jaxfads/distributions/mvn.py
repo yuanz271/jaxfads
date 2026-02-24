@@ -7,6 +7,8 @@ The covariance structure is ``diag(d) + U U^T`` with configurable rank,
 subsuming diagonal and low-rank cases.
 """
 
+from typing import NamedTuple
+
 import jax
 from jax import Array
 from jax import numpy as jnp
@@ -15,6 +17,24 @@ from tensorflow_probability.substrates.jax import distributions as tfd
 
 from ..base import Approx
 from ..constraints import _EPS, constrain_positive, unconstrain_positive
+
+
+class MVNParam(NamedTuple):
+    """Structured/free-form pytree for MVN parameters.
+
+    Attributes
+    ----------
+    loc : Array, shape (D,)
+        Location (or unconstrained location for free-form).
+    cov_diag : Array, shape (D,)
+        Diagonal covariance (or unconstrained for free-form).
+    cov_factor : Array, shape (D, r)
+        Low-rank factor (or unconstrained for free-form).
+    """
+
+    loc: Array
+    cov_diag: Array
+    cov_factor: Array
 
 
 def _damping_inv(a: Array, damping: float = _EPS) -> Array:
@@ -242,7 +262,12 @@ class MVN(Approx):
     # -- canonical form -----------------------------------------------------
 
     def unpack(self, mean: Array) -> tuple[Array, Array]:
-        """Unpack flat structured/mean params into (loc, cov) tuple.
+        """Unpack flat mean params into (loc, full_cov) tuple.
+
+        Parameters
+        ----------
+        mean : Array
+            Flat mean parameter vector.
 
         Returns
         -------
@@ -259,7 +284,11 @@ class MVN(Approx):
         return loc, cov
 
     def pack(self, loc: Array, cov: Array) -> Array:
-        """Pack (loc, cov) tuple into flat structured/mean params.
+        """Pack (loc, cov) into flat mean params.
+
+        Convenience method — accepts the user-friendly ``(loc, cov)``
+        form where ``cov`` is a diagonal vector (rank 0) or full
+        matrix (rank > 0).
 
         Parameters
         ----------
@@ -281,59 +310,53 @@ class MVN(Approx):
 
     # -- constrain / unconstrain --------------------------------------------
 
-    def to_structured(self, unconstrained: Array) -> Array:
+    def to_structured(self, free: MVNParam) -> MVNParam:
         """See base class.
 
         Applies ``softplus`` to the diagonal covariance entries;
-        the low-rank factor (if any) is left unconstrained.
+        loc and low-rank factor are left as-is.
         """
-        d = self._dim
-        if self._rank == 0:
-            loc, v = jnp.split(unconstrained, 2)
-            return jnp.concatenate((loc, constrain_positive(v)))
+        return MVNParam(
+            loc=free.loc,
+            cov_diag=constrain_positive(free.cov_diag),
+            cov_factor=free.cov_factor,
+        )
 
-        loc = unconstrained[:d]
-        diag_unc = unconstrained[d : 2 * d]
-        factor = unconstrained[2 * d :]
-        return jnp.concatenate((loc, constrain_positive(diag_unc), factor))
+    def structured_to_natural(self, structured: MVNParam) -> Array:
+        """MVN-specific (not on ABC).
 
-    def structured_to_natural(self, structured: Array) -> Array:
+        Delegates to :meth:`mean_to_natural` via :meth:`structured_to_mean`.
+        """
+        return self.mean_to_natural(self.structured_to_mean(structured))
+
+    def structured_to_mean(self, structured: MVNParam) -> Array:
         """See base class.
 
-        Delegates to :meth:`mean_to_natural` because for MVN the
-        structured parameters coincide with the mean parameters.
+        Packs the pytree into a flat mean array.
         """
-        return self.mean_to_natural(structured)
+        return self._pack_mean(
+            structured.loc, structured.cov_diag, structured.cov_factor
+        )
 
-    def structured_to_mean(self, structured: Array) -> Array:
+    def mean_to_structured(self, mean: Array) -> MVNParam:
         """See base class.
 
-        Identity for MVN — structured parameters are mean parameters.
+        Unpacks a flat mean array into an MVNParam pytree.
         """
-        return structured
+        loc, cov_diag, cov_factor = self._split_mean(mean)
+        return MVNParam(loc=loc, cov_diag=cov_diag, cov_factor=cov_factor)
 
-    def mean_to_structured(self, mean: Array) -> Array:
-        """See base class.
-
-        Identity for MVN — mean parameters are structured parameters.
-        """
-        return mean
-
-    def to_free(self, mean: Array) -> Array:
+    def to_free(self, structured: MVNParam) -> MVNParam:
         """See base class.
 
         Applies ``softplus_inverse`` to the diagonal covariance entries;
-        the low-rank factor is left as-is.
+        loc and low-rank factor are left as-is.
         """
-        d = self._dim
-        if self._rank == 0:
-            loc, v = jnp.split(mean, 2)
-            return jnp.concatenate((loc, unconstrain_positive(v)))
-
-        loc = mean[:d]
-        cov_diag = mean[d : 2 * d]
-        factor = mean[2 * d :]
-        return jnp.concatenate((loc, unconstrain_positive(cov_diag), factor))
+        return MVNParam(
+            loc=structured.loc,
+            cov_diag=unconstrain_positive(structured.cov_diag),
+            cov_factor=structured.cov_factor,
+        )
 
     # -- param_from_conf -----------------------------------------------------
 
@@ -359,10 +382,10 @@ class MVN(Approx):
             Free-form parameter array.
         """
         d, r = self._dim, self._rank
-        loc = jnp.broadcast_to(jnp.asarray(loc, dtype=jnp.float32), (d,))
-        cov_diag = jnp.broadcast_to(jnp.asarray(scale, dtype=jnp.float32), (d,))
-        cov_factor = jnp.zeros(d * r)
-        structured = jnp.concatenate((loc, cov_diag, cov_factor))
+        loc_arr = jnp.broadcast_to(jnp.asarray(loc, dtype=jnp.float32), (d,))
+        cov_diag_arr = jnp.broadcast_to(jnp.asarray(scale, dtype=jnp.float32), (d,))
+        cov_factor_arr = jnp.zeros((d, r))
+        structured = MVNParam(loc=loc_arr, cov_diag=cov_diag_arr, cov_factor=cov_factor_arr)
         return self.to_free(structured)
 
     # -- predict_mean --------------------------------------------------------
