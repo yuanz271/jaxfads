@@ -79,8 +79,8 @@ def test_natural_mean_roundtrip_from_prior(dim, rank):
 # ---------------------------------------------------------------------------
 
 
-def test_near_zero_cov_stability(diag):
-    """Near-zero covariance must not produce extreme natural parameters."""
+def test_near_zero_cov_bounded_natural(diag):
+    """Near-zero diagonal covariance must not produce extreme η₂."""
     state_dim = 2
     mean = jnp.ones(state_dim)
 
@@ -93,9 +93,6 @@ def test_near_zero_cov_stability(diag):
 
     _, nat2 = jnp.split(natural, 2)
     assert float(jnp.max(jnp.abs(nat2)).item()) < 1e7
-
-    mp_rt = diag.natural_to_mean(natural)
-    chex.assert_tree_all_finite(mp_rt)
 
 
 # ---------------------------------------------------------------------------
@@ -177,23 +174,6 @@ def test_constrain_mean_produces_valid_cov(dim, rank):
     assert jnp.all(eigenvalues > 0), f"Non-PD covariance: eigenvalues={eigenvalues}"
 
 
-def test_constrain_natural_neg_def():
-    """constrain_natural produces negative-definite η₂ (rank > 0)."""
-    state_dim = 3
-    full = MVN(dim=state_dim, rank=state_dim)
-    param_sz = full.param_size(state_dim)
-    unconstrained = jrnd.normal(jrnd.key(1), (param_sz,))
-
-    natural = full.constrain_natural(unconstrained)
-    chex.assert_shape(natural, (param_sz,))
-    chex.assert_tree_all_finite(natural)
-
-    _, nat2_flat = jnp.split(natural, [state_dim])
-    nat2 = jnp.reshape(nat2_flat, (state_dim, state_dim))
-    eigenvalues = jnp.linalg.eigvalsh(nat2)
-    assert jnp.all(eigenvalues < 0), f"nat2 not neg-def: eigenvalues={eigenvalues}"
-
-
 @pytest.mark.parametrize("dim, rank", _ROUNDTRIP_CASES)
 def test_unconstrain_natural_roundtrip(dim, rank):
     """unconstrain_natural inverts constrain_natural."""
@@ -263,10 +243,243 @@ def test_sample_shape(dim, rank):
     chex.assert_tree_all_finite(samples)
 
 
+# ---------------------------------------------------------------------------
+# canon ↔ mean roundtrip
+# ---------------------------------------------------------------------------
+
+
+def test_canon_mean_roundtrip_diag():
+    """mean_to_canon → canon_to_mean is exact for rank 0."""
+    mvn = MVN(dim=4, rank=0)
+    mp = _make_mean(mvn, jrnd.key(77))
+
+    loc, cov = mvn.mean_to_canon(mp)
+    mp_rt = mvn.canon_to_mean(loc, cov)
+    chex.assert_trees_all_close(mp, mp_rt, atol=1e-6)
+
+
+@pytest.mark.parametrize("dim, rank", [
+    pytest.param(4, 1, id="lowrank-1"),
+    pytest.param(4, 2, id="lowrank-2"),
+    pytest.param(3, 3, id="full"),
+])
+def test_canon_mean_roundtrip_lowrank(dim, rank):
+    """mean_to_canon → canon_to_mean preserves loc and diagonal exactly.
+
+    The off-diagonal decomposition is approximate because zeroing the
+    diagonal before eigendecomposition is lossy; we only check that
+    the diagonal and location are recovered and the result is PD.
+    """
+    mvn = MVN(dim=dim, rank=rank)
+    mp = _make_mean(mvn, jrnd.key(77))
+
+    loc, cov = mvn.mean_to_canon(mp)
+    mp_rt = mvn.canon_to_mean(loc, cov)
+
+    loc_rt, cov_rt = mvn.mean_to_canon(mp_rt)
+    chex.assert_trees_all_close(loc, loc_rt, atol=1e-5)
+    chex.assert_trees_all_close(
+        jnp.diag(mvn.full_cov(cov)), jnp.diag(mvn.full_cov(cov_rt)), atol=1e-4
+    )
+    eigenvalues = jnp.linalg.eigvalsh(mvn.full_cov(cov_rt))
+    assert jnp.all(eigenvalues > 0), f"Non-PD roundtrip cov: {eigenvalues}"
+
+
+# ---------------------------------------------------------------------------
+# full_cov
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("dim, rank", _ROUNDTRIP_CASES)
+def test_full_cov(dim, rank):
+    """full_cov returns symmetric PD (D, D) matrix consistent with mean_to_canon."""
+    mvn = MVN(dim=dim, rank=rank)
+    mp = _make_mean(mvn, jrnd.key(88))
+
+    _, cov = mvn.mean_to_canon(mp)
+    cov_full = mvn.full_cov(cov)
+
+    chex.assert_shape(cov_full, (dim, dim))
+    chex.assert_tree_all_finite(cov_full)
+    chex.assert_trees_all_close(cov_full, cov_full.T, atol=1e-6)
+    eigenvalues = jnp.linalg.eigvalsh(cov_full)
+    assert jnp.all(eigenvalues > 0), f"Non-PD: {eigenvalues}"
+
+
+# ---------------------------------------------------------------------------
+# KL positivity
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("dim, rank", _ROUNDTRIP_CASES)
+def test_kl_positive(dim, rank):
+    """KL(q || p) > 0 when q ≠ p."""
+    mvn = MVN(dim=dim, rank=rank)
+    mp1 = _make_mean(mvn, jrnd.key(10))
+    mp2 = _make_mean(mvn, jrnd.key(20))
+
+    kl = mvn.kl(mp1, mp2)
+    chex.assert_tree_all_finite(kl)
+    assert float(kl) > 0.0
+
+
+# ---------------------------------------------------------------------------
+# Sample statistics
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("dim, rank", _ROUNDTRIP_CASES)
+def test_sample_statistics(dim, rank):
+    """Sample mean and covariance approximate the distribution parameters."""
+    mvn = MVN(dim=dim, rank=rank)
+    mp = _make_mean(mvn, jrnd.key(0))
+    loc, cov = mvn.mean_to_canon(mp)
+    cov_full = mvn.full_cov(cov)
+
+    samples = mvn.sample_by_mean(jrnd.key(1), mp, 50_000)
+    sample_mean = jnp.mean(samples, axis=0)
+    sample_cov = jnp.cov(samples.T)
+
+    chex.assert_trees_all_close(sample_mean, loc, atol=0.05)
+    chex.assert_trees_all_close(sample_cov, cov_full, atol=0.1)
+
+
+# ---------------------------------------------------------------------------
+# predict_mean across ranks
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("dim, rank", _ROUNDTRIP_CASES)
+def test_predict_mean(dim, rank):
+    """predict_mean with single loc recovers (loc, noise_cov)."""
+    mvn = MVN(dim=dim, rank=rank)
+    scale = 1.5
+    unc = mvn.init_noise(scale, dim)
+    noise_mean = mvn.constrain_mean(unc)
+
+    loc = jrnd.normal(jrnd.key(0), (dim,))
+    mp = mvn.predict_mean(loc[None, :], noise_mean)
+
+    chex.assert_tree_all_finite(mp)
+    chex.assert_shape(mp, (mvn.mean_size(dim),))
+
+    recovered_loc, recovered_cov = mvn.mean_to_canon(mp)
+    chex.assert_trees_all_close(recovered_loc, loc, atol=1e-5)
+    expected_cov = jnp.eye(dim) * scale
+    chex.assert_trees_all_close(mvn.full_cov(recovered_cov), expected_cov, atol=1e-4)
+
+
+@pytest.mark.parametrize("dim, rank", _ROUNDTRIP_CASES)
+def test_predict_mean_captures_variance(dim, rank):
+    """predict_mean with spread locs produces larger covariance than noise alone."""
+    mvn = MVN(dim=dim, rank=rank)
+    scale = 0.1
+    unc = mvn.init_noise(scale, dim)
+    noise_mean = mvn.constrain_mean(unc)
+
+    # Spread locs: variance of locs >> noise variance
+    key = jrnd.key(42)
+    locs = jrnd.normal(key, (200, dim)) * 3.0
+    mp = mvn.predict_mean(locs, noise_mean)
+
+    _, cov = mvn.mean_to_canon(mp)
+    cov_full = mvn.full_cov(cov)
+    # Diagonal should be > noise scale (captures Var[f(z)] + Q)
+    assert jnp.all(jnp.diag(cov_full) > scale)
+
+
+@pytest.mark.parametrize("dim, rank", _ROUNDTRIP_CASES)
+def test_predict_mean_all_nan_returns_nan(dim, rank):
+    """predict_mean returns NaN when all locs are non-finite."""
+    mvn = MVN(dim=dim, rank=rank)
+    unc = mvn.init_noise(1.0, dim)
+    noise_mean = mvn.constrain_mean(unc)
+
+    nan_locs = jnp.full((5, dim), jnp.nan)
+    mp = mvn.predict_mean(nan_locs, noise_mean)
+    assert not jnp.any(jnp.isfinite(mp))
+
+
+# ---------------------------------------------------------------------------
+# _decompose_cov roundtrip
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("dim, rank", [
+    pytest.param(4, 1, id="lowrank-1"),
+    pytest.param(4, 2, id="lowrank-2"),
+    pytest.param(3, 3, id="full"),
+])
+def test_decompose_cov_preserves_diagonal_and_pd(dim, rank):
+    """_decompose_cov → _build_cov preserves diagonal and produces PD result.
+
+    The off-diagonal decomposition is approximate (zeroing the diagonal
+    before eigendecomposition is lossy), so only the diagonal is checked
+    for exact recovery.
+    """
+    mvn = MVN(dim=dim, rank=rank)
+
+    key = jrnd.key(99)
+    A = jrnd.normal(key, (dim, dim))
+    sigma = A @ A.T + 0.5 * jnp.eye(dim)
+
+    cov_diag, cov_factor = mvn._decompose_cov(sigma)
+    sigma_rt = mvn._build_cov(cov_diag, cov_factor)
+
+    chex.assert_trees_all_close(jnp.diag(sigma), jnp.diag(sigma_rt), atol=1e-4)
+    eigenvalues = jnp.linalg.eigvalsh(sigma_rt)
+    assert jnp.all(eigenvalues > 0), f"Non-PD: {eigenvalues}"
+
+
+# ---------------------------------------------------------------------------
+# Stability (parametrized)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("dim, rank", _ROUNDTRIP_CASES)
+def test_near_zero_cov_stability_all_ranks(dim, rank):
+    """Near-zero covariance roundtrips without NaN for any rank."""
+    mvn = MVN(dim=dim, rank=rank)
+    loc = jnp.ones(dim)
+    eps_val = 1e-6
+    cov_diag = jnp.full(dim, eps_val)
+    cov_factor = jnp.zeros((dim, rank)) if rank > 0 else jnp.zeros((dim, 0))
+    mp = mvn._pack_mean(loc, cov_diag, cov_factor)
+
+    natural = mvn.mean_to_natural(mp)
+    chex.assert_tree_all_finite(natural)
+
+    mp_rt = mvn.natural_to_mean(natural)
+    chex.assert_tree_all_finite(mp_rt)
+
+
+# ---------------------------------------------------------------------------
+# constrain_natural neg-def (parametrized for rank > 0)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("dim, rank", [
+    pytest.param(4, 1, id="lowrank-1"),
+    pytest.param(4, 2, id="lowrank-2"),
+    pytest.param(3, 3, id="full"),
+])
+def test_constrain_natural_neg_def_all_ranks(dim, rank):
+    """constrain_natural produces negative-definite η₂ for rank > 0."""
+    mvn = MVN(dim=dim, rank=rank)
+    param_sz = mvn.param_size(dim)
+    unconstrained = jrnd.normal(jrnd.key(1), (param_sz,))
+
+    natural = mvn.constrain_natural(unconstrained)
+    chex.assert_tree_all_finite(natural)
+
+    _, nat2_flat = jnp.split(natural, [dim])
+    nat2 = jnp.reshape(nat2_flat, (dim, dim))
+    eigenvalues = jnp.linalg.eigvalsh(nat2)
+    assert jnp.all(eigenvalues < 0), f"nat2 not neg-def: {eigenvalues}"
+
+
 def test_rank_validation():
     """MVN must reject invalid rank values."""
-    import pytest
-
     with pytest.raises(ValueError, match="rank must satisfy"):
         MVN(dim=3, rank=-1)
     with pytest.raises(ValueError, match="rank must satisfy"):
