@@ -22,7 +22,7 @@ from .core import Mode
 from .base import Approx
 from .base import Dynamics
 from .nn import DataMasker
-from .base import ObservationModel
+from .base import Observation
 from .util import vmap_with_key
 from .logging import get_logger
 
@@ -113,7 +113,7 @@ class XFADS(ConfModule):
 
     forward: Dynamics
     # backward: Dynamics | None
-    observation: ObservationModel
+    observation: Observation
     alpha_encoder: Callable
     beta_encoder: Callable
     masker: DataMasker
@@ -173,7 +173,7 @@ class XFADS(ConfModule):
         )
 
         key, ky = jrnd.split(key)
-        observation_model_cls = ObservationModel.get_subclass(self.conf.obs_conf.model)
+        observation_model_cls = Observation.get_subclass(self.conf.obs_conf.model)
         self.observation = observation_model_cls(self.conf.obs_conf, key=ky)
 
         key, ky = jrnd.split(key)

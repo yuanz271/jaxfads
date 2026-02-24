@@ -15,7 +15,7 @@ from jax import Array
 from jax import numpy as jnp
 from jax import random as jrnd
 
-from .base import ObservationModel
+from .base import Observation
 from .constraints import _EPS, constrain_positive, unconstrain_positive
 from .base import Approx
 from .nn import StationaryLinear, VariantBiasLinear
@@ -290,7 +290,7 @@ class Likelihood(Protocol):
         ...
 
 
-class GLM(ObservationModel):
+class GLM(Observation):
     """
     GLM observation model composed of a likelihood and readout.
 
@@ -446,7 +446,7 @@ class GLM(ObservationModel):
 
 __all__ = [
     "GLM",
-    "ObservationModel",
+    "Observation",
     "Poisson",
     "Gaussian",
     "make_readout",
@@ -698,4 +698,3 @@ class Gaussian(eqx.Module, strict=True):
     #         Whether to make parameters static.
     #     """
     #     self.__dataclass_fields__["unconstrained_cov"].metadata = {"static": static}
-

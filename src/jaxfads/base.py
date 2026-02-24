@@ -403,7 +403,7 @@ class Dynamics(SubclassRegistryMixin, ConfModule):  # pyright: ignore[reportImpl
         return self.forward(*args, **kwargs)
 
 
-class ObservationModel(SubclassRegistryMixin, ConfModule):
+class Observation(SubclassRegistryMixin, ConfModule):
     """
     Abstract observation model interface.
 
@@ -427,11 +427,11 @@ class ObservationModel(SubclassRegistryMixin, ConfModule):
         ...
 
     @abstractmethod
-    def initialize(self, t: Array, y: Array, u: Array, c: Array) -> "ObservationModel":
+    def initialize(self, t: Array, y: Array, u: Array, c: Array) -> "Observation":
         """
         Initialize observation parameters from data statistics.
         """
         ...
 
 
-__all__ = ["Approx", "Dynamics", "ObservationModel"]
+__all__ = ["Approx", "Dynamics", "Observation"]
