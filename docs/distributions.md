@@ -173,6 +173,50 @@ models and the noise regularization loss.
   diagonal before eigendecomposition, so the off-diagonal reconstruction
   is a best rank-r approximation.  The diagonal is preserved exactly.
 
+## Observation Likelihoods vs Latent Approximations
+
+The codebase has two distinct distribution concerns:
+
+| Concern | Class | Requirements | Constraint |
+|---------|-------|-------------|------------|
+| **Latent posterior** | `Approx` | Natural/mean parameterization, KL, sampling, predict | Must be exponential family |
+| **Observation likelihood** | `Likelihood` | `eloglik(z, y)` | None — can be any distribution |
+
+These are fundamentally different:
+
+- **`Approx`** needs the exponential-family machinery (natural parameters
+  for additive filtering updates, mean parameters for KL and sampling).
+- **Observation likelihoods** (Poisson, Gaussian, Bernoulli, etc.) only
+  need to evaluate `E_q[log p(y | z)]`.  They are not restricted to
+  exponential families — any density or even a neural likelihood works.
+
+### Current state
+
+The `Observation` ABC defines `eloglik(key, t, mean, y, approx, mc_size)`
+which receives the posterior `approx` instance for sampling.  Concrete
+likelihoods (Poisson, Gaussian) may internally call MVN-specific methods
+(`mean_to_canon`, `full_cov`) for analytical moment-matching — that is
+an implementation choice, not forced by the interface.
+
+Observation subclasses encapsulate their own parameters (readout weights,
+emission noise, etc.) and handle them internally.
+
+### Why `approx` is passed to `eloglik`
+
+The `approx` parameter enables subclasses to choose their evaluation
+strategy:
+
+- **Analytical** (e.g. Gaussian likelihood + Gaussian posterior):
+  extract posterior moments via `approx` for closed-form
+  `E_q[log p(y | z)]` — lower variance, more efficient.
+- **Monte Carlo** (e.g. Poisson, or any complex likelihood):
+  use `approx.sample_by_mean` to draw samples and average
+  `log p(y | z)`.
+
+This coupling is deliberate — it lets each `Observation` subclass
+pick the most efficient evaluation path for its likelihood family
+and the given posterior approximation.
+
 ## Adding a New Distribution
 
 1. Subclass `Approx` in a new module under `src/jaxfads/distributions/`.
