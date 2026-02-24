@@ -8,45 +8,114 @@ The distribution system follows a two-layer design:
    flat arrays.  It has no knowledge of how parameters are structured
    internally.
 2. **Subclasses** (e.g. `MVN`) — handle the internal structure of parameters
-   and provide conversions between natural, mean, and structured forms.
+   and provide conversions between free-form, constrained, natural, and
+   mean representations.
 
 The core algorithm (`core.py`, `vi.py`) interacts only with the `Approx`
 interface.  Distribution-specific callers (e.g. `observations.py`,
-`smoother.noise_cov`) access subclass methods directly through the concrete
-instance.
+`smoother.noise_cov`) access subclass methods directly through the
+concrete instance.
 
-## Parameterizations
+## Parameter Forms
 
-Every exponential-family distribution has three forms:
+Every exponential-family distribution has four representations:
 
-| Form | Level | Description |
-|------|-------|-------------|
-| **Natural** (η) | ABC | Canonical parameters of the exponential family.  Used in the filtering algorithm for additive updates. |
-| **Mean** (μ) | ABC | Expected sufficient statistics `E[T(x)]`.  Stored as a flat array; used for KL, sampling, and storage. |
-| **Structured** | Subclass | Human-readable parameters specific to the distribution family (e.g. `(loc, cov)` for MVN). |
+| Form | Description | Stored? | Example (MVN) |
+|------|-------------|---------|---------------|
+| **Free-form** | Unconstrained array for SGD optimization | ✓ | Raw reals in ℝⁿ |
+| **Constrained param** | Valid structured parameters | | `[loc, cov_diag, cov_factor]` with `cov_diag > 0` |
+| **Natural** (η) | Canonical exponential-family parameters | | `[η₁, η₂]` with `η₂` negative definite |
+| **Mean** (μ) | Expected sufficient statistics `E[T(x)]` | | Used for sampling, KL, prediction |
 
-The ABC treats natural and mean parameters as opaque vectors.  Only
-subclasses know the internal layout.
+All arrays stored on `XFADS` are in **free-form**.  Other forms are
+derived at inference time through the conversion methods below.
+
+## Conversion Flow
+
+```
+param_from_conf(**kwargs)
+        │
+        ▼
+    free-form  ◄──── stored on XFADS, optimized by SGD
+        │
+   constrain_param
+        │
+        ▼
+  constrained param  ◄── valid structured parameters
+        │
+  constrained_param_to_natural
+        │
+        ▼
+    natural  ◄── additive updates in filtering (η_f = η_p + α)
+        │
+   natural_to_mean
+        │
+        ▼
+     mean  ◄── sampling, KL, predict_mean
+```
+
+Each arrow is an `Approx` method.  The reverse direction is available
+where needed (`unconstrain_param`, `mean_to_natural`).
 
 ## `Approx` ABC Interface
 
 All methods operate on opaque flat arrays.
 
+### Initialization
+
 | Method | Signature | Role |
 |--------|-----------|------|
+| `param_from_conf` | `(**kwargs) → free` | Create free-form array from serializable spec |
+
+Each subclass defines which kwargs it accepts.  The returned array is
+suitable for storage on `XFADS` and optimization by SGD.
+
+### Constraint transforms
+
+| Method | Signature | Role |
+|--------|-----------|------|
+| `constrain_param` | `(free) → param` | Free-form to valid constrained parameters |
+| `unconstrain_param` | `(param) → free` | Inverse of `constrain_param` |
+
+### Parameter conversions
+
+| Method | Signature | Role |
+|--------|-----------|------|
+| `constrained_param_to_natural` | `(param) → η` | Constrained parameters to natural form |
 | `natural_to_mean` | `(η) → μ` | Natural to mean conversion |
 | `mean_to_natural` | `(μ) → η` | Mean to natural conversion |
+
+### Inference
+
+| Method | Signature | Role |
+|--------|-----------|------|
 | `sample_by_mean` | `(key, μ, n) → z` | Draw `n` samples from the distribution |
 | `kl` | `(μ₁, μ₂) → scalar` | KL divergence `KL(p₁ ‖ p₂)` |
 | `predict_mean` | `(locs, noise_μ) → μ` | Predicted mean from batch of dynamics locations |
-| `constrain_mean` | `(unconstrained) → μ` | Map unconstrained params to valid mean params |
-| `unconstrain_mean` | `(μ) → unconstrained` | Inverse of `constrain_mean` |
-| `constrain_natural` | `(unconstrained) → η` | Map unconstrained params to valid natural params |
-| `unconstrain_natural` | `(η) → unconstrained` | Inverse of `constrain_natural` |
 | `param_size` | `(state_dim) → int` | Natural parameter vector size |
-| `mean_size` | `(state_dim) → int` | Mean parameter vector size |
-| `prior_natural` | `(state_dim) → η` | Default prior in natural form |
-| `init_noise` | `(scale, state_dim) → unconstrained` | Initialize noise mean params |
+
+### Usage in XFADS
+
+```python
+# Construction — all stored as free-form
+self.prior_params = self.approx.param_from_conf(scale=1.0)
+self.noise_params = self.approx.param_from_conf(scale=conf.state_noise)
+
+# Inference — derive natural/mean on the fly
+prior_natural = self.approx.constrained_param_to_natural(
+    self.approx.constrain_param(self.prior_params)
+)
+noise_mean = self.approx.natural_to_mean(
+    self.approx.constrained_param_to_natural(
+        self.approx.constrain_param(self.noise_params)
+    )
+)
+
+# Encoder outputs — network → constrained → natural
+alpha = self.approx.constrained_param_to_natural(
+    self.approx.constrain_param(encoder(y))
+)
+```
 
 ### Notes
 
@@ -54,20 +123,19 @@ All methods operate on opaque flat arrays.
   mean params.  Each subclass handles sufficient-statistic averaging
   internally.  The `noise_mean` parameter may be empty (`jnp.array([])`)
   for families without a separate dispersion parameter.
-- `constrain_*` / `unconstrain_*` enable unconstrained optimization while
-  ensuring parameters remain in the valid domain (e.g. positive-definite
-  covariance).
 
 ## MVN Subclass
 
 `MVN(dim, rank)` implements the multivariate normal with covariance
 structure `Σ = diag(d) + U Uᵀ`.
 
-### Mean Parameter Layout
+### Constrained Parameter Layout
 
 ```
 [loc(D), cov_diag(D), cov_factor(D × r)]  →  total: D(2 + r)
 ```
+
+Where `cov_diag > 0` (enforced by softplus in `constrain_param`).
 
 ### Natural Parameter Layout
 
@@ -81,6 +149,7 @@ structure `Σ = diag(d) + U Uᵀ`.
 | `mean_to_canon(μ) → (loc, cov)` | Convert mean params to canonical `(loc, cov)` tuple |
 | `canon_to_mean(loc, cov) → μ` | Convert canonical form to mean params |
 | `full_cov(cov) → (D, D)` | Materialize full covariance matrix |
+| `mean_size(state_dim) → int` | Mean parameter vector size |
 
 These are used by distribution-specific callers such as observation
 models and the noise regularization loss.
