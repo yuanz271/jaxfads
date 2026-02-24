@@ -312,6 +312,13 @@ class MVN(Approx):
         """
         return structured
 
+    def mean_to_structured(self, mean: Array) -> Array:
+        """See base class.
+
+        Identity for MVN — mean parameters are structured parameters.
+        """
+        return mean
+
     def to_free(self, mean: Array) -> Array:
         """See base class.
 

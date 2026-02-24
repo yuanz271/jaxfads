@@ -281,8 +281,10 @@ class XFADS(ConfModule):
         Applies constraints to ensure parameters are in valid range
         for the chosen exponential family approximation.
         """
-        return self.approx.structured_to_natural(
-            self.approx.to_structured(self.unconstrained_prior_natural)
+        return self.approx.mean_to_natural(
+            self.approx.structured_to_mean(
+                self.approx.to_structured(self.unconstrained_prior_natural)
+            )
         )
 
     def noise_mean(self) -> Array:
@@ -390,7 +392,9 @@ class XFADS(ConfModule):
         >>> natural, mean, pred = model(t, y_batch, u_batch, c_batch, key=key)
         """
         def _free_to_natural(free):
-            return self.approx.structured_to_natural(self.approx.to_structured(free))
+            return self.approx.mean_to_natural(
+                self.approx.structured_to_mean(self.approx.to_structured(free))
+            )
 
         batch_free_to_natural = vmap(vmap(_free_to_natural))
         batch_alpha_encode = vmap_with_key(vmap_with_key(self.alpha_encoder))

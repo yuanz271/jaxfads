@@ -30,8 +30,10 @@ class DummyModel:
         self._unconstrained_noise = approx.param_from_conf(scale=cov)
 
     def prior_natural(self):
-        return self.approx.structured_to_natural(
-            self.approx.to_structured(self.approx.param_from_conf(scale=1.0))
+        return self.approx.mean_to_natural(
+            self.approx.structured_to_mean(
+                self.approx.to_structured(self.approx.param_from_conf(scale=1.0))
+            )
         )
 
     def noise_mean(self):

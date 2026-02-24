@@ -156,24 +156,6 @@ class Approx(SubclassRegistryMixin, ABC):
         ...
 
     @abstractmethod
-    def structured_to_natural(self, structured: Array) -> Array:
-        """
-        Convert structured parameters to natural parameters.
-
-        Parameters
-        ----------
-        structured : Array
-            Valid structured parameter vector (output of
-            :meth:`to_structured`).
-
-        Returns
-        -------
-        Array
-            Natural parameters of the exponential family.
-        """
-        ...
-
-    @abstractmethod
     def structured_to_mean(self, structured: Array) -> Array:
         """
         Convert structured parameters to mean parameters.
@@ -191,6 +173,25 @@ class Approx(SubclassRegistryMixin, ABC):
         -------
         Array
             Mean parameters (expected sufficient statistics).
+        """
+        ...
+
+    @abstractmethod
+    def mean_to_structured(self, mean: Array) -> Array:
+        """
+        Convert mean parameters to structured parameters.
+
+        Inverse of :meth:`structured_to_mean`.
+
+        Parameters
+        ----------
+        mean : Array
+            Mean parameters (expected sufficient statistics).
+
+        Returns
+        -------
+        Array
+            Valid structured parameter vector.
         """
         ...
 
