@@ -17,7 +17,7 @@ from jax import random as jrnd
 
 from .base import ObservationModel
 from .constraints import _EPS, constrain_positive, unconstrain_positive
-from .distributions import Approx, DiagMVN
+from .distributions import Approx
 from .nn import StationaryLinear, VariantBiasLinear
 
 _MAX_LOGRATE = 7.0
@@ -26,10 +26,11 @@ _MAX_LOGRATE = 7.0
 def _quadratic_diag(C: Array, cov_z: Array, approx: type[Approx]) -> Array:
     """Compute diag(C @ Σ_z @ C.T) without materialising (D_obs, D_obs).
 
-    For :class:`DiagMVN` this is O(D_obs · D_z) via ``(C² @ v)``.
-    For other families it falls back to ``full_cov``.
+    When *cov_z* is a 1-D diagonal vector (rank-0 / diagonal MVN) this
+    is O(D_obs · D_z) via ``(C² @ v)``.  Otherwise it falls back to
+    the full matrix product.
     """
-    if approx is DiagMVN:
+    if cov_z.ndim == 1:
         return (C ** 2) @ cov_z
     V = approx.full_cov(cov_z)
     return jnp.sum((C @ V) * C, axis=-1)
