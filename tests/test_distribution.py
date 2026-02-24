@@ -53,8 +53,8 @@ def test_natural_mean_roundtrip(dim, rank):
     mp_rt = mvn.natural_to_mean(natural)
     chex.assert_tree_all_finite(mp_rt)
 
-    _, cov_orig = mvn.mean_to_canon(mp)
-    _, cov_rt = mvn.mean_to_canon(mp_rt)
+    _, cov_orig = mvn.unpack(mp)
+    _, cov_rt = mvn.unpack(mp_rt)
     chex.assert_trees_all_close(
         jnp.diag(mvn.full_cov(cov_orig)), jnp.diag(mvn.full_cov(cov_rt)), atol=1e-4
     )
@@ -75,7 +75,7 @@ def test_param_from_conf(dim, rank, scale):
     free = mvn.param_from_conf(scale=scale)
     structured = mvn.to_structured(free)
 
-    loc, cov = mvn.mean_to_canon(structured)
+    loc, cov = mvn.unpack(structured)
     chex.assert_trees_all_close(loc, jnp.zeros(dim), atol=1e-6)
     chex.assert_trees_all_close(mvn.full_cov(cov), jnp.eye(dim) * scale, atol=1e-5)
 
@@ -101,7 +101,7 @@ def test_to_structured_produces_valid_cov(dim, rank):
     free = jrnd.normal(jrnd.key(0), (mvn.mean_size(dim),))
     mp = mvn.to_structured(free)
 
-    _, cov = mvn.mean_to_canon(mp)
+    _, cov = mvn.unpack(mp)
     cov_full = mvn.full_cov(cov)
     chex.assert_trees_all_close(cov_full, cov_full.T, atol=1e-6)
     eigenvalues = jnp.linalg.eigvalsh(cov_full)
@@ -133,11 +133,11 @@ def test_structured_to_natural_neg_def(dim, rank):
 
 
 def test_canon_mean_roundtrip_diag():
-    """mean_to_canon → canon_to_mean is exact for rank 0."""
+    """unpack → pack is exact for rank 0."""
     mvn = MVN(dim=4, rank=0)
     mp = _make_mean(mvn, jrnd.key(77))
-    loc, cov = mvn.mean_to_canon(mp)
-    chex.assert_trees_all_close(mvn.canon_to_mean(loc, cov), mp, atol=1e-6)
+    loc, cov = mvn.unpack(mp)
+    chex.assert_trees_all_close(mvn.pack(loc, cov), mp, atol=1e-6)
 
 
 @pytest.mark.parametrize("dim, rank", _LOWRANK_ONLY)
@@ -145,10 +145,10 @@ def test_canon_mean_roundtrip_lowrank(dim, rank):
     """Diagonal and loc are preserved; off-diagonal is approximate."""
     mvn = MVN(dim=dim, rank=rank)
     mp = _make_mean(mvn, jrnd.key(77))
-    loc, cov = mvn.mean_to_canon(mp)
-    mp_rt = mvn.canon_to_mean(loc, cov)
+    loc, cov = mvn.unpack(mp)
+    mp_rt = mvn.pack(loc, cov)
 
-    loc_rt, cov_rt = mvn.mean_to_canon(mp_rt)
+    loc_rt, cov_rt = mvn.unpack(mp_rt)
     chex.assert_trees_all_close(loc, loc_rt, atol=1e-5)
     chex.assert_trees_all_close(
         jnp.diag(mvn.full_cov(cov)), jnp.diag(mvn.full_cov(cov_rt)), atol=1e-4
@@ -166,7 +166,7 @@ def test_canon_mean_roundtrip_lowrank(dim, rank):
 def test_full_cov(dim, rank):
     """full_cov returns symmetric PD (D, D) matrix."""
     mvn = MVN(dim=dim, rank=rank)
-    _, cov = mvn.mean_to_canon(_make_mean(mvn, jrnd.key(88)))
+    _, cov = mvn.unpack(_make_mean(mvn, jrnd.key(88)))
     cov_full = mvn.full_cov(cov)
 
     chex.assert_shape(cov_full, (dim, dim))
@@ -187,8 +187,8 @@ def test_kl_matches_closed_form():
         return 0.5 * jnp.sum(jnp.log(v2 / v1) + (v1 + (m1 - m2) ** 2) / v2 - 1.0)
 
     mvn = MVN(dim=3, rank=0)
-    mp1 = mvn.canon_to_mean(jnp.array([1.0, -0.5, 0.3]), jnp.array([0.5, 2.0, 0.1]))
-    mp2 = mvn.canon_to_mean(jnp.array([0.0, 0.0, 1.0]), jnp.array([1.0, 1.0, 0.5]))
+    mp1 = mvn.pack(jnp.array([1.0, -0.5, 0.3]), jnp.array([0.5, 2.0, 0.1]))
+    mp2 = mvn.pack(jnp.array([0.0, 0.0, 1.0]), jnp.array([1.0, 1.0, 0.5]))
 
     chex.assert_trees_all_close(
         mvn.kl(mp1, mp2),
@@ -228,7 +228,7 @@ def test_sample_shape_and_statistics(dim, rank):
     """Samples have correct shape; mean and cov approximate parameters."""
     mvn = MVN(dim=dim, rank=rank)
     mp = _make_mean(mvn, jrnd.key(0))
-    loc, cov = mvn.mean_to_canon(mp)
+    loc, cov = mvn.unpack(mp)
     cov_full = mvn.full_cov(cov)
 
     samples = mvn.sample_by_mean(jrnd.key(1), mp, 50_000)
@@ -252,7 +252,7 @@ def test_predict_mean_single_loc(dim, rank):
     loc = jrnd.normal(jrnd.key(0), (dim,))
 
     mp = mvn.predict_mean(loc[None, :], noise_mean)
-    recovered_loc, recovered_cov = mvn.mean_to_canon(mp)
+    recovered_loc, recovered_cov = mvn.unpack(mp)
     chex.assert_trees_all_close(recovered_loc, loc, atol=1e-5)
     chex.assert_trees_all_close(mvn.full_cov(recovered_cov), jnp.eye(dim) * scale, atol=1e-4)
 
@@ -265,7 +265,7 @@ def test_predict_mean_captures_variance(dim, rank):
     noise_mean = mvn.to_structured(mvn.param_from_conf(scale=scale))
     locs = jrnd.normal(jrnd.key(42), (200, dim)) * 3.0
 
-    _, cov = mvn.mean_to_canon(mvn.predict_mean(locs, noise_mean))
+    _, cov = mvn.unpack(mvn.predict_mean(locs, noise_mean))
     assert jnp.all(jnp.diag(mvn.full_cov(cov)) > scale)
 
 

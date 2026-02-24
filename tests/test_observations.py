@@ -53,7 +53,7 @@ def test_poisson_eloglik_shape_and_finite():
 
     mean = jnp.zeros(state_dim)
     cov = jnp.ones(state_dim)
-    mp = _diag.canon_to_mean(mean, cov)
+    mp = _diag.pack(mean, cov)
     y = jnp.ones((observation_dim,))
 
     ll = observation.eloglik(key, jnp.array(0), mp, y, _diag, mc_size=1)
@@ -70,7 +70,7 @@ def test_poisson_eloglik_full_mvn():
 
     mean = jnp.zeros(state_dim)
     cov = jnp.eye(state_dim)
-    mp = _full.canon_to_mean(mean, cov)
+    mp = _full.pack(mean, cov)
     y = jnp.ones((observation_dim,))
 
     ll = observation.eloglik(key, jnp.array(0), mp, y, _full, mc_size=1)
@@ -87,7 +87,7 @@ def test_diag_gaussian_eloglik_shape_and_finite():
 
     mean = jnp.zeros(state_dim)
     cov = jnp.ones(state_dim)
-    mp = _diag.canon_to_mean(mean, cov)
+    mp = _diag.pack(mean, cov)
     y = jnp.zeros((observation_dim,))
 
     ll = observation.eloglik(key, jnp.array(0), mp, y, _diag, mc_size=1)

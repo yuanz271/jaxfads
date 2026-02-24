@@ -65,9 +65,9 @@ def test_predict_mean(diag, spec):
     chex.assert_shape(mp, (diag.mean_size(state_dim),))
     chex.assert_tree_all_finite(mp)
 
-    mean, cov = diag.mean_to_canon(mp)
+    mean, cov = diag.unpack(mp)
     chex.assert_trees_all_close(mean, loc, atol=1e-6)
-    _, Q = diag.mean_to_canon(noise_mom)
+    _, Q = diag.unpack(noise_mom)
     chex.assert_trees_all_close(cov, Q, atol=1e-5)
 
 
@@ -77,7 +77,7 @@ def test_sample_expected_mean(diag, spec):
     f = _make_nonlinear(spec, key)
     noise_mom = make_noise_mean(diag, state_dim)
 
-    mp = diag.canon_to_mean(
+    mp = diag.pack(
         jrnd.normal(key, (state_dim,)), jnp.ones(state_dim)
     )
     u = jrnd.normal(key, (spec["input_dim"],))
@@ -108,7 +108,7 @@ def test_sample_expected_mean_partial_invalid():
     diag4 = MVN(dim=state_dim, rank=0)
     noise_mom = make_noise_mean(diag4, state_dim)
 
-    mp = diag4.canon_to_mean(jnp.zeros(state_dim), jnp.full(state_dim, 25.0))
+    mp = diag4.pack(jnp.zeros(state_dim), jnp.full(state_dim, 25.0))
     f = fpartial(_threshold_dynamics, radius=3.0)
 
     result = jax.jit(
@@ -127,7 +127,7 @@ def test_sample_expected_mean_all_invalid(diag):
     key = jrnd.key(99)
     noise_mom = make_noise_mean(diag, state_dim)
 
-    mp = diag.canon_to_mean(jnp.zeros(state_dim), jnp.full(state_dim, 1.0))
+    mp = diag.pack(jnp.zeros(state_dim), jnp.full(state_dim, 1.0))
     u, c = jnp.zeros(0), jnp.zeros(0)
     f = fpartial(_threshold_dynamics, radius=0.001)
 

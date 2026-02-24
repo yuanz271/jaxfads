@@ -224,10 +224,10 @@ class MVN(Approx):
         Uses ``MultivariateNormalFullCovariance`` for all ranks to
         ensure KL is always registered.
         """
-        m1, cov1 = self.mean_to_canon(mean1)
-        m2, cov2 = self.mean_to_canon(mean2)
+        m1, cov1 = self.unpack(mean1)
+        m2, cov2 = self.unpack(mean2)
         if self._rank == 0:
-            # mean_to_canon returns diagonal vectors
+            # unpack returns diagonal vectors
             cov1_full = jnp.diag(jnp.maximum(cov1, _EPS))
             cov2_full = jnp.diag(jnp.maximum(cov2, _EPS))
         else:
@@ -241,8 +241,8 @@ class MVN(Approx):
 
     # -- canonical form -----------------------------------------------------
 
-    def mean_to_canon(self, mean: Array) -> tuple[Array, Array]:
-        """See base class.
+    def unpack(self, mean: Array) -> tuple[Array, Array]:
+        """Unpack flat structured/mean params into (loc, cov) tuple.
 
         Returns
         -------
@@ -258,8 +258,8 @@ class MVN(Approx):
         cov = self._build_cov(cov_diag, cov_factor)
         return loc, cov
 
-    def canon_to_mean(self, loc: Array, cov: Array) -> Array:
-        """See base class.
+    def pack(self, loc: Array, cov: Array) -> Array:
+        """Pack (loc, cov) tuple into flat structured/mean params.
 
         Parameters
         ----------
@@ -385,7 +385,7 @@ class MVN(Approx):
                 (locs, locs ** 2 + cov_diag), axis=-1
             )
         else:
-            _, cov = self.mean_to_canon(noise_mean)
+            _, cov = self.unpack(noise_mean)
             outers = jax.vmap(lambda x: jnp.outer(x, x))(locs)
             seconds = (outers + cov).reshape(locs.shape[0], -1)
             expanded = jnp.concatenate((locs, seconds), axis=-1)

@@ -551,7 +551,7 @@ class Poisson(eqx.Module, strict=True):
         where η_i = E[C_i z] and λ_i = E[exp(C_i z + b_i)] with uncertainty
         correction for the exponential nonlinearity.
         """
-        mean_z, cov_z = approx.mean_to_canon(mean)
+        mean_z, cov_z = approx.unpack(mean)
         eta = readout(t, mean_z)
         C = readout.weight
         cvc = _quadratic_diag(C, cov_z, approx)
@@ -681,7 +681,7 @@ class Gaussian(eqx.Module, strict=True):
         where the observation covariance includes both state uncertainty
         and observation noise.
         """
-        mean_z, cov_z = approx.mean_to_canon(mean)
+        mean_z, cov_z = approx.unpack(mean)
         mean_y = readout(t, mean_z)
         C = readout.weight  # left matrix
         cov_y = C @ approx.full_cov(cov_z) @ C.T + jnp.diag(self.cov())

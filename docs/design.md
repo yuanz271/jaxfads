@@ -152,8 +152,8 @@ Where `cov_diag > 0` (enforced by softplus in `to_structured`).
 
 | Method | Role |
 |--------|------|
-| `mean_to_canon(μ) → (loc, cov)` | Convert mean params to canonical `(loc, cov)` tuple |
-| `canon_to_mean(loc, cov) → μ` | Convert canonical form to mean params |
+| `unpack(μ) → (loc, cov)` | Convert mean params to canonical `(loc, cov)` tuple |
+| `pack(loc, cov) → μ` | Convert canonical form to mean params |
 | `full_cov(cov) → (D, D)` | Materialize full covariance matrix |
 | `mean_size(state_dim) → int` | Mean parameter vector size |
 
@@ -195,7 +195,7 @@ These are fundamentally different:
 The `Observation` ABC defines `eloglik(key, t, mean, y, approx, mc_size)`
 which receives the posterior `approx` instance for sampling.  Concrete
 likelihoods (Poisson, Gaussian) may internally call MVN-specific methods
-(`mean_to_canon`, `full_cov`) for analytical moment-matching — that is
+(`unpack`, `full_cov`) for analytical moment-matching — that is
 an implementation choice, not forced by the interface.
 
 Observation subclasses encapsulate their own parameters (readout weights,

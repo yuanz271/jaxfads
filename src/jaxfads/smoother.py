@@ -301,7 +301,7 @@ class XFADS(ConfModule):
         noise_mean = self.approx.structured_to_mean(
             self.approx.to_structured(self.noise_free)
         )
-        _, disp = self.approx.mean_to_canon(noise_mean)
+        _, disp = self.approx.unpack(noise_mean)
         return disp
 
     def noise_loss(self) -> Array:

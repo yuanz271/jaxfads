@@ -13,8 +13,8 @@ def _eloglik_stub(key, t, mp, y, approx, mc_size):
 def test_elbo_matches_manual(diag):
     mean = jnp.array([0.2, -0.1])
     cov = jnp.array([1.0, 2.0])
-    mp = diag.canon_to_mean(mean, cov)
-    mp_p = diag.canon_to_mean(jnp.zeros(2), jnp.ones(2))
+    mp = diag.pack(mean, cov)
+    mp_p = diag.pack(jnp.zeros(2), jnp.ones(2))
     y = jnp.array([1.0, 2.0])
 
     expected = _eloglik_stub(None, None, None, y, None, None) - diag.kl(
