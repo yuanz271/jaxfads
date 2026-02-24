@@ -6,10 +6,12 @@ from jax import Array, numpy as jnp, random as jrnd
 import chex
 from omegaconf import OmegaConf
 
-from jaxfads.distributions import DiagMVN
+from jaxfads.distributions import MVN
 from jaxfads.base import Dynamics
 from jaxfads.dynamics import sample_expected_moment
 from jaxfads.nn import make_mlp
+
+approx = MVN(rank=0)
 
 
 class Nonlinear(Dynamics):
@@ -44,7 +46,7 @@ class Nonlinear(Dynamics):
 
 def _make_noise_moment(state_dim, cov=1.0):
     """Helper: create a constrained noise moment array for test use."""
-    return DiagMVN.constrain_moment(DiagMVN.init_noise(cov, state_dim))
+    return approx.constrain_moment(approx.init_noise(cov, state_dim))
 
 
 def test_predict_moment(spec):
@@ -73,8 +75,8 @@ def test_predict_moment(spec):
     eu = jnp.zeros((0,))
 
     loc = f(z, u, eu)
-    mean_param = DiagMVN.predict_moment(loc, noise_mom)
-    chex.assert_shape(mean_param, (DiagMVN.param_size(state_dim),))
+    mean_param = approx.predict_moment(loc, noise_mom)
+    chex.assert_shape(mean_param, (approx.param_size(state_dim),))
     chex.assert_tree_all_finite(mean_param)
 
 
@@ -84,13 +86,13 @@ def test_mean_param_to_moment_roundtrip(spec):
     noise_mom = _make_noise_moment(state_dim)
 
     loc = jrnd.normal(jrnd.key(0), (state_dim,))
-    mean_param = DiagMVN.predict_moment(loc, noise_mom)
-    moment = DiagMVN.mean_param_to_moment(mean_param)
+    mean_param = approx.predict_moment(loc, noise_mom)
+    moment = approx.mean_param_to_moment(mean_param)
 
-    mean, cov = DiagMVN.moment_to_canon(moment)
+    mean, cov = approx.moment_to_canon(moment)
     chex.assert_trees_all_close(mean, loc, atol=1e-6)
     # cov should be the noise covariance (since Var[f] = 0 for a single point)
-    _, Q = DiagMVN.moment_to_canon(noise_mom)
+    _, Q = approx.moment_to_canon(noise_mom)
     chex.assert_trees_all_close(cov, Q, atol=1e-5)
 
 
@@ -115,14 +117,14 @@ def test_sample_expected_moment(spec):
     noise_mom = _make_noise_moment(state_dim)
 
     # Start from a proper (mean, cov) moment for sampling
-    moment = DiagMVN.canon_to_moment(
+    moment = approx.canon_to_moment(
         jrnd.normal(key, (state_dim,)), jnp.ones(state_dim)
     )
     u = jrnd.normal(key, (input_dim,))
     eu = jnp.zeros((0,))
 
-    result = sample_expected_moment(key, moment, u, eu, f, noise_mom, DiagMVN, 10)
-    chex.assert_shape(result, (DiagMVN.param_size(state_dim),))
+    result = sample_expected_moment(key, moment, u, eu, f, noise_mom, approx, 10)
+    chex.assert_shape(result, (approx.param_size(state_dim),))
     chex.assert_tree_all_finite(result)
 
 
@@ -148,21 +150,21 @@ def test_sample_expected_moment_partial_invalid():
     noise_mom = _make_noise_moment(state_dim)
 
     # Wide posterior: N(0, 25I) — many samples will exceed |z|>3
-    moment = DiagMVN.canon_to_moment(jnp.zeros(state_dim), jnp.full(state_dim, 25.0))
+    moment = approx.canon_to_moment(jnp.zeros(state_dim), jnp.full(state_dim, 25.0))
     u = jnp.zeros(0)
     c = jnp.zeros(0)
 
     f = fpartial(_threshold_dynamics, radius=3.0)
 
     result = jax.jit(
-        lambda k: sample_expected_moment(k, moment, u, c, f, noise_mom, DiagMVN, mc_size)
+        lambda k: sample_expected_moment(k, moment, u, c, f, noise_mom, approx, mc_size)
     )(key)
 
     assert jnp.all(jnp.isfinite(result)), (
         f"Expected all-finite output with partial-invalid MC samples, "
         f"got {jnp.sum(~jnp.isfinite(result))} non-finite entries"
     )
-    chex.assert_shape(result, (DiagMVN.param_size(state_dim),))
+    chex.assert_shape(result, (approx.param_size(state_dim),))
 
 
 def test_sample_expected_moment_all_invalid():
@@ -173,25 +175,24 @@ def test_sample_expected_moment_all_invalid():
 
     noise_mom = _make_noise_moment(state_dim)
 
-    moment = DiagMVN.canon_to_moment(jnp.zeros(state_dim), jnp.full(state_dim, 1.0))
+    moment = approx.canon_to_moment(jnp.zeros(state_dim), jnp.full(state_dim, 1.0))
     u = jnp.zeros(0)
     c = jnp.zeros(0)
 
     f = fpartial(_threshold_dynamics, radius=0.001)
 
     result = jax.jit(
-        lambda k: sample_expected_moment(k, moment, u, c, f, noise_mom, DiagMVN, mc_size)
+        lambda k: sample_expected_moment(k, moment, u, c, f, noise_mom, approx, mc_size)
     )(key)
 
     assert jnp.all(jnp.isfinite(result)), (
         f"Expected all-finite fallback output when all MC samples are invalid, "
         f"got {jnp.sum(~jnp.isfinite(result))} non-finite entries"
     )
-    chex.assert_shape(result, (DiagMVN.param_size(state_dim),))
+    chex.assert_shape(result, (approx.param_size(state_dim),))
 
     # Verify it equals the deterministic prediction at z_mean
-    # Fallback: predict_moment at z_mean, converted to code's moment format
-    z_mean, _ = DiagMVN.moment_to_canon(moment)
+    z_mean, _ = approx.moment_to_canon(moment)
     loc = f(z_mean, u, c)
-    expected = DiagMVN.mean_param_to_moment(DiagMVN.predict_moment(loc, noise_mom))
+    expected = approx.mean_param_to_moment(approx.predict_moment(loc, noise_mom))
     chex.assert_trees_all_close(result, expected, atol=1e-6)

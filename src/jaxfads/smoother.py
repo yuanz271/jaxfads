@@ -46,7 +46,8 @@ class XFADS(ConfModule):
         - state_dim: Dimensionality of latent state
         - observation_dim: Dimensionality of observations
         - mc_size: Number of Monte Carlo samples
-        - approx: Exponential family approximation type
+        - approx: Exponential family approximation name (e.g. 'MVN')
+        - approx_kwargs: Keyword arguments for approx instantiation (e.g. rank)
         - forward: Forward dynamics model type
         - obs_conf: Observation model config
         - mode: Inference mode ('pseudo', 'bifilter' not tested)
@@ -85,7 +86,8 @@ class XFADS(ConfModule):
     ...     'state_dim': 10,
     ...     'observation_dim': 50,
     ...     'mc_size': 100,
-    ...     'approx': 'DiagMVN',
+    ...     'approx': 'MVN',
+    ...     'approx_kwargs': {'rank': 0},
     ...     'forward': 'Linear',
     ...     'obs_conf': {
     ...         'model': 'GLM',
@@ -145,9 +147,10 @@ class XFADS(ConfModule):
         key = jrnd.key(seed)
 
         logger.info(
-            "XFADS init: mode=%s approx=%s forward=%s observation_model=%s state_dim=%s obs_dim=%s mc_size=%s dropout=%s seed=%s",
+            "XFADS init: mode=%s approx=%s approx_kwargs=%s forward=%s observation_model=%s state_dim=%s obs_dim=%s mc_size=%s dropout=%s seed=%s",
             str(self.conf.mode),
             str(self.conf.approx),
+            str(dict(self.conf.approx_kwargs)),
             str(forward),
             str(self.conf.obs_conf.model),
             str(self.conf.state_dim),
@@ -256,14 +259,16 @@ class XFADS(ConfModule):
     @property
     def approx(self):
         """
-        Exponential-family approximation class.
+        Exponential-family approximation instance.
 
         Returns
         -------
-        type[Approx]
-            The approximation type selected by configuration (e.g., `DiagMVN`).
+        Approx
+            An approximation instance configured from ``approx`` and
+            ``approx_kwargs``.
         """
-        return Approx.get_subclass(self.conf.approx)
+        cls = Approx.get_subclass(self.conf.approx)
+        return cls(**self.conf.approx_kwargs)
 
     def prior_natural(self) -> Array:
         """

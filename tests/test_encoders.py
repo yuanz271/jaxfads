@@ -13,6 +13,7 @@ def _alpha_conf(spec, *, dropout=None):
             observation_dim=spec["observation_dim"],
             state_dim=spec["state_dim"],
             approx=spec["approx"],
+            approx_kwargs=spec["approx_kwargs"],
             width=spec["width"],
             depth=spec["depth"],
             dropout=dropout,
@@ -25,10 +26,17 @@ def _beta_conf(spec, *, dropout=None):
         dict(
             state_dim=spec["state_dim"],
             approx=spec["approx"],
+            approx_kwargs=spec["approx_kwargs"],
             width=spec["width"],
             dropout=dropout,
         )
     )
+
+
+def _make_approx(conf):
+    """Instantiate an Approx from config."""
+    cls = Approx.get_subclass(conf.approx)
+    return cls(**conf.approx_kwargs)
 
 
 def test_alpha_encoder_shape(spec):
@@ -37,7 +45,7 @@ def test_alpha_encoder_shape(spec):
     encoder = AlphaEncoder(conf, key)
     y = jnp.ones((spec["observation_dim"],))
 
-    approx = Approx.get_subclass(conf.approx)
+    approx = _make_approx(conf)
     out = encoder(y)
     chex.assert_shape(out, (approx.param_size(spec["state_dim"]),))
 
@@ -47,7 +55,7 @@ def test_beta_encoder_shape(spec):
     conf = _beta_conf(spec, dropout=None)
     encoder = BetaEncoder(conf, key)
 
-    approx = Approx.get_subclass(conf.approx)
+    approx = _make_approx(conf)
     param_size = approx.param_size(spec["state_dim"])
     a = jnp.ones((5, param_size))
     out = encoder(a)
@@ -60,7 +68,7 @@ def test_beta_encoder_dropout_path(spec):
     conf = _beta_conf(spec, dropout=0.1)
     encoder = BetaEncoder(conf, key)
 
-    approx = Approx.get_subclass(conf.approx)
+    approx = _make_approx(conf)
     param_size = approx.param_size(spec["state_dim"])
     a = jnp.ones((6, param_size))
     out = encoder(a, key=jrnd.key(3))

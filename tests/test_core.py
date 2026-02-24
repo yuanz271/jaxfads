@@ -5,8 +5,10 @@ from jax import numpy as jnp
 from jax import random as jrnd
 
 from jaxfads import core
-from jaxfads.distributions import DiagMVN
+from jaxfads.distributions import MVN
 from jaxfads.base import Dynamics
+
+approx = MVN(rank=0)
 
 
 class IdentityDynamics(Dynamics):
@@ -23,18 +25,18 @@ class DummyModel:
     """Minimal model duck-typing XFADS for core.filter / core.bismooth."""
 
     def __init__(self, state_dim: int, mc_size: int = 1, cov: float = 1.0):
-        self.approx = DiagMVN
+        self.approx = approx
         self.conf = SimpleNamespace(mc_size=mc_size)
         self.forward = IdentityDynamics(state_dim)
         self.backward = IdentityDynamics(state_dim)
         self._state_dim = state_dim
-        self._unconstrained_noise = DiagMVN.init_noise(cov, state_dim)
+        self._unconstrained_noise = approx.init_noise(cov, state_dim)
 
     def prior_natural(self):
-        return DiagMVN.prior_natural(self._state_dim)
+        return approx.prior_natural(self._state_dim)
 
     def noise_moment(self):
-        return DiagMVN.constrain_moment(self._unconstrained_noise)
+        return approx.constrain_moment(self._unconstrained_noise)
 
 
 def test_filter_shapes_and_finite():
@@ -42,7 +44,7 @@ def test_filter_shapes_and_finite():
     T = 4
     model = DummyModel(state_dim)
     key = jrnd.key(0)
-    param_dim = DiagMVN.param_size(state_dim)
+    param_dim = approx.param_size(state_dim)
 
     alpha = jnp.zeros((T, param_dim))
     u = jnp.zeros((T, 0))
@@ -63,7 +65,7 @@ def test_bismooth_shapes_and_finite():
     T = 5
     model = DummyModel(state_dim)
     key = jrnd.key(1)
-    param_dim = DiagMVN.param_size(state_dim)
+    param_dim = approx.param_size(state_dim)
 
     alpha = jnp.zeros((T, param_dim))
     u = jnp.zeros((T, 0))

@@ -27,7 +27,7 @@ def sample_expected_moment(
     c: Array,
     f: Callable[..., Array],
     noise_moment: Array,
-    approx: type[Approx],
+    approx: Approx,
     mc_size: int,
 ) -> Array:
     """
@@ -55,8 +55,8 @@ def sample_expected_moment(
         Dynamics function.
     noise_moment : Array
         Noise parameters in the code's moment format.
-    approx : type[Approx]
-        Exponential family approximation.
+    approx : Approx
+        Exponential family approximation instance.
     mc_size : int
         Number of Monte Carlo samples.
 

@@ -24,7 +24,8 @@ Examples
 ...     'state_dim': 10,
 ...     'observation_dim': 50,
 ...     'mc_size': 100,
-...     'approx': 'DiagMVN',
+...     'approx': 'MVN',
+...     'approx_kwargs': {'rank': 0},
 ...     'forward': 'Linear',
 ...     'obs_conf': {
 ...         'model': 'GLM',

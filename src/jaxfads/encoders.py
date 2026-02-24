@@ -36,7 +36,8 @@ class AlphaEncoder(ConfModule):
         Configuration containing:
         - observation_dim: Dimensionality of input observations
         - state_dim: Dimensionality of latent state
-        - approx: Exponential family approximation type
+        - approx: Exponential family approximation name (e.g. 'MVN')
+        - approx_kwargs: Keyword arguments for approx instantiation
         - width: Hidden layer width
         - depth: Number of hidden layers
         - dropout: Dropout probability (optional)
@@ -76,7 +77,8 @@ class AlphaEncoder(ConfModule):
             PRNG key for parameter initialization.
         """
         self.conf = conf
-        approx = Approx.get_subclass(conf.approx)
+        approx_cls = Approx.get_subclass(conf.approx)
+        approx = approx_cls(**conf.approx_kwargs)
         self.layer = make_mlp(
             conf.observation_dim,
             approx.param_size(conf.state_dim),
@@ -125,7 +127,8 @@ class BetaEncoder(ConfModule):
     conf : DictConfig
         Configuration containing:
         - state_dim: Dimensionality of latent state
-        - approx: Exponential family approximation type
+        - approx: Exponential family approximation name (e.g. 'MVN')
+        - approx_kwargs: Keyword arguments for approx instantiation
         - width: Hidden state dimension for the RNN
         - dropout: Dropout probability (optional)
     key : Array
@@ -178,7 +181,8 @@ class BetaEncoder(ConfModule):
             PRNG key for parameter initialization.
         """
         self.conf = conf
-        approx = Approx.get_subclass(conf.approx)
+        approx_cls = Approx.get_subclass(conf.approx)
+        approx = approx_cls(**conf.approx_kwargs)
 
         param_size = approx.param_size(conf.state_dim)
 

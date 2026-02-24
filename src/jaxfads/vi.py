@@ -20,7 +20,7 @@ def elbo(
     moment_p: Array,
     y: Array,
     eloglik: Callable[..., Array],
-    approx: type[Approx],
+    approx: Approx,
     *,
     mc_size: int,
     beta: float = 1.0,
@@ -46,8 +46,8 @@ def elbo(
         Observed data at time t.
     eloglik : Callable
         Function computing expected log-likelihood E_q[log p(y_t | z_t)].
-    approx : type[Approx]
-        Exponential family approximation class for KL computation.
+    approx : Approx
+        Exponential family approximation instance for KL computation.
     mc_size : int
         Number of Monte Carlo samples for expectation approximation.
     beta : float, optional

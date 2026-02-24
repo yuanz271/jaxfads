@@ -23,11 +23,14 @@ class Approx(SubclassRegistryMixin, ABC):
     This class defines the interface for exponential family distributions
     used in variational inference, providing conversions between natural
     and moment parameterizations, sampling methods, and other utilities.
+
+    Concrete subclasses are instantiated with family-specific parameters
+    (e.g., ``MVN(rank=0)``).  All methods are instance methods so that
+    the distribution configuration is carried by the instance.
     """
 
-    @classmethod
     @abstractmethod
-    def natural_to_moment(cls, natural: Array) -> Array:
+    def natural_to_moment(self, natural: Array) -> Array:
         """
         Convert natural parameters to moment parameters.
 
@@ -48,9 +51,8 @@ class Approx(SubclassRegistryMixin, ABC):
         """
         ...
 
-    @classmethod
     @abstractmethod
-    def moment_to_natural(cls, moment: Array) -> Array:
+    def moment_to_natural(self, moment: Array) -> Array:
         """
         Convert moment parameters to natural parameters.
 
@@ -72,9 +74,8 @@ class Approx(SubclassRegistryMixin, ABC):
         """
         ...
 
-    @classmethod
     @abstractmethod
-    def sample_by_moment(cls, key: Array, moment: Array, mc_size: int) -> Array:
+    def sample_by_moment(self, key: Array, moment: Array, mc_size: int) -> Array:
         """
         Generate samples from the distribution using moment parameters.
 
@@ -99,9 +100,8 @@ class Approx(SubclassRegistryMixin, ABC):
         """
         ...
 
-    @classmethod
     @abstractmethod
-    def param_size(cls, state_dim: int) -> int:
+    def param_size(self, state_dim: int) -> int:
         """
         Get the natural parameter size for given state dimension.
 
@@ -117,9 +117,8 @@ class Approx(SubclassRegistryMixin, ABC):
         """
         ...
 
-    @classmethod
     @abstractmethod
-    def moment_size(cls, state_dim: int) -> int:
+    def moment_size(self, state_dim: int) -> int:
         """
         Get the moment parameter size for given state dimension.
 
@@ -135,9 +134,8 @@ class Approx(SubclassRegistryMixin, ABC):
         """
         ...
 
-    @classmethod
     @abstractmethod
-    def kl(cls, moment1: Array, moment2: Array) -> Array:
+    def kl(self, moment1: Array, moment2: Array) -> Array:
         """
         Compute KL divergence between two distributions.
 
@@ -156,9 +154,8 @@ class Approx(SubclassRegistryMixin, ABC):
         """
         ...
 
-    @classmethod
     @abstractmethod
-    def moment_to_canon(cls, moment: Array) -> tuple[Array, Array]:
+    def moment_to_canon(self, moment: Array) -> tuple[Array, Array]:
         """
         Convert moment parameters to canonical mean and covariance.
 
@@ -176,9 +173,8 @@ class Approx(SubclassRegistryMixin, ABC):
         """
         ...
 
-    @classmethod
     @abstractmethod
-    def canon_to_moment(cls, mean: Array, cov: Array) -> Array:
+    def canon_to_moment(self, mean: Array, cov: Array) -> Array:
         """
         Convert canonical mean and covariance to moment parameters.
 
@@ -196,9 +192,8 @@ class Approx(SubclassRegistryMixin, ABC):
         """
         ...
 
-    @classmethod
     @abstractmethod
-    def full_cov(cls, cov: Array) -> Array:
+    def full_cov(self, cov: Array) -> Array:
         """
         Convert covariance parameterization to full covariance matrix.
 
@@ -214,9 +209,8 @@ class Approx(SubclassRegistryMixin, ABC):
         """
         ...
 
-    @classmethod
     @abstractmethod
-    def constrain_moment(cls, unconstrained: Array) -> Array:
+    def constrain_moment(self, unconstrained: Array) -> Array:
         """
         Transform unconstrained parameters to valid moment parameters.
 
@@ -233,9 +227,8 @@ class Approx(SubclassRegistryMixin, ABC):
         """
         ...
 
-    @classmethod
     @abstractmethod
-    def constrain_natural(cls, unconstrained: Array) -> Array:
+    def constrain_natural(self, unconstrained: Array) -> Array:
         """
         Transform unconstrained parameters to valid natural parameters.
 
@@ -252,9 +245,8 @@ class Approx(SubclassRegistryMixin, ABC):
         """
         ...
 
-    @classmethod
     @abstractmethod
-    def unconstrain_natural(cls, natural: Array) -> Array:
+    def unconstrain_natural(self, natural: Array) -> Array:
         """
         Transform natural parameters to unconstrained space.
 
@@ -270,9 +262,8 @@ class Approx(SubclassRegistryMixin, ABC):
         """
         ...
 
-    @classmethod
     @abstractmethod
-    def unconstrain_moment(cls, moment: Array) -> Array:
+    def unconstrain_moment(self, moment: Array) -> Array:
         """
         Transform valid moment parameters to unconstrained space.
 
@@ -290,9 +281,8 @@ class Approx(SubclassRegistryMixin, ABC):
         """
         ...
 
-    @classmethod
     @abstractmethod
-    def prior_natural(cls, state_dim: int) -> Array:
+    def prior_natural(self, state_dim: int) -> Array:
         """
         Get natural parameters for the standard normal prior.
 
@@ -308,9 +298,8 @@ class Approx(SubclassRegistryMixin, ABC):
         """
         ...
 
-    @classmethod
     @abstractmethod
-    def init_noise(cls, scale: float, state_dim: int) -> Array:
+    def init_noise(self, scale: float, state_dim: int) -> Array:
         """
         Create unconstrained noise moment parameters.
 
@@ -334,9 +323,8 @@ class Approx(SubclassRegistryMixin, ABC):
         """
         ...
 
-    @classmethod
     @abstractmethod
-    def predict_moment(cls, loc: Array, noise_moment: Array) -> Array:
+    def predict_moment(self, loc: Array, noise_moment: Array) -> Array:
         """
         Mean parameter of the predictive distribution p(z | loc, noise).
 
@@ -359,9 +347,8 @@ class Approx(SubclassRegistryMixin, ABC):
         """
         ...
 
-    @classmethod
     @abstractmethod
-    def mean_param_to_moment(cls, mean_param: Array) -> Array:
+    def mean_param_to_moment(self, mean_param: Array) -> Array:
         """
         Convert mean parameter to the code's moment format.
 
@@ -444,7 +431,7 @@ class ObservationModel(SubclassRegistryMixin, ConfModule):
         t: Array,
         moment: Array,
         y: Array,
-        approx: type[Approx],
+        approx: Approx,
         mc_size: int,
     ) -> Array:
         """

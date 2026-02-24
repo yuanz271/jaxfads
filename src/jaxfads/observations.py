@@ -23,7 +23,7 @@ from .nn import StationaryLinear, VariantBiasLinear
 _MAX_LOGRATE = 7.0
 
 
-def _quadratic_diag(C: Array, cov_z: Array, approx: type[Approx]) -> Array:
+def _quadratic_diag(C: Array, cov_z: Array, approx: Approx) -> Array:
     """Compute diag(C @ Σ_z @ C.T) without materialising (D_obs, D_obs).
 
     When *cov_z* is a 1-D diagonal vector (rank-0 / diagonal MVN) this
@@ -280,7 +280,7 @@ class Likelihood(Protocol):
         t: Array,
         moment: Array,
         y: Array,
-        approx: type[Approx],
+        approx: Approx,
         mc_size: int,
         readout: Callable[..., Array],
     ) -> Array:
@@ -326,7 +326,7 @@ class GLM(ObservationModel):
         t: Array,
         moment: Array,
         y: Array,
-        approx: type[Approx],
+        approx: Approx,
         mc_size: int,
     ) -> Array:
         """
@@ -342,8 +342,8 @@ class GLM(ObservationModel):
             Moment parameters of the latent state distribution q(z_t).
         y : Array
             Observed data at time t.
-        approx : type[Approx]
-            Exponential family approximation class defining q(z).
+        approx : Approx
+            Exponential family approximation instance defining q(z).
         mc_size : int
             Number of Monte Carlo samples (for stochastic approximations).
 
@@ -531,8 +531,8 @@ class Poisson(eqx.Module, strict=True):
             Moment parameters of latent state distribution q(z_t).
         y : Array, shape (observation_dim,)
             Observed count data.
-        approx : type[Approx]
-            Exponential family approximation class.
+        approx : Approx
+            Exponential family approximation instance.
         mc_size : int
             Number of Monte Carlo samples (unused for analytic computation).
         readout : callable
@@ -642,7 +642,7 @@ class Gaussian(eqx.Module, strict=True):
         t: Array,
         moment: Array,
         y: Array,
-        approx: type[Approx],
+        approx: Approx,
         mc_size: int,
         readout,
     ) -> Array:
@@ -659,8 +659,8 @@ class Gaussian(eqx.Module, strict=True):
             Moment parameters of latent state distribution q(z_t).
         y : Array, shape (observation_dim,)
             Observed continuous data.
-        approx : type[Approx]
-            Exponential family approximation class.
+        approx : Approx
+            Exponential family approximation instance.
         mc_size : int
             Number of Monte Carlo samples (unused for analytic computation).
         readout : callable

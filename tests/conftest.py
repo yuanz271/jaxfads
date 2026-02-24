@@ -10,5 +10,6 @@ def spec():
         input_dim=0,
         width=32,
         depth=2,
-        approx="DiagMVN",
+        approx="MVN",
+        approx_kwargs={"rank": 0},
     )
