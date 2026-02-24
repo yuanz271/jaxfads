@@ -118,23 +118,6 @@ class Approx(SubclassRegistryMixin, ABC):
         ...
 
     @abstractmethod
-    def mean_size(self, state_dim: int) -> int:
-        """
-        Get the mean parameter size for given state dimension.
-
-        Parameters
-        ----------
-        state_dim : int
-            Dimensionality of the state space.
-
-        Returns
-        -------
-        int
-            Total number of mean parameters.
-        """
-        ...
-
-    @abstractmethod
     def kl(self, mean1: Array, mean2: Array) -> Array:
         """
         Compute KL divergence between two distributions.
