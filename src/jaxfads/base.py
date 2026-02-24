@@ -155,61 +155,6 @@ class Approx(SubclassRegistryMixin, ABC):
         ...
 
     @abstractmethod
-    def mean_to_canon(self, mean: Array) -> tuple[Array, Array]:
-        """
-        Convert mean parameters to canonical loc and covariance.
-
-        Parameters
-        ----------
-        mean : Array
-            Mean parameter vector.
-
-        Returns
-        -------
-        loc : Array, shape (D,)
-            Location vector.
-        cov : Array
-            Covariance — vector (D,) for diagonal, matrix (D, D) otherwise.
-        """
-        ...
-
-    @abstractmethod
-    def canon_to_mean(self, loc: Array, cov: Array) -> Array:
-        """
-        Convert canonical loc and covariance to mean parameters.
-
-        Parameters
-        ----------
-        loc : Array, shape (D,)
-            Location vector.
-        cov : Array
-            Covariance matrix (D, D) or diagonal vector (D,).
-
-        Returns
-        -------
-        Array
-            Mean parameter vector.
-        """
-        ...
-
-    @abstractmethod
-    def full_cov(self, cov: Array) -> Array:
-        """
-        Convert covariance parameterization to full covariance matrix.
-
-        Parameters
-        ----------
-        cov : Array
-            Covariance parameters (may be diagonal, low-rank, etc.).
-
-        Returns
-        -------
-        Array, shape (D, D)
-            Full covariance matrix.
-        """
-        ...
-
-    @abstractmethod
     def constrain_mean(self, unconstrained: Array) -> Array:
         """
         Transform unconstrained parameters to valid mean parameters.

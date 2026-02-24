@@ -122,7 +122,7 @@ def test_sample_expected_mean_partial_invalid():
 
 
 def test_sample_expected_mean_all_invalid(diag):
-    """When all MC samples produce NaN, the fallback at z_mean should be used."""
+    """When all MC samples produce NaN, the result should be non-finite."""
     state_dim, mc_size = 2, 16
     key = jrnd.key(99)
     noise_mom = make_noise_mean(diag, state_dim)
@@ -135,10 +135,5 @@ def test_sample_expected_mean_all_invalid(diag):
         lambda k: sample_expected_mean(k, mp, u, c, f, noise_mom, diag, mc_size)
     )(key)
 
-    assert jnp.all(jnp.isfinite(result))
     chex.assert_shape(result, (diag.mean_size(state_dim),))
-
-    z_mean, _ = diag.mean_to_canon(mp)
-    loc = f(z_mean, u, c)
-    expected = diag.predict_mean(loc[None, :], noise_mom)
-    chex.assert_trees_all_close(result, expected, atol=1e-6)
+    assert not jnp.all(jnp.isfinite(result))

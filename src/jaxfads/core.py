@@ -72,9 +72,8 @@ def sample_expected_mean(
 
     Non-finite handling:
     After computing per-sample mean parameters, any sample containing
-    NaN or Inf values is masked out.  If every sample is non-finite,
-    the function falls back to the deterministic prediction at the
-    posterior mean.
+    NaN or Inf values is masked out inside ``approx.predict_mean``.
+    If every sample is non-finite the result will itself be non-finite.
     """
     key, subkey = jrnd.split(key)
     z = approx.sample_by_mean(subkey, mean, mc_size)
@@ -85,17 +84,7 @@ def sample_expected_mean(
     locs = jax.vmap(partial(f, key=key), in_axes=(0, 0, 0))(z, u_bc, c_bc)
 
     # Predict structured mean (averaging + non-finite masking inside approx)
-    result = approx.predict_mean(locs, noise_mean)
-
-    # Fallback: deterministic prediction at the posterior mean
-    def _fallback(_):
-        z_mean, _ = approx.mean_to_canon(mean)
-        loc = f(z_mean, u, c, key=key)
-        return approx.predict_mean(loc[None, :], noise_mean)
-
-    return jax.lax.cond(
-        jnp.all(jnp.isfinite(result)), lambda _: result, _fallback, None
-    )
+    return approx.predict_mean(locs, noise_mean)
 
 
 class Mode(StrEnum):
