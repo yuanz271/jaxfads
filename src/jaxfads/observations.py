@@ -17,7 +17,7 @@ from jax import random as jrnd
 
 from .base import ObservationModel
 from .constraints import _EPS, constrain_positive, unconstrain_positive
-from .distributions import Approx
+from .base import Approx
 from .nn import StationaryLinear, VariantBiasLinear
 
 _MAX_LOGRATE = 7.0

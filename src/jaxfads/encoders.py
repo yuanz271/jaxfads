@@ -17,7 +17,7 @@ from omegaconf import DictConfig
 
 from gearax.modules import ConfModule
 
-from .distributions import Approx
+from .base import Approx
 from .nn import make_mlp
 
 

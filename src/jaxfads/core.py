@@ -17,7 +17,7 @@ from jax import numpy as jnp
 from jax import random as jrnd
 from jax.lax import scan
 
-from .distributions import Approx
+from .base import Approx
 
 
 def sample_expected_moment(

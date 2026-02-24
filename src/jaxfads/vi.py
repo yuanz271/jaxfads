@@ -10,7 +10,7 @@ from collections.abc import Callable
 
 from jax import Array
 
-from .distributions import Approx
+from .base import Approx
 
 
 def elbo(

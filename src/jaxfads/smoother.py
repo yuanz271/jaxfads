@@ -19,7 +19,7 @@ from gearax.modules import ConfModule, load_model, save_model
 
 from . import core, encoders
 from .core import Mode
-from .distributions import Approx
+from .base import Approx
 from .base import Dynamics
 from .nn import DataMasker
 from .base import ObservationModel

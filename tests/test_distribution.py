@@ -352,7 +352,7 @@ def test_fullmvn_natural_moment_roundtrip():
 
 def test_registry_lookup():
     """SubclassRegistryMixin finds DiagMVN and FullMVN by name."""
-    from jaxfads.distributions import Approx
+    from jaxfads.base import Approx
 
     assert Approx.get_subclass("DiagMVN") is DiagMVN
     assert Approx.get_subclass("FullMVN") is FullMVN

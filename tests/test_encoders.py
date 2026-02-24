@@ -3,7 +3,7 @@ from jax import numpy as jnp
 from jax import random as jrnd
 from omegaconf import OmegaConf
 
-from jaxfads.distributions import Approx
+from jaxfads.base import Approx
 from jaxfads.encoders import AlphaEncoder, BetaEncoder
 
 
