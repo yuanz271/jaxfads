@@ -6,17 +6,12 @@ import tensorflow_probability.substrates.jax.distributions as tfp
 from jaxfads.distributions import MVN
 
 
-# Shared instances
-diag = MVN(rank=0)
-full = MVN(rank=-1)
-
-
 # ---------------------------------------------------------------------------
 # Diagonal MVN (rank=0)
 # ---------------------------------------------------------------------------
 
 
-def test_diagmvn(spec):
+def test_diagmvn(diag, spec):
     state_dim = spec["state_dim"]
 
     m1 = jnp.ones(state_dim)
@@ -37,7 +32,6 @@ def test_diagmvn(spec):
 
 def test_reparameterization(spec):
     state_dim = spec["state_dim"]
-
     m1 = jnp.ones(state_dim)
     cov1 = jnp.eye(state_dim)
     assert (
@@ -46,7 +40,7 @@ def test_reparameterization(spec):
     )
 
 
-def test_diagmvn_near_zero_cov_stability():
+def test_diagmvn_near_zero_cov_stability(diag):
     """Near-zero covariance must not produce extreme natural parameters."""
     state_dim = 2
     mean = jnp.ones(state_dim)
@@ -56,7 +50,6 @@ def test_diagmvn_near_zero_cov_stability():
 
     moment = diag.canon_to_moment(mean, tiny_cov)
     natural = diag.moment_to_natural(moment)
-
     chex.assert_tree_all_finite(natural)
 
     _, nat2 = jnp.split(natural, 2)
@@ -72,7 +65,7 @@ def test_diagmvn_near_zero_cov_stability():
     chex.assert_trees_all_close(moment_normal, moment_normal_rt)
 
 
-def test_diagmvn_kl_matches_closed_form():
+def test_diagmvn_kl_matches_closed_form(diag):
     """MVN(rank=0).kl() must match the closed-form diagonal Gaussian KL."""
 
     def _kl_closed_form(m1, v1, m2, v2):
@@ -88,7 +81,6 @@ def test_diagmvn_kl_matches_closed_form():
 
     kl_actual = diag.kl(moment1, moment2)
     kl_expected = _kl_closed_form(m1, v1, m2, v2)
-
     chex.assert_tree_all_finite(kl_actual)
     chex.assert_trees_all_close(kl_actual, kl_expected, atol=1e-5)
 
@@ -102,7 +94,6 @@ def test_diagmvn_kl_matches_closed_form():
 
     kl_actual_b = diag.kl(moment1b, moment2b)
     kl_expected_b = _kl_closed_form(m1b, v1b, m2b, v2b)
-
     chex.assert_tree_all_finite(kl_actual_b)
     chex.assert_trees_all_close(kl_actual_b, kl_expected_b, atol=1e-4)
 
@@ -115,33 +106,31 @@ def test_diagmvn_kl_matches_closed_form():
 # ---------------------------------------------------------------------------
 
 
-def test_fullmvn_constrain_moment():
-    """MVN(rank=-1).constrain_moment produces valid structured moment."""
+def test_fullmvn_constrain_moment(full_mvn):
+    """constrain_moment produces valid structured moment."""
     state_dim = 3
-    r = state_dim  # full rank
-    unc_size = state_dim * (2 + r)
+    unc_size = state_dim * (2 + state_dim)
     unconstrained = jrnd.normal(jrnd.key(0), (unc_size,))
 
-    moment = full.constrain_moment(unconstrained)
+    moment = full_mvn.constrain_moment(unconstrained)
     chex.assert_shape(moment, (unc_size,))
     chex.assert_tree_all_finite(moment)
 
-    mean, cov = full.moment_to_canon(moment)
+    mean, cov = full_mvn.moment_to_canon(moment)
     chex.assert_shape(mean, (state_dim,))
     chex.assert_shape(cov, (state_dim, state_dim))
-
     chex.assert_trees_all_close(cov, cov.T, atol=1e-6)
     eigenvalues = jnp.linalg.eigvalsh(cov)
     assert jnp.all(eigenvalues > 0), f"Non-PD covariance: eigenvalues={eigenvalues}"
 
 
-def test_fullmvn_constrain_natural():
-    """MVN(rank=-1).constrain_natural produces valid natural params."""
+def test_fullmvn_constrain_natural(full_mvn):
+    """constrain_natural produces valid natural params."""
     state_dim = 3
-    param_sz = full.param_size(state_dim)  # D + D²
+    param_sz = full_mvn.param_size(state_dim)
     unconstrained = jrnd.normal(jrnd.key(1), (param_sz,))
 
-    natural = full.constrain_natural(unconstrained)
+    natural = full_mvn.constrain_natural(unconstrained)
     chex.assert_shape(natural, (param_sz,))
     chex.assert_tree_all_finite(natural)
 
@@ -150,30 +139,44 @@ def test_fullmvn_constrain_natural():
     eigenvalues = jnp.linalg.eigvalsh(nat2)
     assert jnp.all(eigenvalues < 0), f"nat2 not neg-def: eigenvalues={eigenvalues}"
 
-    moment = full.natural_to_moment(natural)
+    moment = full_mvn.natural_to_moment(natural)
     chex.assert_tree_all_finite(moment)
 
 
-def test_fullmvn_unconstrain_natural_roundtrip():
-    """unconstrain_natural inverts constrain_natural for MVN(rank=-1)."""
+def test_fullmvn_unconstrain_natural_roundtrip(full_mvn):
+    """unconstrain_natural inverts constrain_natural."""
     state_dim = 3
-    natural = full.prior_natural(state_dim)
-    unconstrained = full.unconstrain_natural(natural)
+    natural = full_mvn.prior_natural(state_dim)
+    unconstrained = full_mvn.unconstrain_natural(natural)
     chex.assert_tree_all_finite(unconstrained)
 
-    natural_rt = full.constrain_natural(unconstrained)
+    natural_rt = full_mvn.constrain_natural(unconstrained)
     chex.assert_tree_all_finite(natural_rt)
 
-    moment = full.natural_to_moment(natural)
-    moment_rt = full.natural_to_moment(natural_rt)
+    moment = full_mvn.natural_to_moment(natural)
+    moment_rt = full_mvn.natural_to_moment(natural_rt)
     chex.assert_trees_all_close(moment, moment_rt, atol=1e-4)
 
 
-def test_lowrankcov(capsys):
+def test_fullmvn_natural_moment_roundtrip(full_mvn):
+    """natural ↔ moment roundtrip via structured format."""
+    d = 3
+    natural = full_mvn.prior_natural(d)
+    moment = full_mvn.natural_to_moment(natural)
+    chex.assert_tree_all_finite(moment)
+
+    mean, cov = full_mvn.moment_to_canon(moment)
+    chex.assert_trees_all_close(mean, jnp.zeros(d), atol=1e-5)
+    chex.assert_trees_all_close(cov, jnp.eye(d), atol=1e-4)
+
+    natural_rt = full_mvn.moment_to_natural(moment)
+    chex.assert_trees_all_close(natural, natural_rt, atol=1e-4)
+
+
+def test_lowrankcov():
     loc = jnp.ones(2)
     cov_diag = jnp.ones(2)
     cov_lr = jnp.ones((2, 1))
-
     _ = tfp.MultivariateNormalDiagPlusLowRankCovariance(loc, cov_diag, cov_lr)
 
 
@@ -182,8 +185,8 @@ def test_lowrankcov(capsys):
 # ---------------------------------------------------------------------------
 
 
-def test_diagmvn_unconstrain_moment_roundtrip():
-    """constrain_moment(unconstrain_moment(m)) ≈ m for MVN(rank=0)."""
+def test_diagmvn_unconstrain_moment_roundtrip(diag):
+    """constrain_moment(unconstrain_moment(m)) ≈ m for rank=0."""
     state_dim = 4
     mean = jrnd.normal(jrnd.key(10), (state_dim,))
     cov = jnp.abs(jrnd.normal(jrnd.key(11), (state_dim,))) + 0.1
@@ -194,23 +197,20 @@ def test_diagmvn_unconstrain_moment_roundtrip():
     chex.assert_trees_all_close(recovered, moment, atol=1e-5)
 
 
-def test_fullmvn_unconstrain_moment_roundtrip():
-    """constrain_moment(unconstrain_moment(m)) ≈ m for MVN(rank=-1)."""
+def test_fullmvn_unconstrain_moment_roundtrip(full_mvn):
+    """constrain_moment(unconstrain_moment(m)) ≈ m for rank=-1."""
     state_dim = 3
-    r = state_dim
-
-    # Build a structured moment: isotropic N(mean, 2I)
     mean = jrnd.normal(jrnd.key(20), (state_dim,))
     cov_diag = jnp.full(state_dim, 2.0)
-    cov_factor = jnp.zeros((state_dim, r))
+    cov_factor = jnp.zeros((state_dim, state_dim))
     moment = jnp.concatenate((mean, cov_diag, cov_factor.flatten()))
 
-    unconstrained = full.unconstrain_moment(moment)
-    recovered = full.constrain_moment(unconstrained)
+    unconstrained = full_mvn.unconstrain_moment(moment)
+    recovered = full_mvn.constrain_moment(unconstrained)
     chex.assert_trees_all_close(recovered, moment, atol=1e-4)
 
 
-def test_init_noise_produces_expected_moment():
+def test_init_noise_produces_expected_moment(diag):
     """init_noise → constrain_moment gives correct noise distribution."""
     state_dim = 3
     cov_init = 2.0
@@ -228,38 +228,35 @@ def test_init_noise_produces_expected_moment():
 # ---------------------------------------------------------------------------
 
 
-def test_param_size():
+def test_param_size(diag, full_mvn):
     assert diag.param_size(3) == 6
-    assert full.param_size(3) == 12
-    assert diag.moment_size(3) == 6  # D*(2+0)
+    assert full_mvn.param_size(3) == 12
+    assert diag.moment_size(3) == 6
 
 
-def test_moment_size_full():
-    # MVN(rank=-1): effective rank = D = 3, moment_size = 3*(2+3) = 15
-    assert full.moment_size(3) == 15
+def test_moment_size_full(full_mvn):
+    assert full_mvn.moment_size(3) == 15
 
 
 # ---------------------------------------------------------------------------
 # Low-rank MVN (rank=1, rank=2)
 # ---------------------------------------------------------------------------
 
-lr1 = MVN(rank=1)
-lr2 = MVN(rank=2)
-
 
 def test_lowrank_param_and_moment_sizes():
     d = 4
-    assert lr1.param_size(d) == d + d * d  # 4 + 16 = 20
-    assert lr1.moment_size(d) == d * (2 + 1)  # 4 * 3 = 12
-    assert lr2.moment_size(d) == d * (2 + 2)  # 4 * 4 = 16
+    lr1 = MVN(rank=1)
+    lr2 = MVN(rank=2)
+    assert lr1.param_size(d) == d + d * d
+    assert lr1.moment_size(d) == d * (2 + 1)
+    assert lr2.moment_size(d) == d * (2 + 2)
 
 
 def test_lowrank_natural_moment_roundtrip():
     """moment_to_natural → natural_to_moment preserves structure for low-rank MVN."""
-    d = 4
+    d, lr1 = 4, MVN(rank=1)
     key = jrnd.key(42)
 
-    # Build a structured moment: diag + rank-1 factor
     loc = jrnd.normal(key, (d,))
     cov_diag = jnp.ones(d)
     cov_factor = jrnd.normal(key, (d, 1)) * 0.5
@@ -273,24 +270,18 @@ def test_lowrank_natural_moment_roundtrip():
     chex.assert_tree_all_finite(moment_rt)
     chex.assert_shape(moment_rt, (lr1.moment_size(d),))
 
-    # Diagonal of covariance should be preserved closely
     _, cov_orig = lr1.moment_to_canon(moment)
     _, cov_rt = lr1.moment_to_canon(moment_rt)
-    chex.assert_trees_all_close(
-        jnp.diag(cov_orig), jnp.diag(cov_rt), atol=1e-4
-    )
-    # Roundtrip covariance must be PSD
+    chex.assert_trees_all_close(jnp.diag(cov_orig), jnp.diag(cov_rt), atol=1e-4)
     eigenvalues = jnp.linalg.eigvalsh(cov_rt)
     assert jnp.all(eigenvalues > 0), f"Non-PD roundtrip cov: {eigenvalues}"
 
 
 def test_lowrank_sample():
     """Sampling from low-rank MVN produces correct shapes."""
-    d = 3
-    loc = jnp.zeros(d)
-    cov_diag = jnp.ones(d)
+    d, lr2 = 3, MVN(rank=2)
     cov_factor = jrnd.normal(jrnd.key(0), (d, 2)) * 0.3
-    moment = jnp.concatenate((loc, cov_diag, cov_factor.flatten()))
+    moment = jnp.concatenate((jnp.zeros(d), jnp.ones(d), cov_factor.flatten()))
 
     samples = lr2.sample_by_moment(jrnd.key(1), moment, 50)
     chex.assert_shape(samples, (50, d))
@@ -299,11 +290,11 @@ def test_lowrank_sample():
 
 def test_lowrank_kl_self_zero():
     """KL(q, q) = 0 for low-rank MVN."""
-    d = 3
-    loc = jnp.array([1.0, -0.5, 0.3])
-    cov_diag = jnp.array([0.5, 1.0, 0.8])
+    d, lr1 = 3, MVN(rank=1)
     cov_factor = jrnd.normal(jrnd.key(5), (d, 1)) * 0.5
-    moment = jnp.concatenate((loc, cov_diag, cov_factor.flatten()))
+    moment = jnp.concatenate(
+        (jnp.array([1.0, -0.5, 0.3]), jnp.array([0.5, 1.0, 0.8]), cov_factor.flatten())
+    )
 
     kl = lr1.kl(moment, moment)
     chex.assert_trees_all_close(kl, jnp.array(0.0), atol=1e-4)
@@ -311,7 +302,7 @@ def test_lowrank_kl_self_zero():
 
 def test_lowrank_constrain_moment_roundtrip():
     """constrain(unconstrain(moment)) ≈ moment for low-rank MVN."""
-    d = 4
+    d, lr2 = 4, MVN(rank=2)
     loc = jrnd.normal(jrnd.key(10), (d,))
     cov_diag = jnp.abs(jrnd.normal(jrnd.key(11), (d,))) + 0.1
     cov_factor = jrnd.normal(jrnd.key(12), (d, 2)) * 0.3
@@ -324,7 +315,7 @@ def test_lowrank_constrain_moment_roundtrip():
 
 def test_lowrank_init_noise():
     """init_noise produces isotropic noise moment for low-rank MVN."""
-    d = 3
+    d, lr1 = 3, MVN(rank=1)
     scale = 2.5
     unc = lr1.init_noise(scale, d)
     moment = lr1.constrain_moment(unc)
@@ -335,19 +326,9 @@ def test_lowrank_init_noise():
     chex.assert_trees_all_close(cov_factor, jnp.zeros((d, 1)), atol=1e-6)
 
 
-def test_fullmvn_natural_moment_roundtrip():
-    """MVN(rank=-1) natural ↔ moment roundtrip via structured format."""
-    d = 3
-    natural = full.prior_natural(d)  # N(0, I)
-    moment = full.natural_to_moment(natural)
-    chex.assert_tree_all_finite(moment)
-
-    mean, cov = full.moment_to_canon(moment)
-    chex.assert_trees_all_close(mean, jnp.zeros(d), atol=1e-5)
-    chex.assert_trees_all_close(cov, jnp.eye(d), atol=1e-4)
-
-    natural_rt = full.moment_to_natural(moment)
-    chex.assert_trees_all_close(natural, natural_rt, atol=1e-4)
+# ---------------------------------------------------------------------------
+# Registry
+# ---------------------------------------------------------------------------
 
 
 def test_registry_lookup():

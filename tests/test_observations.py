@@ -6,6 +6,9 @@ from omegaconf import OmegaConf
 from jaxfads.distributions import MVN
 from jaxfads.observations import GLM, register_readout_init
 
+_diag = MVN(rank=0)
+_full = MVN(rank=-1)
+
 
 def _poisson_conf(state_dim: int, observation_dim: int, *, n_steps: int = 0):
     return OmegaConf.create(
@@ -49,10 +52,10 @@ def test_poisson_eloglik_shape_and_finite():
 
     mean = jnp.zeros(state_dim)
     cov = jnp.ones(state_dim)
-    moment = MVN(rank=0).canon_to_moment(mean, cov)
+    moment = _diag.canon_to_moment(mean, cov)
     y = jnp.ones((observation_dim,))
 
-    ll = observation.eloglik(key, jnp.array(0), moment, y, MVN(rank=0), mc_size=1)
+    ll = observation.eloglik(key, jnp.array(0), moment, y, _diag, mc_size=1)
     chex.assert_shape(ll, ())
     chex.assert_tree_all_finite(ll)
 
@@ -66,10 +69,10 @@ def test_poisson_eloglik_full_mvn():
 
     mean = jnp.zeros(state_dim)
     cov = jnp.eye(state_dim)
-    moment = MVN(rank=-1).canon_to_moment(mean, cov)
+    moment = _full.canon_to_moment(mean, cov)
     y = jnp.ones((observation_dim,))
 
-    ll = observation.eloglik(key, jnp.array(0), moment, y, MVN(rank=-1), mc_size=1)
+    ll = observation.eloglik(key, jnp.array(0), moment, y, _full, mc_size=1)
     chex.assert_shape(ll, ())
     chex.assert_tree_all_finite(ll)
 
@@ -83,10 +86,10 @@ def test_diag_gaussian_eloglik_shape_and_finite():
 
     mean = jnp.zeros(state_dim)
     cov = jnp.ones(state_dim)
-    moment = MVN(rank=0).canon_to_moment(mean, cov)
+    moment = _diag.canon_to_moment(mean, cov)
     y = jnp.zeros((observation_dim,))
 
-    ll = observation.eloglik(key, jnp.array(0), moment, y, MVN(rank=0), mc_size=1)
+    ll = observation.eloglik(key, jnp.array(0), moment, y, _diag, mc_size=1)
     chex.assert_shape(ll, ())
     chex.assert_tree_all_finite(ll)
 
