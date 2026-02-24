@@ -7,13 +7,26 @@ The distribution system follows a two-layer design:
 1. **`Approx` ABC** — defines the exponential-family interface.  Natural
    and mean parameters are **flat arrays** (required for array arithmetic).
    Structured and free-form parameters are **pytrees** (distribution-specific
-   layout handled natively by JAX/Equinox).
-2. **Subclasses** (e.g. `MVN`) — define the pytree structure and implement
-   conversions between all four forms.
+   layout handled natively by JAX/Equinox/optax).
+2. **Subclasses** (e.g. `MVN`) — define the concrete pytree structure and
+   implement conversions between all four forms.
 
 The core algorithm (`core.py`, `vi.py`) interacts only with the `Approx`
 interface.  Distribution-specific callers (e.g. `observations.py`) access
 subclass methods directly through the concrete instance.
+
+### Subclass Registration
+
+Subclasses are discovered via `Approx.get_subclass("MVN")` using
+`SubclassRegistryMixin.__init_subclass__`.  Registration happens when
+the subclass module is imported.  Built-in distributions are registered
+by a side-effect import in `smoother.py`:
+
+```python
+from . import distributions  # registers Approx subclasses
+```
+
+Plugin distributions in external packages register on user import.
 
 ## Parameter Forms
 
@@ -21,8 +34,8 @@ Every exponential-family distribution has four representations:
 
 | Form | Type | Reason | Example (MVN) |
 |------|------|--------|---------------|
-| **Free-form** | pytree | SGD via optax (handles pytrees natively) | `(loc_free, diag_free, factor_free)` |
-| **Structured** | pytree | Human-readable, distribution-specific | `(loc, cov_diag, cov_factor)` with `cov_diag > 0` |
+| **Free-form** | pytree | SGD via optax (handles pytrees natively) | `MVNParam(loc, diag_free, factor)` |
+| **Structured** | pytree | Human-readable, constraints satisfied | `MVNParam(loc, cov_diag, cov_factor)` with `cov_diag > 0` |
 | **Natural** (η) | flat array | Additive updates in filtering: `η_f = η_p + α` | `[η₁, η₂]` with `η₂` negative definite |
 | **Mean** (μ) | flat array | Averaging in `predict_mean`, TFP for KL/sampling | `[loc, cov_diag, cov_factor]` packed flat |
 
@@ -32,8 +45,9 @@ Every exponential-family distribution has four representations:
 
 **Why structured and free-form are pytrees:**
 - JAX and optax handle pytrees natively — no manual flatten/unflatten
-- Each subclass defines its own pytree structure
+- Each subclass defines its own pytree structure (e.g. `MVNParam` NamedTuple)
 - Constraints (e.g. softplus) apply to individual leaves
+- Equinox stores pytree fields on modules directly
 
 ## Conversion Flow
 
@@ -76,6 +90,7 @@ where needed (`to_free`, `mean_to_natural`, `mean_to_structured`).
 | Method | Signature | Role |
 |--------|-----------|------|
 | `param_from_conf` | `(**kwargs) → pytree` | Create free-form pytree from serializable spec |
+| `param_size` | `(dim) → int` | Natural parameter vector size |
 
 ### Structured ↔ free-form (pytree ↔ pytree)
 
@@ -105,30 +120,32 @@ where needed (`to_free`, `mean_to_natural`, `mean_to_structured`).
 | `sample_by_mean` | `(key, μ, n) → z` | Draw `n` samples from the distribution |
 | `kl` | `(μ₁, μ₂) → scalar` | KL divergence `KL(p₁ ‖ p₂)` |
 | `predict_mean` | `(locs, noise_μ) → μ` | Predicted mean from batch of dynamics locations |
-| `param_size` | `(state_dim) → int` | Natural parameter vector size |
 
 ### Usage in XFADS
 
 ```python
-# Construction — stored as free-form pytrees
-self.prior_free = self.approx.param_from_conf(scale=1.0)
+# Construction — stored as free-form pytrees on the module
 self.noise_free = self.approx.param_from_conf(scale=conf.state_noise)
+self.unconstrained_prior_natural = self.approx.param_from_conf(scale=1.0)
 
 # Inference — derive natural/mean on the fly
 prior_natural = self.approx.mean_to_natural(
     self.approx.structured_to_mean(
-        self.approx.to_structured(self.prior_free)
+        self.approx.to_structured(self.unconstrained_prior_natural)
     )
 )
 noise_mean = self.approx.structured_to_mean(
     self.approx.to_structured(self.noise_free)
 )
 
-# Encoder outputs → flat natural params (encoders output flat for additive updates)
-alpha = encoder(y)  # flat natural param updates
-
-# Structured access for inspection
-loc, cov_diag, cov_factor = self.approx.to_structured(self.noise_free)
+# Encoder outputs are flat arrays → flat natural params
+# (encoders output flat for additive updates in filtering)
+def _free_to_natural(free_flat):
+    free_pytree = self.approx.mean_to_structured(free_flat)
+    return self.approx.mean_to_natural(
+        self.approx.structured_to_mean(self.approx.to_structured(free_pytree))
+    )
+alpha = _free_to_natural(encoder(y))
 ```
 
 ### Notes
@@ -137,26 +154,27 @@ loc, cov_diag, cov_factor = self.approx.to_structured(self.noise_free)
   mean params (flat).  Each subclass handles sufficient-statistic
   averaging internally.
 - Encoder outputs remain flat arrays (natural parameter updates for
-  additive filtering).  They are not pytrees.
+  additive filtering).  They pass through `mean_to_structured` →
+  `to_structured` → `structured_to_mean` → `mean_to_natural` to
+  convert from unconstrained flat to valid natural parameters.
 
 ## MVN Subclass
 
 `MVN(dim, rank)` implements the multivariate normal with covariance
 structure `Σ = diag(d) + U Uᵀ`.
 
-### Pytree Structures
+### MVNParam NamedTuple
 
-**Structured** (named tuple or plain tuple):
+```python
+class MVNParam(NamedTuple):
+    loc: Array        # (D,)
+    cov_diag: Array   # (D,)
+    cov_factor: Array # (D, r)
 ```
-(loc: (D,), cov_diag: (D,), cov_factor: (D, r))
-```
-Where `cov_diag > 0` (enforced by softplus in `to_structured`).
 
-**Free-form** (same shape, unconstrained):
-```
-(loc_free: (D,), diag_free: (D,), factor_free: (D, r))
-```
-Where `diag_free ∈ ℝ` (softplus inverse of `cov_diag`).
+Both structured and free-form use `MVNParam`.  The difference:
+- **Structured**: `cov_diag > 0` (constrained)
+- **Free-form**: `cov_diag ∈ ℝ` (unconstrained, softplus maps to positive)
 
 ### Flat Layouts
 
@@ -170,8 +188,11 @@ Where `diag_free ∈ ℝ` (softplus inverse of `cov_diag`).
 
 | Method | Role |
 |--------|------|
+| `structured_to_natural(MVNParam) → η_flat` | Convenience: compose `mean_to_natural(structured_to_mean(...))` |
+| `unpack(μ_flat) → (loc, cov)` | Extract `(loc, cov_diag_or_full)` from flat mean |
+| `pack(loc, cov) → μ_flat` | Inverse of `unpack` (lossy for rank > 0 via `_decompose_cov`) |
 | `full_cov(cov) → (D, D)` | Materialize full covariance matrix |
-| `mean_size(state_dim) → int` | Mean parameter vector size |
+| `mean_size(dim) → int` | Mean parameter vector size |
 
 ### Implementation Details
 
@@ -182,9 +203,9 @@ Where `diag_free ∈ ℝ` (softplus inverse of `cov_diag`).
 - KL divergence uses `tfd.MultivariateNormalFullCovariance` as backend
   because `tfd.MultivariateNormalDiagPlusLowRankCovariance` does not
   register a KL kernel in TFP.
-- `_decompose_cov` is a lossy operation for rank > 0: it zeros the
-  diagonal before eigendecomposition, so the off-diagonal reconstruction
-  is a best rank-r approximation.  The diagonal is preserved exactly.
+- `_decompose_cov` is lossy for rank > 0: it zeros the diagonal before
+  eigendecomposition, so the off-diagonal reconstruction is a best
+  rank-r approximation.  The diagonal is preserved exactly.
 
 ## Observation Likelihoods vs Latent Approximations
 
@@ -202,17 +223,6 @@ These are fundamentally different:
 - **Observation likelihoods** (Poisson, Gaussian, Bernoulli, etc.) only
   need to evaluate `E_q[log p(y | z)]`.  They are not restricted to
   exponential families — any density or even a neural likelihood works.
-
-### Current state
-
-The `Observation` ABC defines `eloglik(key, t, mean, y, approx, mc_size)`
-which receives the posterior `approx` instance for sampling.  Concrete
-likelihoods (Poisson, Gaussian) may internally call MVN-specific methods
-for analytical moment-matching — that is an implementation choice, not
-forced by the interface.
-
-Observation subclasses encapsulate their own parameters (readout weights,
-emission noise, etc.) and handle them internally.
 
 ### Why `approx` is passed to `eloglik`
 
@@ -233,10 +243,10 @@ and the given posterior approximation.
 ## Adding a New Distribution
 
 1. Subclass `Approx` in a new module under `src/jaxfads/distributions/`.
-2. Implement all abstract methods from the ABC.
-3. Define any distribution-specific methods (e.g. `full_cov` for MVN)
-   as regular methods on the subclass.
-4. Re-export from `src/jaxfads/distributions/__init__.py`.
-5. Add tests in `tests/test_distribution.py`.
-6. The subclass is automatically discoverable via
+2. Define a pytree type (e.g. a `NamedTuple`) for structured/free-form params.
+3. Implement all abstract methods from the ABC.
+4. Define any distribution-specific methods as regular methods on the subclass.
+5. Re-export from `src/jaxfads/distributions/__init__.py` (triggers registration).
+6. Add tests in `tests/test_distribution.py`.
+7. The subclass is automatically discoverable via
    `Approx.get_subclass("ClassName")` (from `SubclassRegistryMixin`).
