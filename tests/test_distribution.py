@@ -260,3 +260,47 @@ def test_lowrankcov(capsys):
     cov_lr = jnp.ones((2, 1))
 
     _ = tfp.MultivariateNormalDiagPlusLowRankCovariance(loc, cov_diag, cov_lr)
+
+
+# ---------------------------------------------------------------------------
+# unconstrain_moment / constrain_moment roundtrip
+# ---------------------------------------------------------------------------
+
+
+def test_diagmvn_unconstrain_moment_roundtrip():
+    """constrain_moment(unconstrain_moment(m)) ≈ m for DiagMVN."""
+    state_dim = 4
+    mean = jrnd.normal(jrnd.key(10), (state_dim,))
+    cov = jnp.abs(jrnd.normal(jrnd.key(11), (state_dim,))) + 0.1
+    moment = DiagMVN.canon_to_moment(mean, cov)
+
+    unconstrained = DiagMVN.unconstrain_moment(moment)
+    recovered = DiagMVN.constrain_moment(unconstrained)
+    chex.assert_trees_all_close(recovered, moment, atol=1e-5)
+
+
+def test_fullmvn_unconstrain_moment_roundtrip():
+    """constrain_moment(unconstrain_moment(m)) ≈ m for FullMVN."""
+    state_dim = 3
+    mean = jrnd.normal(jrnd.key(20), (state_dim,))
+    # Build a valid PSD covariance
+    A = jrnd.normal(jrnd.key(21), (state_dim, state_dim))
+    cov = A @ A.T + 0.1 * jnp.eye(state_dim)
+    moment = FullMVN.canon_to_moment(mean, cov)
+
+    unconstrained = FullMVN.unconstrain_moment(moment)
+    recovered = FullMVN.constrain_moment(unconstrained)
+    chex.assert_trees_all_close(recovered, moment, atol=1e-4)
+
+
+def test_init_noise_produces_expected_moment():
+    """Approx.init_noise → constrain_moment gives correct noise distribution."""
+    state_dim = 3
+    cov_init = 2.0
+
+    unconstrained = DiagMVN.init_noise(cov_init, state_dim)
+    moment = DiagMVN.constrain_moment(unconstrained)
+    mean, var = DiagMVN.moment_to_canon(moment)
+
+    chex.assert_trees_all_close(mean, jnp.zeros(state_dim), atol=1e-6)
+    chex.assert_trees_all_close(var, jnp.full(state_dim, cov_init), atol=1e-5)

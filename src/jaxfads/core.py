@@ -17,59 +17,7 @@ from jax import numpy as jnp
 from jax import random as jrnd
 from jax.lax import scan
 
-from .base import Noise
 from .distributions import Approx
-
-
-def predict_moment(
-    z: Array,
-    u: Array,
-    c: Array,
-    f: Callable[..., Array],
-    noise: Noise,
-    approx: type[Approx],
-    *,
-    key: Array | None = None,
-) -> Array:
-    """
-    Predict moment parameters for next state given current state.
-
-    Computes the moment parameters of p(z_{t+1} | z_t, u_t, c_t) by
-    applying the dynamics function and incorporating process noise.
-
-    Parameters
-    ----------
-    z : Array, shape (state_dim,)
-        Current state vector.
-    u : Array, shape (input_dim,)
-        Control/input vector.
-    c : Array, shape (covariate_dim,)
-        Covariate vector.
-    f : Callable
-        Dynamics function mapping (z, u, c) -> z_next.
-    noise : Noise
-        Noise model providing covariance structure.
-    approx : type[Approx]
-        Exponential family approximation class.
-    key : PRNGKeyArray, optional
-        Random key for stochastic dynamics.
-
-    Returns
-    -------
-    Array
-        Moment parameters of the predictive distribution p(z_{t+1} | z_t, u_t, c_t).
-
-    Notes
-    -----
-    The predictive distribution is constructed as:
-    p(z_{t+1} | z_t) = N(f(z_t, u_t, c_t), Σ_noise)
-
-    where f is the deterministic dynamics and Σ_noise is the process noise.
-    """
-    ztp1 = f(z, u, c, key=key)
-    M2 = approx.noise_moment(noise.cov())
-    moment = approx.canon_to_moment(ztp1, M2)
-    return moment
 
 
 def sample_expected_moment(
@@ -78,32 +26,35 @@ def sample_expected_moment(
     u: Array,
     c: Array,
     f: Callable[..., Array],
-    noise: Noise,
+    noise_moment: Array,
     approx: type[Approx],
     mc_size: int,
 ) -> Array:
     """
-    Compute expected moment parameters via Monte Carlo sampling.
+    Compute expected mean parameter via Monte Carlo sampling.
 
-    Approximates E_{p(z_t)}[μ(z_t, u_t, c_t)] where μ(·) gives the moment
-    parameters of the predictive distribution p(z_{t+1} | z_t, u_t, c_t).
-    This expectation is intractable for nonlinear dynamics, so we use
-    Monte Carlo approximation.
+    Implements Eq (12): ``μ̄_t = E_{π(z_{t-1})}[μ_θ(z_{t-1})]``
+    where ``μ_θ`` is the mean parameter of ``p(z_t | f(z_{t-1}), θ)``.
+
+    Averaging is performed in mean-parameter space (where it is
+    valid by linearity), then converted back to the code's moment
+    format for downstream use.
 
     Parameters
     ----------
     key : PRNGKeyArray
         Random key for sampling.
     moment : Array
-        Moment parameters of current state distribution p(z_t).
+        Moment parameters of current state distribution q(z_t)
+        in the code's ``(mean, cov)`` format.
     u : Array, shape (input_dim,)
         Control/input vector.
     c : Array, shape (covariate_dim,)
         Covariate vector.
     f : Callable
         Dynamics function.
-    noise : Noise
-        Process noise model.
+    noise_moment : Array
+        Noise parameters in the code's moment format.
     approx : type[Approx]
         Exponential family approximation.
     mc_size : int
@@ -112,56 +63,50 @@ def sample_expected_moment(
     Returns
     -------
     Array
-        Expected moment parameters E_{p(z_t)}[μ(z_t, u_t, c_t)].
+        Predicted moment parameters in the code's ``(mean, cov)``
+        format, with covariance ``Var[f(z)] + Q``.
 
     Notes
     -----
-    The Monte Carlo approximation is:
-    E[μ(z_t)] ≈ (1/K) Σ_{k=1}^K μ(z_t^{(k)})
-
-    where z_t^{(k)} ~ p(z_t) are samples from the current state distribution.
-
     The same ``key`` is intentionally reused for every MC sample when
     evaluating ``f``.  This keeps any stochastic regularisation inside
-    ``f`` (e.g. dropout) fixed within the expectation: the MC estimate
-    integrates over latent uncertainty z ~ q(z_t) only, not over
-    dropout randomness.
+    ``f`` (e.g. dropout) fixed within the expectation.
 
     Non-finite handling:
-    After computing per-sample moments, any sample containing NaN or Inf
-    values is masked out. The mean is taken only over valid (all-finite)
-    samples. If *every* sample is non-finite, the function falls back to
-    the deterministic prediction at the posterior mean ``z_mean`` (no MC).
-    This makes the MC estimate robust against rare dynamics blow-ups
-    (e.g. stiff ODEs, overflow in ``exp``) without requiring users to
-    clamp their dynamics functions.
+    After computing per-sample mean parameters, any sample containing
+    NaN or Inf values is masked out.  If every sample is non-finite,
+    the function falls back to the deterministic prediction at the
+    posterior mean.
     """
     key, subkey = jrnd.split(key)
     z = approx.sample_by_moment(subkey, moment, mc_size)
-    u = jnp.broadcast_to(u, shape=(mc_size,) + u.shape)
-    c = jnp.broadcast_to(c, shape=(mc_size,) + c.shape)
-    f_vmap_sample_axis = jax.vmap(
-        partial(predict_moment, f=f, noise=noise, approx=approx, key=key),
-        in_axes=(0, 0, 0),
-    )
-    moments = f_vmap_sample_axis(z, u, c)  # (mc_size, param_size)
+    u_bc = jnp.broadcast_to(u, shape=(mc_size,) + u.shape)
+    c_bc = jnp.broadcast_to(c, shape=(mc_size,) + c.shape)
 
-    # --- nonfinite-safe aggregation ---
-    # valid_k: True when all moment entries for sample k are finite
-    valid = jnp.all(jnp.isfinite(moments), axis=-1)  # (mc_size,)
+    # Dynamics locations for each MC sample
+    locs = jax.vmap(partial(f, key=key), in_axes=(0, 0, 0))(z, u_bc, c_bc)
+
+    # Mean parameters: μ_θ(z^s) = E[T(z_t) | f(z^s), noise]
+    mean_params = jax.vmap(approx.predict_moment, in_axes=(0, None))(
+        locs, noise_moment
+    )  # (mc_size, param_size)
+
+    # --- nonfinite-safe averaging in mean-parameter space ---
+    valid = jnp.all(jnp.isfinite(mean_params), axis=-1)  # (mc_size,)
     n_valid = jnp.sum(valid)
-    # Masked mean (zero out entire invalid rows so NaN/Inf don't poison the sum)
-    safe_moments = jnp.where(valid[:, None], moments, 0.0)
-    mc_mean = jnp.sum(safe_moments, axis=0) / jnp.maximum(n_valid, 1.0)
+    safe = jnp.where(valid[:, None], mean_params, 0.0)
+    avg = jnp.sum(safe, axis=0) / jnp.maximum(n_valid, 1.0)
 
-    # Fallback: deterministic prediction at the posterior mean (deferred)
+    # Fallback: deterministic prediction at the posterior mean
     def _fallback(_):
         z_mean, _ = approx.moment_to_canon(moment)
-        return predict_moment(
-            z_mean, u[0], c[0], f=f, noise=noise, approx=approx, key=key
-        )
+        loc = f(z_mean, u, c, key=key)
+        return approx.predict_moment(loc, noise_moment)
 
-    return jax.lax.cond(n_valid > 0, lambda _: mc_mean, _fallback, None)
+    avg_mean_param = jax.lax.cond(n_valid > 0, lambda _: avg, _fallback, None)
+
+    # Convert from mean-parameter space to code's (mean, cov) format
+    return approx.mean_param_to_moment(avg_mean_param)
 
 
 class Mode(StrEnum):
@@ -236,7 +181,7 @@ def filter(
     expected_moment_forward = partial(
         sample_expected_moment,
         f=model.forward,
-        noise=model.forward,
+        noise_moment=model.noise_moment(),
         approx=approx,
         mc_size=model.conf.mc_size,
     )
@@ -339,14 +284,14 @@ def bismooth(
     expected_moment_forward = partial(
         sample_expected_moment,
         f=model.forward,
-        noise=model.forward,
+        noise_moment=model.noise_moment(),
         approx=approx,
         mc_size=mc_size,
     )
     expected_moment_backward = partial(
         sample_expected_moment,
         f=model.backward,
-        noise=model.backward,
+        noise_moment=model.noise_moment(),
         approx=approx,
         mc_size=mc_size,
     )

@@ -8,9 +8,7 @@ components to keep concrete implementations in their respective modules.
 from __future__ import annotations
 
 from abc import abstractmethod
-from typing import Protocol
 
-import equinox as eqx
 from jax import Array
 
 from gearax.mixin import SubclassRegistryMixin
@@ -19,36 +17,18 @@ from gearax.modules import ConfModule
 from .distributions import Approx
 
 
-class Noise(Protocol):
-    """
-    Protocol for noise models in dynamics systems.
-
-    Defines the interface that all noise models must implement to be
-    compatible with XFADS dynamics models.
-    """
-
-    def cov(self) -> Array:
-        """
-        Get the noise covariance matrix.
-
-        Returns
-        -------
-        Array
-            Noise covariance matrix or covariance parameters.
-        """
-        ...
-
-
 class Dynamics(SubclassRegistryMixin, ConfModule):  # pyright: ignore[reportImplicitAbstractClass]
     """
     Abstract base class for dynamics models in XFADS.
 
     Defines the interface for state transition models that describe how
-    the latent state evolves over time. Concrete subclasses implement
-    specific dynamics such as linear, nonlinear, or neural dynamics.
-    """
+    the latent state evolves over time.  Concrete subclasses implement
+    the deterministic transition ``forward(z, u, c)``.
 
-    noise: eqx.AbstractVar[Noise]
+    Process noise is **not** stored here — it is owned by the
+    orchestrating model (``XFADS``) so that ``Dynamics`` stays a pure
+    transition function.
+    """
 
     @abstractmethod
     def forward(self, z: Array, u: Array, c: Array, *, key=None) -> Array:
@@ -84,28 +64,6 @@ class Dynamics(SubclassRegistryMixin, ConfModule):  # pyright: ignore[reportImpl
         """
         return self.forward(*args, **kwargs)
 
-    def cov(self) -> Array:
-        """
-        Get the process noise covariance.
-
-        Returns
-        -------
-        Array
-            Noise covariance matrix or parameters.
-        """
-        return self.noise.cov()
-
-    def loss(self) -> Array | float:
-        """
-        Compute regularization loss for the dynamics.
-
-        Returns
-        -------
-        Array or float
-            Regularization loss (default: 0.0).
-        """
-        return 0.0
-
 
 class ObservationModel(SubclassRegistryMixin, ConfModule):
     """
@@ -138,4 +96,4 @@ class ObservationModel(SubclassRegistryMixin, ConfModule):
         ...
 
 
-__all__ = ["Dynamics", "Noise", "ObservationModel"]
+__all__ = ["Dynamics", "ObservationModel"]

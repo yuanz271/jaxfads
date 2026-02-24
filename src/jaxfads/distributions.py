@@ -286,20 +286,21 @@ class Approx(SubclassRegistryMixin, ABC):
 
     @classmethod
     @abstractmethod
-    def noise_moment(cls, noise_cov: Array) -> Array:
+    def unconstrain_moment(cls, moment: Array) -> Array:
         """
-        Convert noise covariance to moment parameter format.
+        Transform valid moment parameters to unconstrained space.
+
+        Inverse of :meth:`constrain_moment`.
 
         Parameters
         ----------
-        noise_cov : Array
-            Diagonal noise covariance values.
+        moment : Array
+            Valid moment parameter vector.
 
         Returns
         -------
         Array
-            Noise covariance in the format expected by this approximation
-            (e.g., diagonal vector or full matrix).
+            Unconstrained parameters suitable for optimization.
         """
         ...
 
@@ -318,6 +319,80 @@ class Approx(SubclassRegistryMixin, ABC):
         -------
         Array
             Natural parameters for N(0, I) prior distribution.
+        """
+        ...
+
+    @classmethod
+    @abstractmethod
+    def init_noise(cls, scale: float, state_dim: int) -> Array:
+        """
+        Create unconstrained noise moment parameters.
+
+        Each exponential-family subclass decides how to interpret
+        *scale* for its own parameterisation and returns an array
+        suitable for storage in
+        ``XFADS.unconstrained_noise_moment``.
+
+        Parameters
+        ----------
+        scale : float
+            Noise scale (interpretation is family-specific,
+            e.g. variance for Gaussians).
+        state_dim : int
+            Dimensionality of the latent state.
+
+        Returns
+        -------
+        Array
+            Unconstrained moment parameters.
+        """
+        ...
+
+    @classmethod
+    @abstractmethod
+    def predict_moment(cls, loc: Array, noise_moment: Array) -> Array:
+        """
+        Mean parameter of the predictive distribution p(z | loc, noise).
+
+        Computes ``E_{p(z|loc,noise)}[T(z)]`` — the expected sufficient
+        statistics (mean parameter) of the one-step-ahead distribution.
+        The result lives in mean-parameter space where linear averaging
+        is valid.
+
+        Parameters
+        ----------
+        loc : Array, shape (state_dim,)
+            Dynamics output (deterministic location).
+        noise_moment : Array
+            Noise parameters in the code's moment format.
+
+        Returns
+        -------
+        Array
+            Mean parameter vector of the predictive distribution.
+        """
+        ...
+
+    @classmethod
+    @abstractmethod
+    def mean_param_to_moment(cls, mean_param: Array) -> Array:
+        """
+        Convert mean parameter to the code's moment format.
+
+        Inverse mapping from the mean-parameter space (where averaging
+        is valid) to the ``(mean, cov)`` moment format used by the
+        rest of the codebase.
+
+        Parameters
+        ----------
+        mean_param : Array
+            Mean parameter vector (output of :meth:`predict_moment`).
+
+        Returns
+        -------
+        Array
+            Moment vector in the code's ``(mean, cov)`` format,
+            compatible with :meth:`moment_to_natural`.
         """
         ...
 
@@ -497,9 +572,39 @@ class FullMVN(Approx):
         return jnp.concatenate((nat1, L.flatten()))
 
     @classmethod
-    def noise_moment(cls, noise_cov) -> Array:
-        """See base class. Converts diagonal noise to full matrix."""
-        return jnp.diag(noise_cov)
+    def unconstrain_moment(cls, moment: Array) -> Array:
+        """See base class. Recovers Cholesky factor L from Σ = LL^T."""
+        n = jnp.size(moment)
+        m = cls.variable_size(n)
+        loc, v = jnp.split(moment, [m])
+        V = jnp.reshape(v, (m, m))
+        L = jnp.linalg.cholesky(V + _EPS * jnp.eye(m))
+        return jnp.concatenate((loc, L.flatten()))
+
+    @classmethod
+    def init_noise(cls, scale: float, state_dim: int) -> Array:
+        """See base class. Isotropic Gaussian: N(0, scale·I)."""
+        moment = cls.canon_to_moment(
+            jnp.zeros(state_dim), jnp.diag(jnp.full(state_dim, scale))
+        )
+        return cls.unconstrain_moment(moment)
+
+    @classmethod
+    def predict_moment(cls, loc: Array, noise_moment: Array) -> Array:
+        """See base class. Mean parameter: [loc, loc·locᵀ + Q]."""
+        _, cov = cls.moment_to_canon(noise_moment)
+        second_moment = jnp.outer(loc, loc) + cov
+        return jnp.concatenate((loc, second_moment.flatten()))
+
+    @classmethod
+    def mean_param_to_moment(cls, mean_param: Array) -> Array:
+        """See base class. [m, M] → [m, M - m·mᵀ]."""
+        n = jnp.size(mean_param)
+        m = cls.variable_size(n)
+        mean, second_flat = jnp.split(mean_param, [m])
+        second = jnp.reshape(second_flat, (m, m))
+        cov = second - jnp.outer(mean, mean)
+        return jnp.concatenate((mean, cov.flatten()))
 
 
 
@@ -517,13 +622,13 @@ class LoRaMVN(Approx):
     .. warning::
 
         **Incomplete implementation.** Only ``constrain_moment`` and
-        ``noise_moment`` are implemented. All other ``Approx`` methods
+        ``constrain_natural`` are implemented. All other ``Approx`` methods
         (``natural_to_moment``, ``moment_to_natural``, ``sample_by_moment``,
         ``param_size``, ``kl``, ``moment_to_canon``, ``canon_to_moment``,
-        ``full_cov``, ``constrain_natural``, ``unconstrain_natural``,
-        ``prior_natural``) raise ``NotImplementedError``. Do not select
-        this class as the approximation family until the remaining methods
-        are filled in.
+        ``full_cov``, ``unconstrain_natural``, ``unconstrain_moment``,
+        ``init_noise``, ``prior_natural``) raise ``NotImplementedError``.
+        Do not select this class as the approximation family until the
+        remaining methods are filled in.
 
     Notes
     -----
@@ -625,14 +730,29 @@ class LoRaMVN(Approx):
         raise NotImplementedError("LoRaMVN.unconstrain_natural is not yet implemented.")
 
     @classmethod
-    def noise_moment(cls, noise_cov) -> Array:
-        """See base class. Converts diagonal noise to full matrix."""
-        return jnp.diag(noise_cov)
+    def unconstrain_moment(cls, moment: Array) -> Array:
+        """See base class."""
+        raise NotImplementedError("LoRaMVN.unconstrain_moment is not yet implemented.")
 
     @classmethod
     def prior_natural(cls, state_dim: int) -> Array:
         """See base class."""
         raise NotImplementedError("LoRaMVN.prior_natural is not yet implemented.")
+
+    @classmethod
+    def init_noise(cls, scale: float, state_dim: int) -> Array:
+        """See base class."""
+        raise NotImplementedError("LoRaMVN.init_noise is not yet implemented.")
+
+    @classmethod
+    def predict_moment(cls, loc: Array, noise_moment: Array) -> Array:
+        """See base class."""
+        raise NotImplementedError("LoRaMVN.predict_moment is not yet implemented.")
+
+    @classmethod
+    def mean_param_to_moment(cls, mean_param: Array) -> Array:
+        """See base class."""
+        raise NotImplementedError("LoRaMVN.mean_param_to_moment is not yet implemented.")
 
 
 
@@ -771,7 +891,29 @@ class DiagMVN(Approx):
         return jnp.concatenate((n1, n2))
 
     @classmethod
-    def noise_moment(cls, noise_cov: Array) -> Array:
-        """See base class. Identity for diagonal case."""
-        return noise_cov
+    def unconstrain_moment(cls, moment: Array) -> Array:
+        """See base class. Inverts constrain_moment (softplus inverse on variance)."""
+        loc, v = jnp.split(moment, 2)
+        v = unconstrain_positive(v)
+        return jnp.concatenate((loc, v))
+
+    @classmethod
+    def init_noise(cls, scale: float, state_dim: int) -> Array:
+        """See base class. Isotropic diagonal Gaussian: N(0, scale·I)."""
+        moment = cls.canon_to_moment(
+            jnp.zeros(state_dim), jnp.full(state_dim, scale)
+        )
+        return cls.unconstrain_moment(moment)
+
+    @classmethod
+    def predict_moment(cls, loc: Array, noise_moment: Array) -> Array:
+        """See base class. Mean parameter: [loc, loc² + Q]."""
+        _, cov = cls.moment_to_canon(noise_moment)
+        return jnp.concatenate((loc, loc**2 + cov))
+
+    @classmethod
+    def mean_param_to_moment(cls, mean_param: Array) -> Array:
+        """See base class. [m, s] → [m, s - m²]."""
+        mean, second = jnp.split(mean_param, 2)
+        return jnp.concatenate((mean, second - mean**2))
 

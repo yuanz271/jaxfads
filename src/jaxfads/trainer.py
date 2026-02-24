@@ -196,8 +196,8 @@ def batch_loss(model, batch, key, step, *, kl_warmup_steps=0):
     )
 
     loss = (
-        jnp.mean(free_energy) + model.conf.noise_penalty * model.forward.loss()
-        # + model.conf.noise_penalty * model.backward.loss()
+        jnp.mean(free_energy) + model.conf.noise_penalty * model.noise_loss()
+        # + model.conf.noise_penalty * model.backward_noise_loss()
     )
 
     return loss

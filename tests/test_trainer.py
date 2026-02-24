@@ -5,30 +5,21 @@ from omegaconf import OmegaConf
 
 from jaxfads.trainer import train
 from jaxfads.smoother import XFADS
-from jaxfads.base import Dynamics, Noise
+from jaxfads.base import Dynamics
 import jaxfads.observations  # noqa: F401 — register GLM subclass
 
 
 class MockDynamics(Dynamics):
-    """Mock dynamics for testing."""
+    """Mock dynamics for testing — pure deterministic identity."""
 
-    noise: Noise
     layer: eqx.Module | None
 
     def __init__(self, conf, key):
-        from jaxfads.dynamics import DiagGaussian
-
         self.conf = conf
-        state_dim = self.conf.state_dim
-        state_noise = self.conf.state_noise
-        self.noise = DiagGaussian(jnp.array(state_noise), state_dim)
         self.layer = None
 
     def forward(self, z, u, c, *, key=None) -> Array:
         return z
-
-    def loss(self):
-        return 0.0
 
 
 @pytest.fixture

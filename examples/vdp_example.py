@@ -23,7 +23,6 @@ from omegaconf import OmegaConf
 
 from jaxfads import XFADS, configure_logging
 from jaxfads.base import Dynamics
-from jaxfads.dynamics import DiagGaussian
 from jaxfads.nn import make_mlp
 from jaxfads.observations import GLM  # noqa: F401 — registers GLM
 from jaxfads.trainer import train
@@ -83,15 +82,16 @@ def simulate_vdp(
 
 
 class VDPDynamics(Dynamics):
-    """Exact Van der Pol step (no model mismatch)."""
+    """Exact Van der Pol step (no model mismatch).
 
-    noise: DiagGaussian
+    Noise is auto-initialised by XFADS via ``state_noise`` in dyn_conf.
+    """
+
     mu: float
     dt: float
 
     def __init__(self, conf, key):
         self.conf = conf
-        self.noise = DiagGaussian(jnp.array(conf.cov), conf.state_dim)
         self.mu, self.dt = float(conf.mu), float(conf.dt)
 
     def rhs(self, z):
@@ -101,24 +101,20 @@ class VDPDynamics(Dynamics):
     def forward(self, z, u, c, *, key=None):
         return rk4_step(z, self.dt, mu=self.mu)
 
-    def loss(self):
-        return jnp.mean(self.cov())
-
 
 class MLPDynamics(Dynamics):
     """Trainable MLP dynamics with Euler integration.
 
     The MLP learns the continuous-time derivative ``f(z)``,
     and ``forward`` applies a single Euler step: ``z + dt · f(z)``.
+    Noise is auto-initialised by XFADS via ``state_noise`` in dyn_conf.
     """
 
-    noise: DiagGaussian
     net: enn.Sequential
     dt: float
 
     def __init__(self, conf, key):
         self.conf = conf
-        self.noise = DiagGaussian(jnp.array(conf.cov), conf.state_dim)
         self.dt = float(conf.dt)
         self.net = make_mlp(
             conf.state_dim, conf.state_dim,
@@ -131,9 +127,6 @@ class MLPDynamics(Dynamics):
 
     def forward(self, z, u, c, *, key=None):
         return z + self.dt * self.rhs(z)
-
-    def loss(self):
-        return jnp.mean(self.cov())
 
 
 # ---------------------------------------------------------------------------
@@ -482,7 +475,7 @@ def main() -> None:
         **shared_conf, "forward": "VDPDynamics", "mc_size": 1,
         "dyn_conf": dict(
             state_dim=state_dim, input_dim=0, context_dim=0,
-            mu=mu, dt=dt, cov=1.0,
+            mu=mu, dt=dt, state_noise=1.0,
         ),
     })
     model1 = XFADS(conf1, jr.key(123))
@@ -525,7 +518,7 @@ def main() -> None:
         **shared_conf, "forward": "MLPDynamics", "mc_size": 4,
         "dyn_conf": dict(
             state_dim=state_dim, input_dim=0, context_dim=0,
-            cov=1.0, width=32, depth=1, dt=dt,
+            state_noise=1.0, width=32, depth=1, dt=dt,
         ),
     })
     model2 = XFADS(conf2, jr.key(456))

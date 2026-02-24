@@ -116,6 +116,7 @@ class XFADS(ConfModule):
     beta_encoder: Callable
     masker: DataMasker
     unconstrained_prior_natural: Array
+    unconstrained_noise_moment: Array
 
     def __init__(self, conf, key=None):  # key unused; seed from conf for serializable reproducibility
         """
@@ -162,6 +163,10 @@ class XFADS(ConfModule):
         self.forward = Dynamics.get_subclass(forward)(
             self.conf.dyn_conf,
             key=ky,
+        )
+
+        self.unconstrained_noise_moment = self.approx.init_noise(
+            self.conf.dyn_conf.state_noise, state_dim
         )
 
         key, ky = jrnd.split(key)
@@ -275,6 +280,40 @@ class XFADS(ConfModule):
         for the chosen exponential family approximation.
         """
         return self.approx.constrain_natural(self.unconstrained_prior_natural)
+
+    def noise_moment(self) -> Array:
+        """
+        Get constrained noise moment parameters.
+
+        Returns
+        -------
+        Array
+            Moment parameters of the noise distribution.
+        """
+        return self.approx.constrain_moment(self.unconstrained_noise_moment)
+
+    def noise_cov(self) -> Array:
+        """
+        Get the process noise dispersion in canonical format.
+
+        Returns
+        -------
+        Array
+            Canonical dispersion (e.g., covariance for Gaussian).
+        """
+        _, disp = self.approx.moment_to_canon(self.noise_moment())
+        return disp
+
+    def noise_loss(self) -> Array:
+        """
+        Compute regularization loss for the process noise.
+
+        Returns
+        -------
+        Array
+            Mean of canonical dispersion.
+        """
+        return jnp.mean(self.noise_cov())
 
     def __call__(self, t, y, u, c, *, key) -> tuple[Array, Array, Array]:
         """

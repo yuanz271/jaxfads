@@ -5,17 +5,17 @@ from tempfile import TemporaryDirectory
 from jax import Array, random as jr
 from omegaconf import OmegaConf, DictConfig
 import equinox as eqx
-from jaxfads.base import Dynamics, Noise
+from jaxfads.base import Dynamics
 from jaxfads.smoother import XFADS
 
 
 class Mock(Dynamics):
-    noise: Noise | None
+    """Mock dynamics — pure deterministic transition."""
+
     layer: eqx.Module | None
 
     def __init__(self, conf: DictConfig, key: Array):
         self.conf = conf
-        self.noise = None
         self.layer = None
 
     @override
@@ -91,6 +91,10 @@ def test_constructor():
     )
 
     model = XFADS(model_conf, jr.key(seed))
+
+    # Verify noise is on the model, not on forward dynamics
+    assert model.unconstrained_noise_moment is not None
+    assert not hasattr(model.forward, "unconstrained_noise_moment")
 
     with TemporaryDirectory() as tmp_dir:
         path = Path(tmp_dir) / "model.zip"

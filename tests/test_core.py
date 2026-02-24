@@ -6,16 +6,13 @@ from jax import random as jrnd
 
 from jaxfads import core
 from jaxfads.distributions import DiagMVN
-from jaxfads.base import Dynamics, Noise
-from jaxfads.dynamics import DiagGaussian
+from jaxfads.base import Dynamics
 
 
 class IdentityDynamics(Dynamics):
-    noise: Noise
 
-    def __init__(self, state_dim: int, cov: float = 1.0):
+    def __init__(self, state_dim: int):
         self.conf = SimpleNamespace(state_dim=state_dim)
-        self.noise = DiagGaussian(jnp.array(cov), state_dim)
 
     def forward(self, z, u, c, *, key=None):
         del u, c, key
@@ -23,15 +20,21 @@ class IdentityDynamics(Dynamics):
 
 
 class DummyModel:
-    def __init__(self, state_dim: int, mc_size: int = 1):
+    """Minimal model duck-typing XFADS for core.filter / core.bismooth."""
+
+    def __init__(self, state_dim: int, mc_size: int = 1, cov: float = 1.0):
         self.approx = DiagMVN
         self.conf = SimpleNamespace(mc_size=mc_size)
         self.forward = IdentityDynamics(state_dim)
         self.backward = IdentityDynamics(state_dim)
         self._state_dim = state_dim
+        self._unconstrained_noise = DiagMVN.init_noise(cov, state_dim)
 
     def prior_natural(self):
         return DiagMVN.prior_natural(self._state_dim)
+
+    def noise_moment(self):
+        return DiagMVN.constrain_moment(self._unconstrained_noise)
 
 
 def test_filter_shapes_and_finite():
