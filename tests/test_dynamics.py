@@ -109,23 +109,25 @@ def _threshold_dynamics(
     return jnp.where(safe, z * 0.9, jnp.full_like(z, jnp.nan))
 
 
-def test_sample_expected_moment_partial_invalid(diag):
+def test_sample_expected_moment_partial_invalid():
     """When some MC samples produce NaN, the output should still be finite."""
     state_dim, mc_size = 4, 64
     key = jrnd.key(42)
-    noise_mom = make_noise_moment(diag, state_dim)
+    from jaxfads.distributions import MVN
+    diag4 = MVN(dim=state_dim, rank=0)
+    noise_mom = make_noise_moment(diag4, state_dim)
 
-    moment = diag.canon_to_moment(jnp.zeros(state_dim), jnp.full(state_dim, 25.0))
+    moment = diag4.canon_to_moment(jnp.zeros(state_dim), jnp.full(state_dim, 25.0))
     f = fpartial(_threshold_dynamics, radius=3.0)
 
     result = jax.jit(
         lambda k: sample_expected_moment(
-            k, moment, jnp.zeros(0), jnp.zeros(0), f, noise_mom, diag, mc_size
+            k, moment, jnp.zeros(0), jnp.zeros(0), f, noise_mom, diag4, mc_size
         )
     )(key)
 
     assert jnp.all(jnp.isfinite(result))
-    chex.assert_shape(result, (diag.param_size(state_dim),))
+    chex.assert_shape(result, (diag4.param_size(state_dim),))
 
 
 def test_sample_expected_moment_all_invalid(diag):

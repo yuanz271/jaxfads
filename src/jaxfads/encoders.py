@@ -78,7 +78,7 @@ class AlphaEncoder(ConfModule):
         """
         self.conf = conf
         approx_cls = Approx.get_subclass(conf.approx)
-        approx = approx_cls(**conf.approx_kwargs)
+        approx = approx_cls(dim=conf.state_dim, **conf.approx_kwargs)
         self.layer = make_mlp(
             conf.observation_dim,
             approx.param_size(conf.state_dim),
@@ -182,7 +182,7 @@ class BetaEncoder(ConfModule):
         """
         self.conf = conf
         approx_cls = Approx.get_subclass(conf.approx)
-        approx = approx_cls(**conf.approx_kwargs)
+        approx = approx_cls(dim=conf.state_dim, **conf.approx_kwargs)
 
         param_size = approx.param_size(conf.state_dim)
 

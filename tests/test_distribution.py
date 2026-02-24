@@ -76,10 +76,12 @@ def test_diagmvn_kl_matches_closed_form(diag):
     m2 = jnp.array([0.0, 0.0, 1.0])
     v2 = jnp.array([1.0, 1.0, 0.5])
 
-    moment1 = diag.canon_to_moment(m1, v1)
-    moment2 = diag.canon_to_moment(m2, v2)
+    # Need dim=3 for this test since diag fixture has dim=2
+    diag3 = MVN(dim=3, rank=0)
+    moment1 = diag3.canon_to_moment(m1, v1)
+    moment2 = diag3.canon_to_moment(m2, v2)
 
-    kl_actual = diag.kl(moment1, moment2)
+    kl_actual = diag3.kl(moment1, moment2)
     kl_expected = _kl_closed_form(m1, v1, m2, v2)
     chex.assert_tree_all_finite(kl_actual)
     chex.assert_trees_all_close(kl_actual, kl_expected, atol=1e-5)
@@ -97,26 +99,27 @@ def test_diagmvn_kl_matches_closed_form(diag):
     chex.assert_tree_all_finite(kl_actual_b)
     chex.assert_trees_all_close(kl_actual_b, kl_expected_b, atol=1e-4)
 
-    kl_self = diag.kl(moment1, moment1)
+    kl_self = diag.kl(moment1b, moment1b)
     chex.assert_trees_all_close(kl_self, jnp.array(0.0), atol=1e-6)
 
 
 # ---------------------------------------------------------------------------
-# Full MVN (rank=-1)
+# Full-rank MVN (rank=D)
 # ---------------------------------------------------------------------------
 
 
-def test_fullmvn_constrain_moment(full_mvn):
+def test_fullrank_constrain_moment():
     """constrain_moment produces valid structured moment."""
     state_dim = 3
+    full = MVN(dim=state_dim, rank=state_dim)
     unc_size = state_dim * (2 + state_dim)
     unconstrained = jrnd.normal(jrnd.key(0), (unc_size,))
 
-    moment = full_mvn.constrain_moment(unconstrained)
+    moment = full.constrain_moment(unconstrained)
     chex.assert_shape(moment, (unc_size,))
     chex.assert_tree_all_finite(moment)
 
-    mean, cov = full_mvn.moment_to_canon(moment)
+    mean, cov = full.moment_to_canon(moment)
     chex.assert_shape(mean, (state_dim,))
     chex.assert_shape(cov, (state_dim, state_dim))
     chex.assert_trees_all_close(cov, cov.T, atol=1e-6)
@@ -124,13 +127,14 @@ def test_fullmvn_constrain_moment(full_mvn):
     assert jnp.all(eigenvalues > 0), f"Non-PD covariance: eigenvalues={eigenvalues}"
 
 
-def test_fullmvn_constrain_natural(full_mvn):
+def test_fullrank_constrain_natural():
     """constrain_natural produces valid natural params."""
     state_dim = 3
-    param_sz = full_mvn.param_size(state_dim)
+    full = MVN(dim=state_dim, rank=state_dim)
+    param_sz = full.param_size(state_dim)
     unconstrained = jrnd.normal(jrnd.key(1), (param_sz,))
 
-    natural = full_mvn.constrain_natural(unconstrained)
+    natural = full.constrain_natural(unconstrained)
     chex.assert_shape(natural, (param_sz,))
     chex.assert_tree_all_finite(natural)
 
@@ -139,37 +143,39 @@ def test_fullmvn_constrain_natural(full_mvn):
     eigenvalues = jnp.linalg.eigvalsh(nat2)
     assert jnp.all(eigenvalues < 0), f"nat2 not neg-def: eigenvalues={eigenvalues}"
 
-    moment = full_mvn.natural_to_moment(natural)
+    moment = full.natural_to_moment(natural)
     chex.assert_tree_all_finite(moment)
 
 
-def test_fullmvn_unconstrain_natural_roundtrip(full_mvn):
+def test_fullrank_unconstrain_natural_roundtrip():
     """unconstrain_natural inverts constrain_natural."""
     state_dim = 3
-    natural = full_mvn.prior_natural(state_dim)
-    unconstrained = full_mvn.unconstrain_natural(natural)
+    full = MVN(dim=state_dim, rank=state_dim)
+    natural = full.prior_natural(state_dim)
+    unconstrained = full.unconstrain_natural(natural)
     chex.assert_tree_all_finite(unconstrained)
 
-    natural_rt = full_mvn.constrain_natural(unconstrained)
+    natural_rt = full.constrain_natural(unconstrained)
     chex.assert_tree_all_finite(natural_rt)
 
-    moment = full_mvn.natural_to_moment(natural)
-    moment_rt = full_mvn.natural_to_moment(natural_rt)
+    moment = full.natural_to_moment(natural)
+    moment_rt = full.natural_to_moment(natural_rt)
     chex.assert_trees_all_close(moment, moment_rt, atol=1e-4)
 
 
-def test_fullmvn_natural_moment_roundtrip(full_mvn):
+def test_fullrank_natural_moment_roundtrip():
     """natural ↔ moment roundtrip via structured format."""
     d = 3
-    natural = full_mvn.prior_natural(d)
-    moment = full_mvn.natural_to_moment(natural)
+    full = MVN(dim=d, rank=d)
+    natural = full.prior_natural(d)
+    moment = full.natural_to_moment(natural)
     chex.assert_tree_all_finite(moment)
 
-    mean, cov = full_mvn.moment_to_canon(moment)
+    mean, cov = full.moment_to_canon(moment)
     chex.assert_trees_all_close(mean, jnp.zeros(d), atol=1e-5)
     chex.assert_trees_all_close(cov, jnp.eye(d), atol=1e-4)
 
-    natural_rt = full_mvn.moment_to_natural(moment)
+    natural_rt = full.moment_to_natural(moment)
     chex.assert_trees_all_close(natural, natural_rt, atol=1e-4)
 
 
@@ -185,34 +191,36 @@ def test_lowrankcov():
 # ---------------------------------------------------------------------------
 
 
-def test_diagmvn_unconstrain_moment_roundtrip(diag):
+def test_diagmvn_unconstrain_moment_roundtrip():
     """constrain_moment(unconstrain_moment(m)) ≈ m for rank=0."""
     state_dim = 4
+    diag4 = MVN(dim=state_dim, rank=0)
     mean = jrnd.normal(jrnd.key(10), (state_dim,))
     cov = jnp.abs(jrnd.normal(jrnd.key(11), (state_dim,))) + 0.1
-    moment = diag.canon_to_moment(mean, cov)
+    moment = diag4.canon_to_moment(mean, cov)
 
-    unconstrained = diag.unconstrain_moment(moment)
-    recovered = diag.constrain_moment(unconstrained)
+    unconstrained = diag4.unconstrain_moment(moment)
+    recovered = diag4.constrain_moment(unconstrained)
     chex.assert_trees_all_close(recovered, moment, atol=1e-5)
 
 
-def test_fullmvn_unconstrain_moment_roundtrip(full_mvn):
-    """constrain_moment(unconstrain_moment(m)) ≈ m for rank=-1."""
+def test_fullrank_unconstrain_moment_roundtrip():
+    """constrain_moment(unconstrain_moment(m)) ≈ m for rank=D."""
     state_dim = 3
+    full = MVN(dim=state_dim, rank=state_dim)
     mean = jrnd.normal(jrnd.key(20), (state_dim,))
     cov_diag = jnp.full(state_dim, 2.0)
     cov_factor = jnp.zeros((state_dim, state_dim))
     moment = jnp.concatenate((mean, cov_diag, cov_factor.flatten()))
 
-    unconstrained = full_mvn.unconstrain_moment(moment)
-    recovered = full_mvn.constrain_moment(unconstrained)
+    unconstrained = full.unconstrain_moment(moment)
+    recovered = full.constrain_moment(unconstrained)
     chex.assert_trees_all_close(recovered, moment, atol=1e-4)
 
 
 def test_init_noise_produces_expected_moment(diag):
     """init_noise → constrain_moment gives correct noise distribution."""
-    state_dim = 3
+    state_dim = 2
     cov_init = 2.0
 
     unconstrained = diag.init_noise(cov_init, state_dim)
@@ -228,14 +236,17 @@ def test_init_noise_produces_expected_moment(diag):
 # ---------------------------------------------------------------------------
 
 
-def test_param_size(diag, full_mvn):
-    assert diag.param_size(3) == 6
-    assert full_mvn.param_size(3) == 12
-    assert diag.moment_size(3) == 6
+def test_param_size():
+    diag3 = MVN(dim=3, rank=0)
+    full3 = MVN(dim=3, rank=3)
+    assert diag3.param_size(3) == 6
+    assert full3.param_size(3) == 12
+    assert diag3.moment_size(3) == 6
 
 
-def test_moment_size_full(full_mvn):
-    assert full_mvn.moment_size(3) == 15
+def test_moment_size_full():
+    full3 = MVN(dim=3, rank=3)
+    assert full3.moment_size(3) == 15
 
 
 # ---------------------------------------------------------------------------
@@ -245,8 +256,8 @@ def test_moment_size_full(full_mvn):
 
 def test_lowrank_param_and_moment_sizes():
     d = 4
-    lr1 = MVN(rank=1)
-    lr2 = MVN(rank=2)
+    lr1 = MVN(dim=d, rank=1)
+    lr2 = MVN(dim=d, rank=2)
     assert lr1.param_size(d) == d + d * d
     assert lr1.moment_size(d) == d * (2 + 1)
     assert lr2.moment_size(d) == d * (2 + 2)
@@ -254,7 +265,8 @@ def test_lowrank_param_and_moment_sizes():
 
 def test_lowrank_natural_moment_roundtrip():
     """moment_to_natural → natural_to_moment preserves structure for low-rank MVN."""
-    d, lr1 = 4, MVN(rank=1)
+    d = 4
+    lr1 = MVN(dim=d, rank=1)
     key = jrnd.key(42)
 
     loc = jrnd.normal(key, (d,))
@@ -279,7 +291,8 @@ def test_lowrank_natural_moment_roundtrip():
 
 def test_lowrank_sample():
     """Sampling from low-rank MVN produces correct shapes."""
-    d, lr2 = 3, MVN(rank=2)
+    d = 3
+    lr2 = MVN(dim=d, rank=2)
     cov_factor = jrnd.normal(jrnd.key(0), (d, 2)) * 0.3
     moment = jnp.concatenate((jnp.zeros(d), jnp.ones(d), cov_factor.flatten()))
 
@@ -290,7 +303,8 @@ def test_lowrank_sample():
 
 def test_lowrank_kl_self_zero():
     """KL(q, q) = 0 for low-rank MVN."""
-    d, lr1 = 3, MVN(rank=1)
+    d = 3
+    lr1 = MVN(dim=d, rank=1)
     cov_factor = jrnd.normal(jrnd.key(5), (d, 1)) * 0.5
     moment = jnp.concatenate(
         (jnp.array([1.0, -0.5, 0.3]), jnp.array([0.5, 1.0, 0.8]), cov_factor.flatten())
@@ -302,7 +316,8 @@ def test_lowrank_kl_self_zero():
 
 def test_lowrank_constrain_moment_roundtrip():
     """constrain(unconstrain(moment)) ≈ moment for low-rank MVN."""
-    d, lr2 = 4, MVN(rank=2)
+    d = 4
+    lr2 = MVN(dim=d, rank=2)
     loc = jrnd.normal(jrnd.key(10), (d,))
     cov_diag = jnp.abs(jrnd.normal(jrnd.key(11), (d,))) + 0.1
     cov_factor = jrnd.normal(jrnd.key(12), (d, 2)) * 0.3
@@ -315,7 +330,8 @@ def test_lowrank_constrain_moment_roundtrip():
 
 def test_lowrank_init_noise():
     """init_noise produces isotropic noise moment for low-rank MVN."""
-    d, lr1 = 3, MVN(rank=1)
+    d = 3
+    lr1 = MVN(dim=d, rank=1)
     scale = 2.5
     unc = lr1.init_noise(scale, d)
     moment = lr1.constrain_moment(unc)
@@ -324,6 +340,16 @@ def test_lowrank_init_noise():
     chex.assert_trees_all_close(loc, jnp.zeros(d), atol=1e-6)
     chex.assert_trees_all_close(cov_diag, jnp.full(d, scale), atol=1e-5)
     chex.assert_trees_all_close(cov_factor, jnp.zeros((d, 1)), atol=1e-6)
+
+
+def test_rank_validation():
+    """MVN must reject invalid rank values."""
+    import pytest
+
+    with pytest.raises(ValueError, match="rank must satisfy"):
+        MVN(dim=3, rank=-1)
+    with pytest.raises(ValueError, match="rank must satisfy"):
+        MVN(dim=3, rank=4)
 
 
 # ---------------------------------------------------------------------------

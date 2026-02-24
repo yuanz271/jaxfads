@@ -27,7 +27,7 @@ def test_alpha_encoder_shape(spec):
     encoder = AlphaEncoder(conf, key)
     y = jnp.ones((spec["observation_dim"],))
 
-    approx = make_approx(conf.approx, **conf.approx_kwargs)
+    approx = make_approx(conf.state_dim, conf.approx, **conf.approx_kwargs)
     out = encoder(y)
     chex.assert_shape(out, (approx.param_size(spec["state_dim"]),))
 
@@ -37,7 +37,7 @@ def test_beta_encoder_shape(spec):
     conf = _enc_conf(spec)
     encoder = BetaEncoder(conf, key)
 
-    approx = make_approx(conf.approx, **conf.approx_kwargs)
+    approx = make_approx(conf.state_dim, conf.approx, **conf.approx_kwargs)
     param_size = approx.param_size(spec["state_dim"])
     a = jnp.ones((5, param_size))
     out = encoder(a)
@@ -50,7 +50,7 @@ def test_beta_encoder_dropout_path(spec):
     conf = _enc_conf(spec, dropout=0.1)
     encoder = BetaEncoder(conf, key)
 
-    approx = make_approx(conf.approx, **conf.approx_kwargs)
+    approx = make_approx(conf.state_dim, conf.approx, **conf.approx_kwargs)
     param_size = approx.param_size(spec["state_dim"])
     a = jnp.ones((6, param_size))
     out = encoder(a, key=jrnd.key(3))

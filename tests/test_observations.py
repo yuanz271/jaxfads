@@ -6,8 +6,9 @@ from omegaconf import OmegaConf
 from jaxfads.distributions import MVN
 from jaxfads.observations import GLM, register_readout_init
 
-_diag = MVN(rank=0)
-_full = MVN(rank=-1)
+_STATE_DIM = 2
+_diag = MVN(dim=_STATE_DIM, rank=0)
+_full = MVN(dim=_STATE_DIM, rank=_STATE_DIM)
 
 
 def _poisson_conf(state_dim: int, observation_dim: int, *, n_steps: int = 0):

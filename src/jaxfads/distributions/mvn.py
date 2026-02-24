@@ -4,10 +4,8 @@ Exponential-family variational distributions for XFADS.
 This module provides a unified multivariate normal (MVN) distribution with
 natural and moment parameterizations for variational inference in XFADS.
 The covariance structure is ``diag(d) + U U^T`` with configurable rank,
-subsuming diagonal, low-rank, and full-covariance cases.
+subsuming diagonal and low-rank cases.
 """
-
-import math
 
 from jax import Array
 from jax import numpy as jnp
@@ -60,9 +58,11 @@ class MVN(Approx):
 
     Parameters
     ----------
+    dim : int
+        State dimensionality.
     rank : int, optional
-        Covariance rank.  ``0`` = diagonal, ``-1`` = full (rank = D at
-        runtime), ``> 0`` = diag + low-rank factor.  Default is ``0``.
+        Covariance rank.  ``0`` = diagonal, ``> 0`` = diag + low-rank
+        factor.  Must satisfy ``0 <= rank <= dim``.  Default is ``0``.
 
     Moment layout : ``[loc(D), cov_diag(D), cov_factor(D×r)]`` = D(2+r).
     Natural layout: ``[η₁(D), η₂(D)]`` (rank 0) or
@@ -75,32 +75,17 @@ class MVN(Approx):
     ``tfd.MultivariateNormalFullCovariance`` for KL computation.
     """
 
-    def __init__(self, rank: int = 0):
+    def __init__(self, dim: int, rank: int = 0):
+        if not (0 <= rank <= dim):
+            raise ValueError(
+                f"rank must satisfy 0 <= rank <= dim, got rank={rank}, dim={dim}"
+            )
+        self._dim = dim
         self._rank = rank
 
     # -- helpers -------------------------------------------------------------
 
-    def _effective_rank(self, state_dim: int) -> int:
-        """Resolve sentinel ``-1`` to *state_dim*."""
-        return state_dim if self._rank == -1 else self._rank
-
-    def _dim_from_natural(self, n: int) -> int:
-        """Recover *D* from a natural-parameter array size."""
-        if self._rank == 0:
-            return n // 2
-        # D + D² → floor(sqrt(n)) = D
-        return int(math.sqrt(n))
-
-    def _dim_from_moment(self, n: int) -> int:
-        """Recover *D* from a structured-moment array size."""
-        if self._rank == 0:
-            return n // 2
-        if self._rank == -1:
-            # D*(2+D) = D²+2D  →  D = sqrt(n+1) − 1
-            return int(math.sqrt(n + 1)) - 1
-        return n // (2 + self._rank)
-
-    def _decompose_cov(self, sigma: Array, d: int, r: int) -> tuple[Array, Array]:
+    def _decompose_cov(self, sigma: Array) -> tuple[Array, Array]:
         """Decompose Σ into ``diag(cov_diag) + cov_factor @ cov_factor.T``.
 
         The off-diagonal matrix ``Σ − diag(diag(Σ))`` is eigendecomposed
@@ -109,20 +94,17 @@ class MVN(Approx):
 
         Parameters
         ----------
-        sigma : Array, shape (d, d)
+        sigma : Array, shape (D, D)
             Symmetric PSD covariance matrix.
-        d : int
-            State dimension.
-        r : int
-            Target rank for the low-rank factor.
 
         Returns
         -------
-        cov_diag : Array, shape (d,)
+        cov_diag : Array, shape (D,)
             Positive diagonal residual.
-        cov_factor : Array, shape (d, r)
+        cov_factor : Array, shape (D, r)
             Low-rank factor.
         """
+        r = self._rank
         sigma_sym = 0.5 * (sigma + sigma.T)
         diag_sigma = jnp.diag(sigma_sym)
         # Off-diagonal matrix (zero diagonal, keeps off-diag correlations)
@@ -145,8 +127,7 @@ class MVN(Approx):
         cov_diag : Array, shape (D,)
         cov_factor : Array, shape (D, r)
         """
-        d = self._dim_from_moment(jnp.size(moment))
-        r = self._effective_rank(d)
+        d, r = self._dim, self._rank
         loc = moment[:d]
         cov_diag = moment[d : 2 * d]
         cov_factor = moment[2 * d :].reshape(d, r)
@@ -164,32 +145,31 @@ class MVN(Approx):
 
     def param_size(self, state_dim: int) -> int:
         """See base class. Natural parameter size."""
+        d = self._dim
         if self._rank == 0:
-            return 2 * state_dim
-        return state_dim + state_dim * state_dim
+            return 2 * d
+        return d + d * d
 
     def moment_size(self, state_dim: int) -> int:
         """See base class. Moment parameter size: D(2 + r)."""
-        r = self._effective_rank(state_dim)
-        return state_dim * (2 + r)
+        return self._dim * (2 + self._rank)
 
     # -- natural ↔ moment ---------------------------------------------------
 
     def natural_to_moment(self, natural: Array) -> Array:
         """See base class."""
-        if self._rank == 0:
+        d, r = self._dim, self._rank
+        if r == 0:
             eta1, eta2 = jnp.split(natural, 2)
             cov_diag = -0.5 / eta2
             loc = -0.5 * eta1 / eta2
             return jnp.concatenate((loc, cov_diag))
 
-        d = self._dim_from_natural(jnp.size(natural))
-        r = self._effective_rank(d)
         eta1, eta2_flat = jnp.split(natural, [d])
         P = -2.0 * jnp.reshape(eta2_flat, (d, d))
         loc = jnp.linalg.solve(P, eta1)
         sigma = _damping_inv(P)
-        cov_diag, cov_factor = self._decompose_cov(sigma, d, r)
+        cov_diag, cov_factor = self._decompose_cov(sigma)
         return self._pack_moment(loc, cov_diag, cov_factor)
 
     def moment_to_natural(self, moment: Array) -> Array:
@@ -289,9 +269,7 @@ class MVN(Approx):
         if self._rank == 0:
             return jnp.concatenate((mean, cov))
 
-        d = jnp.size(mean)
-        r = self._effective_rank(d)
-        cov_diag, cov_factor = self._decompose_cov(cov, d, r)
+        cov_diag, cov_factor = self._decompose_cov(cov)
         return self._pack_moment(mean, cov_diag, cov_factor)
 
     def full_cov(self, cov: Array) -> Array:
@@ -308,11 +286,11 @@ class MVN(Approx):
         Applies ``softplus`` to the diagonal covariance entries;
         the low-rank factor (if any) is left unconstrained.
         """
+        d = self._dim
         if self._rank == 0:
             loc, v = jnp.split(unconstrained, 2)
             return jnp.concatenate((loc, constrain_positive(v)))
 
-        d = self._dim_from_moment(jnp.size(unconstrained))
         loc = unconstrained[:d]
         diag_unc = unconstrained[d : 2 * d]
         factor = unconstrained[2 * d :]
@@ -320,22 +298,22 @@ class MVN(Approx):
 
     def constrain_natural(self, unconstrained: Array) -> Array:
         """See base class."""
+        d = self._dim
         if self._rank == 0:
             n1, n2 = jnp.split(unconstrained, 2)
             return jnp.concatenate((n1, -constrain_positive(n2)))
 
-        d = self._dim_from_natural(jnp.size(unconstrained))
         nat1, flat_L = jnp.split(unconstrained, [d])
         L = jnp.tril(jnp.reshape(flat_L, (d, d)))
         return jnp.concatenate((nat1, -(L @ L.T).flatten()))
 
     def unconstrain_natural(self, natural: Array) -> Array:
         """See base class."""
+        d = self._dim
         if self._rank == 0:
             n1, n2 = jnp.split(natural, 2)
             return jnp.concatenate((n1, unconstrain_positive(-n2)))
 
-        d = self._dim_from_natural(jnp.size(natural))
         nat1, nat2_flat = jnp.split(natural, [d])
         neg_nat2 = jnp.reshape(-nat2_flat, (d, d))
         L = jnp.linalg.cholesky(neg_nat2 + _EPS * jnp.eye(d))
@@ -347,11 +325,11 @@ class MVN(Approx):
         Applies ``softplus_inverse`` to the diagonal covariance entries;
         the low-rank factor is left as-is.
         """
+        d = self._dim
         if self._rank == 0:
             loc, v = jnp.split(moment, 2)
             return jnp.concatenate((loc, unconstrain_positive(v)))
 
-        d = self._dim_from_moment(jnp.size(moment))
         loc = moment[:d]
         cov_diag = moment[d : 2 * d]
         factor = moment[2 * d :]
@@ -361,13 +339,14 @@ class MVN(Approx):
 
     def prior_natural(self, state_dim: int) -> Array:
         """See base class. Returns N(0, I) in natural form."""
+        d = self._dim
         if self._rank == 0:
-            eta1 = jnp.zeros(state_dim)
-            eta2 = jnp.full(state_dim, -0.5)
+            eta1 = jnp.zeros(d)
+            eta2 = jnp.full(d, -0.5)
             return jnp.concatenate((eta1, eta2))
 
-        eta1 = jnp.zeros(state_dim)
-        eta2 = -0.5 * jnp.eye(state_dim)
+        eta1 = jnp.zeros(d)
+        eta2 = -0.5 * jnp.eye(d)
         return jnp.concatenate((eta1, eta2.flatten()))
 
     def init_noise(self, scale: float, state_dim: int) -> Array:
@@ -376,10 +355,10 @@ class MVN(Approx):
         All variance goes into ``cov_diag``; the low-rank factor
         is initialised to zero.
         """
-        r = self._effective_rank(state_dim)
-        loc = jnp.zeros(state_dim)
-        cov_diag = jnp.full(state_dim, scale)
-        cov_factor = jnp.zeros(state_dim * r)
+        d, r = self._dim, self._rank
+        loc = jnp.zeros(d)
+        cov_diag = jnp.full(d, scale)
+        cov_factor = jnp.zeros(d * r)
         moment = jnp.concatenate((loc, cov_diag, cov_factor))
         return self.unconstrain_moment(moment)
 
@@ -409,14 +388,13 @@ class MVN(Approx):
         * rank 0: ``[m, s] → [m, s − m²]``
         * rank > 0: extract Σ, eigendecompose into diag + factor
         """
+        d = self._dim
         if self._rank == 0:
             mean, second = jnp.split(mean_param, 2)
             return jnp.concatenate((mean, second - mean ** 2))
 
-        d = self._dim_from_natural(jnp.size(mean_param))
-        r = self._effective_rank(d)
         mean = mean_param[:d]
         second = jnp.reshape(mean_param[d:], (d, d))
         cov = second - jnp.outer(mean, mean)
-        cov_diag, cov_factor = self._decompose_cov(cov, d, r)
+        cov_diag, cov_factor = self._decompose_cov(cov)
         return self._pack_moment(mean, cov_diag, cov_factor)

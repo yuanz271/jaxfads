@@ -268,7 +268,7 @@ class XFADS(ConfModule):
             ``approx_kwargs``.
         """
         cls = Approx.get_subclass(self.conf.approx)
-        return cls(**self.conf.approx_kwargs)
+        return cls(dim=self.conf.state_dim, **self.conf.approx_kwargs)
 
     def prior_natural(self) -> Array:
         """
