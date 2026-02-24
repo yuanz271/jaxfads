@@ -84,27 +84,18 @@ def sample_expected_mean(
     # Dynamics locations for each MC sample
     locs = jax.vmap(partial(f, key=key), in_axes=(0, 0, 0))(z, u_bc, c_bc)
 
-    # Mean parameters: μ_θ(z^s) = E[T(z_t) | f(z^s), noise]
-    mean_params = jax.vmap(approx.predict_mean, in_axes=(0, None))(
-        locs, noise_mean
-    )  # (mc_size, param_size)
-
-    # --- nonfinite-safe averaging in mean-parameter space ---
-    valid = jnp.all(jnp.isfinite(mean_params), axis=-1)  # (mc_size,)
-    n_valid = jnp.sum(valid)
-    safe = jnp.where(valid[:, None], mean_params, 0.0)
-    avg = jnp.sum(safe, axis=0) / jnp.maximum(n_valid, 1.0)
+    # Predict structured mean (averaging + non-finite masking inside approx)
+    result = approx.predict_mean(locs, noise_mean)
 
     # Fallback: deterministic prediction at the posterior mean
     def _fallback(_):
         z_mean, _ = approx.mean_to_canon(mean)
         loc = f(z_mean, u, c, key=key)
-        return approx.predict_mean(loc, noise_mean)
+        return approx.predict_mean(loc[None, :], noise_mean)
 
-    avg_mean_param = jax.lax.cond(n_valid > 0, lambda _: avg, _fallback, None)
-
-    # Convert from expanded mean-parameter space to structured mean format
-    return approx.mean_param_to_mean(avg_mean_param)
+    return jax.lax.cond(
+        jnp.all(jnp.isfinite(result)), lambda _: result, _fallback, None
+    )
 
 
 class Mode(StrEnum):

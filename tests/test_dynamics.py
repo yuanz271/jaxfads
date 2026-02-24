@@ -50,7 +50,7 @@ def _make_nonlinear(spec, key):
 
 
 def test_predict_mean(diag, spec):
-    """predict_mean returns correct shape (mean parameter)."""
+    """predict_mean returns correct shape and recovers (loc, Q)."""
     key = jrnd.key(0)
     state_dim = spec["state_dim"]
     f = _make_nonlinear(spec, key)
@@ -60,19 +60,10 @@ def test_predict_mean(diag, spec):
     u = jrnd.normal(key, (spec["input_dim"],))
     loc = f(z, u, jnp.zeros((0,)))
 
-    mean_param = diag.predict_mean(loc, noise_mom)
-    chex.assert_shape(mean_param, (diag.param_size(state_dim),))
-    chex.assert_tree_all_finite(mean_param)
-
-
-def test_mean_param_to_mean_roundtrip(diag, spec):
-    """predict_mean → mean_param_to_mean gives valid (mean, cov)."""
-    state_dim = spec["state_dim"]
-    noise_mom = make_noise_mean(diag, state_dim)
-
-    loc = jrnd.normal(jrnd.key(0), (state_dim,))
-    mean_param = diag.predict_mean(loc, noise_mom)
-    mp = diag.mean_param_to_mean(mean_param)
+    # Single-sample batch: predict_mean should recover (loc, Q_diag)
+    mp = diag.predict_mean(loc[None, :], noise_mom)
+    chex.assert_shape(mp, (diag.mean_size(state_dim),))
+    chex.assert_tree_all_finite(mp)
 
     mean, cov = diag.mean_to_canon(mp)
     chex.assert_trees_all_close(mean, loc, atol=1e-6)
@@ -92,7 +83,7 @@ def test_sample_expected_mean(diag, spec):
     u = jrnd.normal(key, (spec["input_dim"],))
 
     result = sample_expected_mean(key, mp, u, jnp.zeros((0,)), f, noise_mom, diag, 10)
-    chex.assert_shape(result, (diag.param_size(state_dim),))
+    chex.assert_shape(result, (diag.mean_size(state_dim),))
     chex.assert_tree_all_finite(result)
 
 
@@ -127,7 +118,7 @@ def test_sample_expected_mean_partial_invalid():
     )(key)
 
     assert jnp.all(jnp.isfinite(result))
-    chex.assert_shape(result, (diag4.param_size(state_dim),))
+    chex.assert_shape(result, (diag4.mean_size(state_dim),))
 
 
 def test_sample_expected_mean_all_invalid(diag):
@@ -145,9 +136,9 @@ def test_sample_expected_mean_all_invalid(diag):
     )(key)
 
     assert jnp.all(jnp.isfinite(result))
-    chex.assert_shape(result, (diag.param_size(state_dim),))
+    chex.assert_shape(result, (diag.mean_size(state_dim),))
 
     z_mean, _ = diag.mean_to_canon(mp)
     loc = f(z_mean, u, c)
-    expected = diag.mean_param_to_mean(diag.predict_mean(loc, noise_mom))
+    expected = diag.predict_mean(loc[None, :], noise_mom)
     chex.assert_trees_all_close(result, expected, atol=1e-6)

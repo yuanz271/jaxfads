@@ -324,48 +324,33 @@ class Approx(SubclassRegistryMixin, ABC):
         ...
 
     @abstractmethod
-    def predict_mean(self, loc: Array, noise_mean: Array) -> Array:
+    def predict_mean(self, locs: Array, noise_mean: Array) -> Array:
         """
-        Mean parameter of the predictive distribution p(z | loc, noise).
+        Predict structured mean from a batch of dynamics locations.
 
-        Computes ``E_{p(z|loc,noise)}[T(z)]`` — the expected sufficient
-        statistics (mean parameter) of the one-step-ahead distribution.
-        The result lives in mean-parameter space where linear averaging
-        is valid.
+        Computes the expected sufficient statistics ``E[T(z)]`` for each
+        location, averages in the appropriate mean-parameter space, and
+        returns the result in the structured mean format used by the rest
+        of the codebase.
+
+        Samples containing non-finite values are masked out.  If every
+        sample is non-finite the result may itself be non-finite; the
+        caller is responsible for fallback logic.
 
         Parameters
         ----------
-        loc : Array, shape (state_dim,)
-            Dynamics output (deterministic location).
+        locs : Array, shape (N, state_dim)
+            Dynamics output locations for N Monte Carlo samples.
         noise_mean : Array
-            Noise parameters in the mean parameter format.
+            Noise parameters in the mean parameter format.  May be
+            empty (``jnp.array([])``) for families without a separate
+            dispersion parameter.
 
         Returns
         -------
         Array
-            Mean parameter vector of the predictive distribution.
-        """
-        ...
-
-    @abstractmethod
-    def mean_param_to_mean(self, mean_param: Array) -> Array:
-        """
-        Convert expanded mean parameter to the structured mean format.
-
-        Inverse mapping from the expanded mean-parameter space (where
-        linear averaging is valid) back to the structured mean format
-        used by the rest of the codebase.
-
-        Parameters
-        ----------
-        mean_param : Array
-            Expanded mean parameter vector (output of
-            :meth:`predict_mean`).
-
-        Returns
-        -------
-        Array
-            Mean vector compatible with :meth:`mean_to_natural`.
+            Structured mean parameter vector of the predictive
+            distribution.
         """
         ...
 

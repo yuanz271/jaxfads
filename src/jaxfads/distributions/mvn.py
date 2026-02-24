@@ -7,6 +7,7 @@ The covariance structure is ``diag(d) + U U^T`` with configurable rank,
 subsuming diagonal and low-rank cases.
 """
 
+import jax
 from jax import Array
 from jax import numpy as jnp
 from jax import random as jrnd
@@ -362,39 +363,56 @@ class MVN(Approx):
         mean = jnp.concatenate((loc, cov_diag, cov_factor))
         return self.unconstrain_mean(mean)
 
-    # -- predict_mean / mean_param_to_mean ----------------------------------
+    # -- predict_mean --------------------------------------------------------
 
-    def predict_mean(self, loc: Array, noise_mean: Array) -> Array:
+    def predict_mean(self, locs: Array, noise_mean: Array) -> Array:
         """See base class.
 
-        Returns the expanded mean parameter ``E[T(z)]``.
+        Computes per-sample expanded mean parameters ``E[T(z)]``,
+        averages in expanded space (where linearity holds), then
+        converts back to the structured mean format.
 
-        * rank 0: ``[loc, loc² + Q_diag]`` (2D)
-        * rank > 0: ``[loc, (loc locᵀ + Σ)_flat]`` (D + D²)
+        Expanded mean parameter layout:
+
+        * rank 0: ``[loc, loc² + Q_diag]`` (2D per sample)
+        * rank > 0: ``[loc, (loc locᵀ + Σ)_flat]`` (D + D² per sample)
         """
         if self._rank == 0:
             _, cov_diag = jnp.split(noise_mean, 2)
-            return jnp.concatenate((loc, loc ** 2 + cov_diag))
+            expanded = jnp.concatenate(
+                (locs, locs ** 2 + cov_diag), axis=-1
+            )
+        else:
+            _, cov = self.mean_to_canon(noise_mean)
+            outers = jax.vmap(lambda x: jnp.outer(x, x))(locs)
+            seconds = (outers + cov).reshape(locs.shape[0], -1)
+            expanded = jnp.concatenate((locs, seconds), axis=-1)
 
-        _, cov = self.mean_to_canon(noise_mean)
-        second = jnp.outer(loc, loc) + cov
-        return jnp.concatenate((loc, second.flatten()))
+        # Non-finite safe averaging; return NaN when all samples are invalid
+        valid = jnp.all(jnp.isfinite(expanded), axis=-1)  # (N,)
+        safe = jnp.where(valid[:, None], expanded, 0.0)
+        n_valid = jnp.sum(valid)
+        avg = jnp.where(
+            n_valid > 0,
+            jnp.sum(safe, axis=0) / n_valid,
+            jnp.full(expanded.shape[-1:], jnp.nan),
+        )
 
-    def mean_param_to_mean(self, mean_param: Array) -> Array:
-        """See base class.
+        return self._expanded_to_mean(avg)
 
-        Converts expanded mean parameter back to the structured mean.
+    def _expanded_to_mean(self, expanded: Array) -> Array:
+        """Convert averaged expanded mean parameter to structured mean.
 
         * rank 0: ``[m, s] → [m, s − m²]``
         * rank > 0: extract Σ, eigendecompose into diag + factor
         """
         d = self._dim
         if self._rank == 0:
-            loc, second = jnp.split(mean_param, 2)
+            loc, second = jnp.split(expanded, 2)
             return jnp.concatenate((loc, second - loc ** 2))
 
-        loc = mean_param[:d]
-        second = jnp.reshape(mean_param[d:], (d, d))
+        loc = expanded[:d]
+        second = jnp.reshape(expanded[d:], (d, d))
         cov = second - jnp.outer(loc, loc)
         cov_diag, cov_factor = self._decompose_cov(cov)
         return self._pack_mean(loc, cov_diag, cov_factor)
