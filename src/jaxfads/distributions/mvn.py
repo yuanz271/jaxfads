@@ -2,7 +2,7 @@
 Exponential-family variational distributions for XFADS.
 
 This module provides a unified multivariate normal (MVN) distribution with
-natural and moment parameterizations for variational inference in XFADS.
+natural and mean parameterizations for variational inference in XFADS.
 The covariance structure is ``diag(d) + U U^T`` with configurable rank,
 subsuming diagonal and low-rank cases.
 """
@@ -64,7 +64,7 @@ class MVN(Approx):
         Covariance rank.  ``0`` = diagonal, ``> 0`` = diag + low-rank
         factor.  Must satisfy ``0 <= rank <= dim``.  Default is ``0``.
 
-    Moment layout : ``[loc(D), cov_diag(D), cov_factor(D×r)]`` = D(2+r).
+    Mean layout : ``[loc(D), cov_diag(D), cov_factor(D×r)]`` = D(2+r).
     Natural layout: ``[η₁(D), η₂(D)]`` (rank 0) or
     ``[η₁(D), η₂_flat(D²)]`` (rank > 0).
 
@@ -118,8 +118,8 @@ class MVN(Approx):
         cov_diag = jnp.maximum(diag_sigma - low_rank_diag, _EPS)
         return cov_diag, cov_factor
 
-    def _split_moment(self, moment: Array) -> tuple[Array, Array, Array]:
-        """Unpack structured moment ``[loc, cov_diag, cov_factor_flat]``.
+    def _split_mean(self, mean: Array) -> tuple[Array, Array, Array]:
+        """Unpack structured mean ``[loc, cov_diag, cov_factor_flat]``.
 
         Returns
         -------
@@ -128,17 +128,17 @@ class MVN(Approx):
         cov_factor : Array, shape (D, r)
         """
         d, r = self._dim, self._rank
-        loc = moment[:d]
-        cov_diag = moment[d : 2 * d]
-        cov_factor = moment[2 * d :].reshape(d, r)
+        loc = mean[:d]
+        cov_diag = mean[d : 2 * d]
+        cov_factor = mean[2 * d :].reshape(d, r)
         return loc, cov_diag, cov_factor
 
     def _build_cov(self, cov_diag: Array, cov_factor: Array) -> Array:
         """Materialize full covariance from structured parts."""
         return jnp.diag(cov_diag) + cov_factor @ cov_factor.T
 
-    def _pack_moment(self, loc: Array, cov_diag: Array, cov_factor: Array) -> Array:
-        """Concatenate structured moment."""
+    def _pack_mean(self, loc: Array, cov_diag: Array, cov_factor: Array) -> Array:
+        """Concatenate structured mean."""
         return jnp.concatenate((loc, cov_diag, cov_factor.flatten()))
 
     # -- Approx interface ----------------------------------------------------
@@ -150,13 +150,13 @@ class MVN(Approx):
             return 2 * d
         return d + d * d
 
-    def moment_size(self, state_dim: int) -> int:
-        """See base class. Moment parameter size: D(2 + r)."""
+    def mean_size(self, state_dim: int) -> int:
+        """See base class. Mean parameter size: D(2 + r)."""
         return self._dim * (2 + self._rank)
 
-    # -- natural ↔ moment ---------------------------------------------------
+    # -- natural ↔ mean ------------------------------------------------------
 
-    def natural_to_moment(self, natural: Array) -> Array:
+    def natural_to_mean(self, natural: Array) -> Array:
         """See base class."""
         d, r = self._dim, self._rank
         if r == 0:
@@ -170,9 +170,9 @@ class MVN(Approx):
         loc = jnp.linalg.solve(P, eta1)
         sigma = _damping_inv(P)
         cov_diag, cov_factor = self._decompose_cov(sigma)
-        return self._pack_moment(loc, cov_diag, cov_factor)
+        return self._pack_mean(loc, cov_diag, cov_factor)
 
-    def moment_to_natural(self, moment: Array) -> Array:
+    def mean_to_natural(self, mean: Array) -> Array:
         """See base class.
 
         Notes
@@ -182,13 +182,13 @@ class MVN(Approx):
         parameters.
         """
         if self._rank == 0:
-            mean, cov_diag = jnp.split(moment, 2)
+            loc, cov_diag = jnp.split(mean, 2)
             cov_diag = jnp.maximum(cov_diag, _EPS)
             eta2 = -0.5 / cov_diag
-            eta1 = mean / cov_diag
+            eta1 = loc / cov_diag
             return jnp.concatenate((eta1, eta2))
 
-        loc, cov_diag, cov_factor = self._split_moment(moment)
+        loc, cov_diag, cov_factor = self._split_mean(mean)
         sigma = self._build_cov(jnp.maximum(cov_diag, _EPS), cov_factor)
         P = _damping_inv(sigma)
         eta1 = P @ loc
@@ -197,17 +197,17 @@ class MVN(Approx):
 
     # -- sampling -----------------------------------------------------------
 
-    def sample_by_moment(
-        self, key: Array, moment: Array, mc_size: int | None = None
+    def sample_by_mean(
+        self, key: Array, mean: Array, mc_size: int | None = None
     ) -> Array:
         """See base class."""
         if self._rank == 0:
-            mean, cov_diag = jnp.split(moment, 2)
+            loc, cov_diag = jnp.split(mean, 2)
             std = jnp.sqrt(jnp.maximum(cov_diag, _EPS))
-            shape = mean.shape if mc_size is None else (mc_size,) + mean.shape
-            return mean + std * jrnd.normal(key, shape)
+            shape = loc.shape if mc_size is None else (mc_size,) + loc.shape
+            return loc + std * jrnd.normal(key, shape)
 
-        loc, cov_diag, cov_factor = self._split_moment(moment)
+        loc, cov_diag, cov_factor = self._split_mean(mean)
         dist = tfd.MultivariateNormalDiagPlusLowRankCovariance(
             loc=loc,
             cov_diag_factor=jnp.maximum(cov_diag, _EPS),
@@ -217,16 +217,16 @@ class MVN(Approx):
 
     # -- KL divergence ------------------------------------------------------
 
-    def kl(self, moment1: Array, moment2: Array) -> Array:
+    def kl(self, mean1: Array, mean2: Array) -> Array:
         """See base class.
 
         Uses ``MultivariateNormalFullCovariance`` for all ranks to
         ensure KL is always registered.
         """
-        m1, cov1 = self.moment_to_canon(moment1)
-        m2, cov2 = self.moment_to_canon(moment2)
+        m1, cov1 = self.mean_to_canon(mean1)
+        m2, cov2 = self.mean_to_canon(mean2)
         if self._rank == 0:
-            # moment_to_canon returns diagonal vectors
+            # mean_to_canon returns diagonal vectors
             cov1_full = jnp.diag(jnp.maximum(cov1, _EPS))
             cov2_full = jnp.diag(jnp.maximum(cov2, _EPS))
         else:
@@ -240,37 +240,37 @@ class MVN(Approx):
 
     # -- canonical form -----------------------------------------------------
 
-    def moment_to_canon(self, moment: Array) -> tuple[Array, Array]:
+    def mean_to_canon(self, mean: Array) -> tuple[Array, Array]:
         """See base class.
 
         Returns
         -------
-        mean : Array, shape (D,)
+        loc : Array, shape (D,)
         cov : Array
             Diagonal vector (D,) for rank 0, full matrix (D, D) otherwise.
         """
         if self._rank == 0:
-            mean, cov_diag = jnp.split(moment, 2, -1)
-            return mean, cov_diag
+            loc, cov_diag = jnp.split(mean, 2, -1)
+            return loc, cov_diag
 
-        loc, cov_diag, cov_factor = self._split_moment(moment)
+        loc, cov_diag, cov_factor = self._split_mean(mean)
         cov = self._build_cov(cov_diag, cov_factor)
         return loc, cov
 
-    def canon_to_moment(self, mean: Array, cov: Array) -> Array:
+    def canon_to_mean(self, loc: Array, cov: Array) -> Array:
         """See base class.
 
         Parameters
         ----------
-        mean : Array, shape (D,)
+        loc : Array, shape (D,)
         cov : Array
             Diagonal vector (D,) for rank 0, full matrix (D, D) otherwise.
         """
         if self._rank == 0:
-            return jnp.concatenate((mean, cov))
+            return jnp.concatenate((loc, cov))
 
         cov_diag, cov_factor = self._decompose_cov(cov)
-        return self._pack_moment(mean, cov_diag, cov_factor)
+        return self._pack_mean(loc, cov_diag, cov_factor)
 
     def full_cov(self, cov: Array) -> Array:
         """See base class."""
@@ -280,7 +280,7 @@ class MVN(Approx):
 
     # -- constrain / unconstrain --------------------------------------------
 
-    def constrain_moment(self, unconstrained: Array) -> Array:
+    def constrain_mean(self, unconstrained: Array) -> Array:
         """See base class.
 
         Applies ``softplus`` to the diagonal covariance entries;
@@ -319,7 +319,7 @@ class MVN(Approx):
         L = jnp.linalg.cholesky(neg_nat2 + _EPS * jnp.eye(d))
         return jnp.concatenate((nat1, L.flatten()))
 
-    def unconstrain_moment(self, moment: Array) -> Array:
+    def unconstrain_mean(self, mean: Array) -> Array:
         """See base class.
 
         Applies ``softplus_inverse`` to the diagonal covariance entries;
@@ -327,12 +327,12 @@ class MVN(Approx):
         """
         d = self._dim
         if self._rank == 0:
-            loc, v = jnp.split(moment, 2)
+            loc, v = jnp.split(mean, 2)
             return jnp.concatenate((loc, unconstrain_positive(v)))
 
-        loc = moment[:d]
-        cov_diag = moment[d : 2 * d]
-        factor = moment[2 * d :]
+        loc = mean[:d]
+        cov_diag = mean[d : 2 * d]
+        factor = mean[2 * d :]
         return jnp.concatenate((loc, unconstrain_positive(cov_diag), factor))
 
     # -- prior / noise ------------------------------------------------------
@@ -359,42 +359,42 @@ class MVN(Approx):
         loc = jnp.zeros(d)
         cov_diag = jnp.full(d, scale)
         cov_factor = jnp.zeros(d * r)
-        moment = jnp.concatenate((loc, cov_diag, cov_factor))
-        return self.unconstrain_moment(moment)
+        mean = jnp.concatenate((loc, cov_diag, cov_factor))
+        return self.unconstrain_mean(mean)
 
-    # -- predict_moment / mean_param_to_moment ------------------------------
+    # -- predict_mean / mean_param_to_mean ----------------------------------
 
-    def predict_moment(self, loc: Array, noise_moment: Array) -> Array:
+    def predict_mean(self, loc: Array, noise_mean: Array) -> Array:
         """See base class.
 
-        Returns the full mean parameter ``E[T(z)]``.
+        Returns the expanded mean parameter ``E[T(z)]``.
 
         * rank 0: ``[loc, loc² + Q_diag]`` (2D)
         * rank > 0: ``[loc, (loc locᵀ + Σ)_flat]`` (D + D²)
         """
         if self._rank == 0:
-            _, cov_diag = jnp.split(noise_moment, 2)
+            _, cov_diag = jnp.split(noise_mean, 2)
             return jnp.concatenate((loc, loc ** 2 + cov_diag))
 
-        _, cov = self.moment_to_canon(noise_moment)
+        _, cov = self.mean_to_canon(noise_mean)
         second = jnp.outer(loc, loc) + cov
         return jnp.concatenate((loc, second.flatten()))
 
-    def mean_param_to_moment(self, mean_param: Array) -> Array:
+    def mean_param_to_mean(self, mean_param: Array) -> Array:
         """See base class.
 
-        Converts full mean parameter back to the structured moment.
+        Converts expanded mean parameter back to the structured mean.
 
         * rank 0: ``[m, s] → [m, s − m²]``
         * rank > 0: extract Σ, eigendecompose into diag + factor
         """
         d = self._dim
         if self._rank == 0:
-            mean, second = jnp.split(mean_param, 2)
-            return jnp.concatenate((mean, second - mean ** 2))
+            loc, second = jnp.split(mean_param, 2)
+            return jnp.concatenate((loc, second - loc ** 2))
 
-        mean = mean_param[:d]
+        loc = mean_param[:d]
         second = jnp.reshape(mean_param[d:], (d, d))
-        cov = second - jnp.outer(mean, mean)
+        cov = second - jnp.outer(loc, loc)
         cov_diag, cov_factor = self._decompose_cov(cov)
-        return self._pack_moment(mean, cov_diag, cov_factor)
+        return self._pack_mean(loc, cov_diag, cov_factor)

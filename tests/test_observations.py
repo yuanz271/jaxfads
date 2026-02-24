@@ -53,10 +53,10 @@ def test_poisson_eloglik_shape_and_finite():
 
     mean = jnp.zeros(state_dim)
     cov = jnp.ones(state_dim)
-    moment = _diag.canon_to_moment(mean, cov)
+    mp = _diag.canon_to_mean(mean, cov)
     y = jnp.ones((observation_dim,))
 
-    ll = observation.eloglik(key, jnp.array(0), moment, y, _diag, mc_size=1)
+    ll = observation.eloglik(key, jnp.array(0), mp, y, _diag, mc_size=1)
     chex.assert_shape(ll, ())
     chex.assert_tree_all_finite(ll)
 
@@ -70,10 +70,10 @@ def test_poisson_eloglik_full_mvn():
 
     mean = jnp.zeros(state_dim)
     cov = jnp.eye(state_dim)
-    moment = _full.canon_to_moment(mean, cov)
+    mp = _full.canon_to_mean(mean, cov)
     y = jnp.ones((observation_dim,))
 
-    ll = observation.eloglik(key, jnp.array(0), moment, y, _full, mc_size=1)
+    ll = observation.eloglik(key, jnp.array(0), mp, y, _full, mc_size=1)
     chex.assert_shape(ll, ())
     chex.assert_tree_all_finite(ll)
 
@@ -87,10 +87,10 @@ def test_diag_gaussian_eloglik_shape_and_finite():
 
     mean = jnp.zeros(state_dim)
     cov = jnp.ones(state_dim)
-    moment = _diag.canon_to_moment(mean, cov)
+    mp = _diag.canon_to_mean(mean, cov)
     y = jnp.zeros((observation_dim,))
 
-    ll = observation.eloglik(key, jnp.array(0), moment, y, _diag, mc_size=1)
+    ll = observation.eloglik(key, jnp.array(0), mp, y, _diag, mc_size=1)
     chex.assert_shape(ll, ())
     chex.assert_tree_all_finite(ll)
 

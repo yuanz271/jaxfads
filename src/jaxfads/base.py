@@ -22,17 +22,17 @@ class Approx(SubclassRegistryMixin, ABC):
 
     This class defines the interface for exponential family distributions
     used in variational inference, providing conversions between natural
-    and moment parameterizations, sampling methods, and other utilities.
+    and mean parameterizations, sampling methods, and other utilities.
 
     Concrete subclasses are instantiated with family-specific parameters
-    (e.g., ``MVN(rank=0)``).  All methods are instance methods so that
-    the distribution configuration is carried by the instance.
+    (e.g., ``MVN(dim=3, rank=0)``).  All methods are instance methods so
+    that the distribution configuration is carried by the instance.
     """
 
     @abstractmethod
-    def natural_to_moment(self, natural: Array) -> Array:
+    def natural_to_mean(self, natural: Array) -> Array:
         """
-        Convert natural parameters to moment parameters.
+        Convert natural parameters to mean parameters.
 
         Parameters
         ----------
@@ -42,24 +42,24 @@ class Approx(SubclassRegistryMixin, ABC):
         Returns
         -------
         Array
-            Corresponding moment parameter vector.
+            Corresponding mean parameter vector.
 
         Notes
         -----
-        For exponential families, the moment parameters are the expected
+        For exponential families, the mean parameters are the expected
         values of the sufficient statistics under the distribution.
         """
         ...
 
     @abstractmethod
-    def moment_to_natural(self, moment: Array) -> Array:
+    def mean_to_natural(self, mean: Array) -> Array:
         """
-        Convert moment parameters to natural parameters.
+        Convert mean parameters to natural parameters.
 
         Parameters
         ----------
-        moment : Array
-            Moment parameter vector of the exponential-family distribution.
+        mean : Array
+            Mean parameter vector of the exponential-family distribution.
 
         Returns
         -------
@@ -75,16 +75,16 @@ class Approx(SubclassRegistryMixin, ABC):
         ...
 
     @abstractmethod
-    def sample_by_moment(self, key: Array, moment: Array, mc_size: int) -> Array:
+    def sample_by_mean(self, key: Array, mean: Array, mc_size: int) -> Array:
         """
-        Generate samples from the distribution using moment parameters.
+        Generate samples from the distribution using mean parameters.
 
         Parameters
         ----------
         key : Array
             JAX PRNG key for randomness.
-        moment : Array
-            Moment parameter vector defining the distribution.
+        mean : Array
+            Mean parameter vector defining the distribution.
         mc_size : int
             Number of Monte Carlo samples to draw.
 
@@ -118,9 +118,9 @@ class Approx(SubclassRegistryMixin, ABC):
         ...
 
     @abstractmethod
-    def moment_size(self, state_dim: int) -> int:
+    def mean_size(self, state_dim: int) -> int:
         """
-        Get the moment parameter size for given state dimension.
+        Get the mean parameter size for given state dimension.
 
         Parameters
         ----------
@@ -130,65 +130,65 @@ class Approx(SubclassRegistryMixin, ABC):
         Returns
         -------
         int
-            Total number of moment parameters.
+            Total number of mean parameters.
         """
         ...
 
     @abstractmethod
-    def kl(self, moment1: Array, moment2: Array) -> Array:
+    def kl(self, mean1: Array, mean2: Array) -> Array:
         """
         Compute KL divergence between two distributions.
 
         Parameters
         ----------
-        moment1 : Array
-            Moment parameters of the first distribution.
-        moment2 : Array
-            Moment parameters of the second distribution.
+        mean1 : Array
+            Mean parameters of the first distribution.
+        mean2 : Array
+            Mean parameters of the second distribution.
 
         Returns
         -------
         Array
             KL divergence KL(p1 || p2) where p1 and p2 are parameterized
-            by moment1 and moment2 respectively.
+            by mean1 and mean2 respectively.
         """
         ...
 
     @abstractmethod
-    def moment_to_canon(self, moment: Array) -> tuple[Array, Array]:
+    def mean_to_canon(self, mean: Array) -> tuple[Array, Array]:
         """
-        Convert moment parameters to canonical mean and covariance.
+        Convert mean parameters to canonical loc and covariance.
 
         Parameters
         ----------
-        moment : Array
-            Moment parameter vector.
+        mean : Array
+            Mean parameter vector.
 
         Returns
         -------
-        mean : Array, shape (D,)
-            Mean vector.
+        loc : Array, shape (D,)
+            Location vector.
         cov : Array
             Covariance — vector (D,) for diagonal, matrix (D, D) otherwise.
         """
         ...
 
     @abstractmethod
-    def canon_to_moment(self, mean: Array, cov: Array) -> Array:
+    def canon_to_mean(self, loc: Array, cov: Array) -> Array:
         """
-        Convert canonical mean and covariance to moment parameters.
+        Convert canonical loc and covariance to mean parameters.
 
         Parameters
         ----------
-        mean : Array, shape (D,)
-            Mean vector.
+        loc : Array, shape (D,)
+            Location vector.
         cov : Array
             Covariance matrix (D, D) or diagonal vector (D,).
 
         Returns
         -------
         Array
-            Moment parameter vector.
+            Mean parameter vector.
         """
         ...
 
@@ -210,9 +210,9 @@ class Approx(SubclassRegistryMixin, ABC):
         ...
 
     @abstractmethod
-    def constrain_moment(self, unconstrained: Array) -> Array:
+    def constrain_mean(self, unconstrained: Array) -> Array:
         """
-        Transform unconstrained parameters to valid moment parameters.
+        Transform unconstrained parameters to valid mean parameters.
 
         Parameters
         ----------
@@ -222,7 +222,7 @@ class Approx(SubclassRegistryMixin, ABC):
         Returns
         -------
         Array
-            Valid moment parameters satisfying distribution constraints
+            Valid mean parameters satisfying distribution constraints
             (e.g., positive definite covariance).
         """
         ...
@@ -263,16 +263,16 @@ class Approx(SubclassRegistryMixin, ABC):
         ...
 
     @abstractmethod
-    def unconstrain_moment(self, moment: Array) -> Array:
+    def unconstrain_mean(self, mean: Array) -> Array:
         """
-        Transform valid moment parameters to unconstrained space.
+        Transform valid mean parameters to unconstrained space.
 
-        Inverse of :meth:`constrain_moment`.
+        Inverse of :meth:`constrain_mean`.
 
         Parameters
         ----------
-        moment : Array
-            Valid moment parameter vector.
+        mean : Array
+            Valid mean parameter vector.
 
         Returns
         -------
@@ -301,12 +301,12 @@ class Approx(SubclassRegistryMixin, ABC):
     @abstractmethod
     def init_noise(self, scale: float, state_dim: int) -> Array:
         """
-        Create unconstrained noise moment parameters.
+        Create unconstrained noise mean parameters.
 
         Each exponential-family subclass decides how to interpret
         *scale* for its own parameterisation and returns an array
         suitable for storage in
-        ``XFADS.unconstrained_noise_moment``.
+        ``XFADS.unconstrained_noise_mean``.
 
         Parameters
         ----------
@@ -319,12 +319,12 @@ class Approx(SubclassRegistryMixin, ABC):
         Returns
         -------
         Array
-            Unconstrained moment parameters.
+            Unconstrained mean parameters.
         """
         ...
 
     @abstractmethod
-    def predict_moment(self, loc: Array, noise_moment: Array) -> Array:
+    def predict_mean(self, loc: Array, noise_mean: Array) -> Array:
         """
         Mean parameter of the predictive distribution p(z | loc, noise).
 
@@ -337,8 +337,8 @@ class Approx(SubclassRegistryMixin, ABC):
         ----------
         loc : Array, shape (state_dim,)
             Dynamics output (deterministic location).
-        noise_moment : Array
-            Noise parameters in the code's moment format.
+        noise_mean : Array
+            Noise parameters in the mean parameter format.
 
         Returns
         -------
@@ -348,22 +348,24 @@ class Approx(SubclassRegistryMixin, ABC):
         ...
 
     @abstractmethod
-    def mean_param_to_moment(self, mean_param: Array) -> Array:
+    def mean_param_to_mean(self, mean_param: Array) -> Array:
         """
-        Convert mean parameter to the code's moment format.
+        Convert expanded mean parameter to the structured mean format.
 
-        Inverse mapping from the mean-parameter space (where averaging
-        is valid) to the moment format used by the rest of the codebase.
+        Inverse mapping from the expanded mean-parameter space (where
+        linear averaging is valid) back to the structured mean format
+        used by the rest of the codebase.
 
         Parameters
         ----------
         mean_param : Array
-            Mean parameter vector (output of :meth:`predict_moment`).
+            Expanded mean parameter vector (output of
+            :meth:`predict_mean`).
 
         Returns
         -------
         Array
-            Moment vector compatible with :meth:`moment_to_natural`.
+            Mean vector compatible with :meth:`mean_to_natural`.
         """
         ...
 
@@ -429,7 +431,7 @@ class ObservationModel(SubclassRegistryMixin, ConfModule):
         self,
         key: Array,
         t: Array,
-        moment: Array,
+        mean: Array,
         y: Array,
         approx: Approx,
         mc_size: int,

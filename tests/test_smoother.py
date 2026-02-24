@@ -95,8 +95,8 @@ def test_constructor():
     model = XFADS(model_conf, jr.key(seed))
 
     # Verify noise is on the model, not on forward dynamics
-    assert model.unconstrained_noise_moment is not None
-    assert not hasattr(model.forward, "unconstrained_noise_moment")
+    assert model.unconstrained_noise_mean is not None
+    assert not hasattr(model.forward, "unconstrained_noise_mean")
 
     with TemporaryDirectory() as tmp_dir:
         path = Path(tmp_dir) / "model.zip"

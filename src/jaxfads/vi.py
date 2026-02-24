@@ -16,8 +16,8 @@ from .base import Approx
 def elbo(
     key: Array,
     t: Array,
-    moment: Array,
-    moment_p: Array,
+    mean: Array,
+    mean_p: Array,
     y: Array,
     eloglik: Callable[..., Array],
     approx: Approx,
@@ -38,10 +38,10 @@ def elbo(
         JAX random key for stochastic computations.
     t : Array
         Time index for the current observation.
-    moment : Array
-        Moment parameters of the posterior distribution q(z_t | y_{1:T}).
-    moment_p : Array
-        Moment parameters of the prior/predictive distribution p(z_t | y_{1:t-1}).
+    mean : Array
+        Mean parameters of the posterior distribution q(z_t | y_{1:T}).
+    mean_p : Array
+        Mean parameters of the prior/predictive distribution p(z_t | y_{1:t-1}).
     y : Array, shape (observation_dim,)
         Observed data at time t.
     eloglik : Callable
@@ -80,23 +80,7 @@ def elbo(
 
     Maximizing the ELBO is equivalent to minimizing the negative ELBO, which
     is commonly used as the loss function during training.
-
-    Examples
-    --------
-    >>> # Compute ELBO for Poisson observations
-    >>> key = jrnd.key(42)
-    >>> t = 0
-    >>> moment_post = jnp.array([0.1, 0.2, 0.05])  # posterior moments
-    >>> moment_prior = jnp.array([0.0, 0.1, 0.02])  # prior moments
-    >>> y = jnp.array([5, 3, 1])  # count observations
-    >>>
-    >>> elbo_val = elbo(
-    ...     key, t, moment_post, moment_prior, y,
-    ...     eloglik=poisson_model.eloglik,
-    ...     approx=DiagMVN,
-    ...     mc_size=100
-    ... )
     """
-    ell: Array = eloglik(key, t, moment, y, approx, mc_size)
-    kl: Array = approx.kl(moment, moment_p)
+    ell: Array = eloglik(key, t, mean, y, approx, mc_size)
+    kl: Array = approx.kl(mean, mean_p)
     return ell - beta * kl

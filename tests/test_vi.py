@@ -5,26 +5,26 @@ from jax import random as jrnd
 from jaxfads.vi import elbo
 
 
-def _eloglik_stub(key, t, moment, y, approx, mc_size):
-    del key, t, moment, approx, mc_size
+def _eloglik_stub(key, t, mp, y, approx, mc_size):
+    del key, t, mp, approx, mc_size
     return jnp.sum(y)
 
 
 def test_elbo_matches_manual(diag):
     mean = jnp.array([0.2, -0.1])
     cov = jnp.array([1.0, 2.0])
-    moment = diag.canon_to_moment(mean, cov)
-    moment_p = diag.canon_to_moment(jnp.zeros(2), jnp.ones(2))
+    mp = diag.canon_to_mean(mean, cov)
+    mp_p = diag.canon_to_mean(jnp.zeros(2), jnp.ones(2))
     y = jnp.array([1.0, 2.0])
 
     expected = _eloglik_stub(None, None, None, y, None, None) - diag.kl(
-        moment, moment_p
+        mp, mp_p
     )
     value = elbo(
         jrnd.key(0),
         jnp.array(0),
-        moment,
-        moment_p,
+        mp,
+        mp_p,
         y,
         _eloglik_stub,
         diag,

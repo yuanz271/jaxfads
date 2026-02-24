@@ -32,8 +32,8 @@ class DummyModel:
     def prior_natural(self):
         return self.approx.prior_natural(self._state_dim)
 
-    def noise_moment(self):
-        return self.approx.constrain_moment(self._unconstrained_noise)
+    def noise_mean(self):
+        return self.approx.constrain_mean(self._unconstrained_noise)
 
 
 def test_filter_shapes_and_finite(diag):

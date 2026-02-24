@@ -32,6 +32,6 @@ def make_approx(dim: int, approx_name: str = "MVN", **kwargs) -> Approx:
     return cls(dim=dim, **kwargs)
 
 
-def make_noise_moment(approx: Approx, state_dim: int, cov: float = 1.0):
-    """Create a constrained noise moment array for test use."""
-    return approx.constrain_moment(approx.init_noise(cov, state_dim))
+def make_noise_mean(approx: Approx, state_dim: int, cov: float = 1.0):
+    """Create a constrained noise mean array for test use."""
+    return approx.constrain_mean(approx.init_noise(cov, state_dim))

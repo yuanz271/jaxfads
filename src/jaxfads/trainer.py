@@ -95,7 +95,7 @@ def train_test_split(arrays, *, rng, test_ratio=None, test_size=None, train_size
 
 
 def batch_elbo(
-    model, key, times, posterior_moments, predicted_moments, observations, *, beta=1.0
+    model, key, times, posterior_means, predicted_means, observations, *, beta=1.0
 ) -> Array:
     """
     Compute Evidence Lower Bound (ELBO) for batched sequences.
@@ -111,10 +111,10 @@ def batch_elbo(
         Random key for stochastic computations.
     times : Array, shape (T,)
         Time indices for the sequences.
-    posterior_moments : Array, shape (N, T, param_dim)
-        Posterior moment parameters for N sequences of length T.
-    predicted_moments : Array, shape (N, T, param_dim)
-        Prior/predictive moment parameters.
+    posterior_means : Array, shape (N, T, param_dim)
+        Posterior mean parameters for N sequences of length T.
+    predicted_means : Array, shape (N, T, param_dim)
+        Prior/predictive mean parameters.
     observations : Array, shape (N, T, observation_dim)
         Observed data sequences.
     beta : float, optional
@@ -145,7 +145,7 @@ def batch_elbo(
 
     keys = jr.split(key, observations.shape[:2])  # observations.shape[:2] + (2,)
 
-    return _elbo(keys, times, posterior_moments, predicted_moments, observations)
+    return _elbo(keys, times, posterior_means, predicted_means, observations)
 
 
 def batch_loss(model, batch, key, step, *, kl_warmup_steps=0):
@@ -155,7 +155,7 @@ def batch_loss(model, batch, key, step, *, kl_warmup_steps=0):
     Parameters
     ----------
     model : XFADS
-        Model providing `__call__` to produce posterior/prior moments and
+        Model providing `__call__` to produce posterior/prior means and
         configuration for loss terms.
     batch : tuple[Array, Array, Array, Array]
         Tuple `(times, observations, controls, covariates)` with shapes
@@ -185,13 +185,13 @@ def batch_loss(model, batch, key, step, *, kl_warmup_steps=0):
     times, observations, controls, covariates = batch
 
     key, model_key = jr.split(key)
-    _, posterior_moments, prior_moments = model(
+    _, posterior_means, prior_means = model(
         times, observations, controls, covariates, key=model_key
     )
 
     key, elbo_key = jr.split(key)
     free_energy = -batch_elbo(
-        model, elbo_key, times, posterior_moments, prior_moments, observations,
+        model, elbo_key, times, posterior_means, prior_means, observations,
         beta=beta,
     )
 

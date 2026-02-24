@@ -276,8 +276,8 @@ def evaluate(
     D = latent_states.shape[-1]
 
     # Inference
-    _, moments, _ = trained(times, obs, inputs, covs, key=key)
-    means, post_covs = jax.vmap(jax.vmap(approx.moment_to_canon))(moments)
+    _, means, _ = trained(times, obs, inputs, covs, key=key)
+    means, post_covs = jax.vmap(jax.vmap(approx.mean_to_canon))(means)
 
     # Procrustes alignment
     aff = procrustes_affine(latent_states.reshape(-1, D), means.reshape(-1, D))

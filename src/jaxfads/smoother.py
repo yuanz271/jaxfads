@@ -108,7 +108,7 @@ class XFADS(ConfModule):
     >>> u = jnp.zeros((32, 100, 1))         # controls
     >>> c = jnp.zeros((32, 100, 1))         # covariates
     >>>
-    >>> natural, moment, prediction = model(t, y, u, c, key=key)
+    >>> natural, mean, prediction = model(t, y, u, c, key=key)
     """
 
     forward: Dynamics
@@ -118,7 +118,7 @@ class XFADS(ConfModule):
     beta_encoder: Callable
     masker: DataMasker
     unconstrained_prior_natural: Array
-    unconstrained_noise_moment: Array
+    unconstrained_noise_mean: Array
 
     def __init__(self, conf, key=None):  # key unused; seed from conf for serializable reproducibility
         """
@@ -168,7 +168,7 @@ class XFADS(ConfModule):
             key=ky,
         )
 
-        self.unconstrained_noise_moment = self.approx.init_noise(
+        self.unconstrained_noise_mean = self.approx.init_noise(
             self.conf.dyn_conf.state_noise, state_dim
         )
 
@@ -286,16 +286,16 @@ class XFADS(ConfModule):
         """
         return self.approx.constrain_natural(self.unconstrained_prior_natural)
 
-    def noise_moment(self) -> Array:
+    def noise_mean(self) -> Array:
         """
-        Get constrained noise moment parameters.
+        Get constrained noise mean parameters.
 
         Returns
         -------
         Array
-            Moment parameters of the noise distribution.
+            Mean parameters of the noise distribution.
         """
-        return self.approx.constrain_moment(self.unconstrained_noise_moment)
+        return self.approx.constrain_mean(self.unconstrained_noise_mean)
 
     def noise_cov(self) -> Array:
         """
@@ -306,7 +306,7 @@ class XFADS(ConfModule):
         Array
             Canonical dispersion (e.g., covariance for Gaussian).
         """
-        _, disp = self.approx.moment_to_canon(self.noise_moment())
+        _, disp = self.approx.mean_to_canon(self.noise_mean())
         return disp
 
     def noise_loss(self) -> Array:
@@ -347,10 +347,10 @@ class XFADS(ConfModule):
         -------
         natural_params : Array, shape (N, T, param_dim)
             Natural parameters of posterior distributions over states.
-        moment_params : Array, shape (N, T, param_dim)
-            Moment parameters of posterior distributions over states.
+        mean_params : Array, shape (N, T, param_dim)
+            Mean parameters of posterior distributions over states.
         predictions : Array, shape (N, T, param_dim)
-            Predicted moment parameters from dynamics model.
+            Predicted mean parameters from dynamics model.
 
         Notes
         -----
@@ -379,14 +379,14 @@ class XFADS(ConfModule):
         >>> u = jnp.zeros((1, 100, 5))
         >>> c = jnp.zeros((1, 100, 3))
         >>>
-        >>> natural, moment, pred = model(t, y, u, c, key=key)
+        >>> natural, mean, pred = model(t, y, u, c, key=key)
         >>>
         >>> # Batch inference
         >>> y_batch = jrnd.normal(key, (32, 100, 50))
         >>> u_batch = jnp.zeros((32, 100, 5))
         >>> c_batch = jnp.zeros((32, 100, 3))
         >>>
-        >>> natural, moment, pred = model(t, y_batch, u_batch, c_batch, key=key)
+        >>> natural, mean, pred = model(t, y_batch, u_batch, c_batch, key=key)
         """
         batch_constrain_natural = vmap(vmap(self.approx.constrain_natural))
         batch_alpha_encode = vmap_with_key(vmap_with_key(self.alpha_encoder))
