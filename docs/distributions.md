@@ -8,7 +8,7 @@ The distribution system follows a two-layer design:
    flat arrays.  It has no knowledge of how parameters are structured
    internally.
 2. **Subclasses** (e.g. `MVN`) — handle the internal structure of parameters
-   and provide conversions between free-form, constrained, natural, and
+   and provide conversions between free-form, structured, natural, and
    mean representations.
 
 The core algorithm (`core.py`, `vi.py`) interacts only with the `Approx`
@@ -23,7 +23,7 @@ Every exponential-family distribution has four representations:
 | Form | Description | Stored? | Example (MVN) |
 |------|-------------|---------|---------------|
 | **Free-form** | Unconstrained array for SGD optimization | ✓ | Raw reals in ℝⁿ |
-| **Constrained param** | Valid structured parameters | | `[loc, cov_diag, cov_factor]` with `cov_diag > 0` |
+| **Structured param** | Valid structured parameters | | `[loc, cov_diag, cov_factor]` with `cov_diag > 0` |
 | **Natural** (η) | Canonical exponential-family parameters | | `[η₁, η₂]` with `η₂` negative definite |
 | **Mean** (μ) | Expected sufficient statistics `E[T(x)]` | | Used for sampling, KL, prediction |
 
@@ -38,24 +38,26 @@ param_from_conf(**kwargs)
         ▼
     free-form  ◄──── stored on XFADS, optimized by SGD
         │
-   constrain_param
+   to_structured
         │
         ▼
-  constrained param  ◄── valid structured parameters
+  structured param  ◄── valid structured parameters
         │
-  constrained_param_to_natural
-        │
-        ▼
-    natural  ◄── additive updates in filtering (η_f = η_p + α)
-        │
-   natural_to_mean
-        │
-        ▼
-     mean  ◄── sampling, KL, predict_mean
+        ├── structured_to_natural
+        │           │
+        │           ▼
+        │       natural  ◄── additive updates in filtering (η_f = η_p + α)
+        │           │
+        │      natural_to_mean
+        │           │
+        └── structured_to_mean (shortcut, numerically stable)
+                    │
+                    ▼
+                  mean  ◄── sampling, KL, predict_mean
 ```
 
 Each arrow is an `Approx` method.  The reverse direction is available
-where needed (`unconstrain_param`, `mean_to_natural`).
+where needed (`to_free`, `mean_to_natural`).
 
 ## `Approx` ABC Interface
 
@@ -70,20 +72,26 @@ All methods operate on opaque flat arrays.
 Each subclass defines which kwargs it accepts.  The returned array is
 suitable for storage on `XFADS` and optimization by SGD.
 
-### Constraint transforms
+### Structured transforms
 
 | Method | Signature | Role |
 |--------|-----------|------|
-| `constrain_param` | `(free) → param` | Free-form to valid constrained parameters |
-| `unconstrain_param` | `(param) → free` | Inverse of `constrain_param` |
+| `to_structured` | `(free) → param` | Free-form to valid structured parameters |
+| `to_free` | `(param) → free` | Inverse of `to_structured` |
 
 ### Parameter conversions
 
 | Method | Signature | Role |
 |--------|-----------|------|
-| `constrained_param_to_natural` | `(param) → η` | Constrained parameters to natural form |
+| `structured_to_natural` | `(param) → η` | Structured parameters to natural form |
+| `structured_to_mean` | `(param) → μ` | Structured parameters to mean form (shortcut) |
 | `natural_to_mean` | `(η) → μ` | Natural to mean conversion |
 | `mean_to_natural` | `(μ) → η` | Mean to natural conversion |
+
+`structured_to_mean` is a direct path from structured parameters
+to mean form, avoiding the roundtrip through natural parameters
+(`structured → natural → mean`) which may involve numerically unstable
+operations (e.g. matrix inversion for MVN).
 
 ### Inference
 
@@ -102,18 +110,16 @@ self.prior_params = self.approx.param_from_conf(scale=1.0)
 self.noise_params = self.approx.param_from_conf(scale=conf.state_noise)
 
 # Inference — derive natural/mean on the fly
-prior_natural = self.approx.constrained_param_to_natural(
-    self.approx.constrain_param(self.prior_params)
+prior_natural = self.approx.structured_to_natural(
+    self.approx.to_structured(self.prior_params)
 )
-noise_mean = self.approx.natural_to_mean(
-    self.approx.constrained_param_to_natural(
-        self.approx.constrain_param(self.noise_params)
-    )
+noise_mean = self.approx.structured_to_mean(
+    self.approx.to_structured(self.noise_params)
 )
 
-# Encoder outputs — network → constrained → natural
-alpha = self.approx.constrained_param_to_natural(
-    self.approx.constrain_param(encoder(y))
+# Encoder outputs — network → structured → natural
+alpha = self.approx.structured_to_natural(
+    self.approx.to_structured(encoder(y))
 )
 ```
 
@@ -129,13 +135,13 @@ alpha = self.approx.constrained_param_to_natural(
 `MVN(dim, rank)` implements the multivariate normal with covariance
 structure `Σ = diag(d) + U Uᵀ`.
 
-### Constrained Parameter Layout
+### Structured Parameter Layout
 
 ```
 [loc(D), cov_diag(D), cov_factor(D × r)]  →  total: D(2 + r)
 ```
 
-Where `cov_diag > 0` (enforced by softplus in `constrain_param`).
+Where `cov_diag > 0` (enforced by softplus in `to_structured`).
 
 ### Natural Parameter Layout
 
