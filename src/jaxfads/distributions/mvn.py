@@ -281,7 +281,7 @@ class MVN(Approx):
 
     # -- constrain / unconstrain --------------------------------------------
 
-    def constrain_mean(self, unconstrained: Array) -> Array:
+    def to_structured(self, unconstrained: Array) -> Array:
         """See base class.
 
         Applies ``softplus`` to the diagonal covariance entries;
@@ -297,30 +297,22 @@ class MVN(Approx):
         factor = unconstrained[2 * d :]
         return jnp.concatenate((loc, constrain_positive(diag_unc), factor))
 
-    def constrain_natural(self, unconstrained: Array) -> Array:
-        """See base class."""
-        d = self._dim
-        if self._rank == 0:
-            n1, n2 = jnp.split(unconstrained, 2)
-            return jnp.concatenate((n1, -constrain_positive(n2)))
+    def structured_to_natural(self, structured: Array) -> Array:
+        """See base class.
 
-        nat1, flat_L = jnp.split(unconstrained, [d])
-        L = jnp.tril(jnp.reshape(flat_L, (d, d)))
-        return jnp.concatenate((nat1, -(L @ L.T).flatten()))
+        Delegates to :meth:`mean_to_natural` because for MVN the
+        structured parameters coincide with the mean parameters.
+        """
+        return self.mean_to_natural(structured)
 
-    def unconstrain_natural(self, natural: Array) -> Array:
-        """See base class."""
-        d = self._dim
-        if self._rank == 0:
-            n1, n2 = jnp.split(natural, 2)
-            return jnp.concatenate((n1, unconstrain_positive(-n2)))
+    def structured_to_mean(self, structured: Array) -> Array:
+        """See base class.
 
-        nat1, nat2_flat = jnp.split(natural, [d])
-        neg_nat2 = jnp.reshape(-nat2_flat, (d, d))
-        L = jnp.linalg.cholesky(neg_nat2 + _EPS * jnp.eye(d))
-        return jnp.concatenate((nat1, L.flatten()))
+        Identity for MVN — structured parameters are mean parameters.
+        """
+        return structured
 
-    def unconstrain_mean(self, mean: Array) -> Array:
+    def to_free(self, mean: Array) -> Array:
         """See base class.
 
         Applies ``softplus_inverse`` to the diagonal covariance entries;
@@ -336,32 +328,29 @@ class MVN(Approx):
         factor = mean[2 * d :]
         return jnp.concatenate((loc, unconstrain_positive(cov_diag), factor))
 
-    # -- prior / noise ------------------------------------------------------
+    # -- param_from_conf -----------------------------------------------------
 
-    def prior_natural(self, state_dim: int) -> Array:
-        """See base class. Returns N(0, I) in natural form."""
-        d = self._dim
-        if self._rank == 0:
-            eta1 = jnp.zeros(d)
-            eta2 = jnp.full(d, -0.5)
-            return jnp.concatenate((eta1, eta2))
+    def param_from_conf(self, *, scale: float = 1.0) -> Array:
+        """See base class.
 
-        eta1 = jnp.zeros(d)
-        eta2 = -0.5 * jnp.eye(d)
-        return jnp.concatenate((eta1, eta2.flatten()))
+        Creates free-form parameters for isotropic N(0, scale·I).
 
-    def init_noise(self, scale: float, state_dim: int) -> Array:
-        """See base class. Isotropic noise N(0, scale·I).
+        Parameters
+        ----------
+        scale : float
+            Diagonal covariance value (default 1.0).
 
-        All variance goes into ``cov_diag``; the low-rank factor
-        is initialised to zero.
+        Returns
+        -------
+        Array
+            Free-form parameter array.
         """
         d, r = self._dim, self._rank
         loc = jnp.zeros(d)
         cov_diag = jnp.full(d, scale)
         cov_factor = jnp.zeros(d * r)
-        mean = jnp.concatenate((loc, cov_diag, cov_factor))
-        return self.unconstrain_mean(mean)
+        structured = jnp.concatenate((loc, cov_diag, cov_factor))
+        return self.to_free(structured)
 
     # -- predict_mean --------------------------------------------------------
 

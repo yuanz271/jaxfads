@@ -58,20 +58,15 @@ def test_natural_mean_roundtrip(dim, rank):
 
 
 @pytest.mark.parametrize("dim, rank", _ROUNDTRIP_CASES)
-def test_natural_mean_roundtrip_from_prior(dim, rank):
-    """natural_to_mean on prior_natural recovers N(0, I)."""
+def test_param_from_conf_default_is_standard_normal(dim, rank):
+    """param_from_conf(scale=1.0) → to_structured gives N(0, I)."""
     mvn = MVN(dim=dim, rank=rank)
-    natural = mvn.prior_natural(dim)
+    free = mvn.param_from_conf(scale=1.0)
+    structured = mvn.to_structured(free)
 
-    mp = mvn.natural_to_mean(natural)
-    chex.assert_tree_all_finite(mp)
-
-    loc, cov = mvn.mean_to_canon(mp)
+    loc, cov = mvn.mean_to_canon(structured)
     chex.assert_trees_all_close(loc, jnp.zeros(dim), atol=1e-5)
     chex.assert_trees_all_close(mvn.full_cov(cov), jnp.eye(dim), atol=1e-4)
-
-    natural_rt = mvn.mean_to_natural(mp)
-    chex.assert_trees_all_close(natural, natural_rt, atol=1e-4)
 
 
 # ---------------------------------------------------------------------------
@@ -146,24 +141,24 @@ def test_reparameterization(spec):
 
 
 @pytest.mark.parametrize("dim, rank", _ROUNDTRIP_CASES)
-def test_constrain_mean_roundtrip(dim, rank):
-    """constrain_mean(unconstrain_mean(m)) ≈ m."""
+def test_to_structured_roundtrip(dim, rank):
+    """to_structured(to_free(m)) ≈ m."""
     mvn = MVN(dim=dim, rank=rank)
     mp = _make_mean(mvn, jrnd.key(10))
 
-    unconstrained = mvn.unconstrain_mean(mp)
-    recovered = mvn.constrain_mean(unconstrained)
+    unconstrained = mvn.to_free(mp)
+    recovered = mvn.to_structured(unconstrained)
     chex.assert_trees_all_close(recovered, mp, atol=1e-5)
 
 
 @pytest.mark.parametrize("dim, rank", _ROUNDTRIP_CASES)
-def test_constrain_mean_produces_valid_cov(dim, rank):
-    """constrain_mean produces PD covariance."""
+def test_to_structured_produces_valid_cov(dim, rank):
+    """to_structured produces PD covariance."""
     mvn = MVN(dim=dim, rank=rank)
     unc_size = mvn.mean_size(dim)
     unconstrained = jrnd.normal(jrnd.key(0), (unc_size,))
 
-    mp = mvn.constrain_mean(unconstrained)
+    mp = mvn.to_structured(unconstrained)
     chex.assert_shape(mp, (unc_size,))
     chex.assert_tree_all_finite(mp)
 
@@ -175,14 +170,13 @@ def test_constrain_mean_produces_valid_cov(dim, rank):
 
 
 @pytest.mark.parametrize("dim, rank", _ROUNDTRIP_CASES)
-def test_unconstrain_natural_roundtrip(dim, rank):
-    """unconstrain_natural inverts constrain_natural."""
+def test_structured_to_natural_roundtrip(dim, rank):
+    """structured_to_natural ∘ natural_to_mean ≈ identity."""
     mvn = MVN(dim=dim, rank=rank)
-    natural = mvn.prior_natural(dim)
-    unconstrained = mvn.unconstrain_natural(natural)
-    chex.assert_tree_all_finite(unconstrained)
-
-    natural_rt = mvn.constrain_natural(unconstrained)
+    free = mvn.param_from_conf(scale=1.0)
+    structured = mvn.to_structured(free)
+    natural = mvn.structured_to_natural(structured)
+    natural_rt = mvn.structured_to_natural(mvn.natural_to_mean(natural))
     chex.assert_tree_all_finite(natural_rt)
 
     mp = mvn.natural_to_mean(natural)
@@ -191,18 +185,18 @@ def test_unconstrain_natural_roundtrip(dim, rank):
 
 
 # ---------------------------------------------------------------------------
-# init_noise
+# param_from_conf
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("dim, rank", _ROUNDTRIP_CASES)
-def test_init_noise(dim, rank):
-    """init_noise → constrain_mean gives isotropic N(0, scale·I)."""
+def test_param_from_conf(dim, rank):
+    """param_from_conf(scale=...) → to_structured gives isotropic N(0, scale·I)."""
     mvn = MVN(dim=dim, rank=rank)
     scale = 2.5
 
-    unc = mvn.init_noise(scale, dim)
-    mp = mvn.constrain_mean(unc)
+    free = mvn.param_from_conf(scale=scale)
+    mp = mvn.to_structured(free)
 
     loc, cov = mvn.mean_to_canon(mp)
     cov_full = mvn.full_cov(cov)
@@ -354,8 +348,8 @@ def test_predict_mean(dim, rank):
     """predict_mean with single loc recovers (loc, noise_cov)."""
     mvn = MVN(dim=dim, rank=rank)
     scale = 1.5
-    unc = mvn.init_noise(scale, dim)
-    noise_mean = mvn.constrain_mean(unc)
+    unc = mvn.param_from_conf(scale=scale)
+    noise_mean = mvn.to_structured(unc)
 
     loc = jrnd.normal(jrnd.key(0), (dim,))
     mp = mvn.predict_mean(loc[None, :], noise_mean)
@@ -374,8 +368,8 @@ def test_predict_mean_captures_variance(dim, rank):
     """predict_mean with spread locs produces larger covariance than noise alone."""
     mvn = MVN(dim=dim, rank=rank)
     scale = 0.1
-    unc = mvn.init_noise(scale, dim)
-    noise_mean = mvn.constrain_mean(unc)
+    unc = mvn.param_from_conf(scale=scale)
+    noise_mean = mvn.to_structured(unc)
 
     # Spread locs: variance of locs >> noise variance
     key = jrnd.key(42)
@@ -392,8 +386,8 @@ def test_predict_mean_captures_variance(dim, rank):
 def test_predict_mean_all_nan_returns_nan(dim, rank):
     """predict_mean returns NaN when all locs are non-finite."""
     mvn = MVN(dim=dim, rank=rank)
-    unc = mvn.init_noise(1.0, dim)
-    noise_mean = mvn.constrain_mean(unc)
+    unc = mvn.param_from_conf(scale=1.0)
+    noise_mean = mvn.to_structured(unc)
 
     nan_locs = jnp.full((5, dim), jnp.nan)
     mp = mvn.predict_mean(nan_locs, noise_mean)
@@ -454,7 +448,7 @@ def test_near_zero_cov_stability_all_ranks(dim, rank):
 
 
 # ---------------------------------------------------------------------------
-# constrain_natural neg-def (parametrized for rank > 0)
+# structured_to_natural neg-def (parametrized for rank > 0)
 # ---------------------------------------------------------------------------
 
 
@@ -463,13 +457,14 @@ def test_near_zero_cov_stability_all_ranks(dim, rank):
     pytest.param(4, 2, id="lowrank-2"),
     pytest.param(3, 3, id="full"),
 ])
-def test_constrain_natural_neg_def_all_ranks(dim, rank):
-    """constrain_natural produces negative-definite η₂ for rank > 0."""
+def test_structured_to_natural_neg_def_all_ranks(dim, rank):
+    """structured_to_natural produces negative-definite η₂ for rank > 0."""
     mvn = MVN(dim=dim, rank=rank)
-    param_sz = mvn.param_size(dim)
-    unconstrained = jrnd.normal(jrnd.key(1), (param_sz,))
+    mean_sz = mvn.mean_size(dim)
+    free = jrnd.normal(jrnd.key(1), (mean_sz,))
+    structured = mvn.to_structured(free)
 
-    natural = mvn.constrain_natural(unconstrained)
+    natural = mvn.structured_to_natural(structured)
     chex.assert_tree_all_finite(natural)
 
     _, nat2_flat = jnp.split(natural, [dim])

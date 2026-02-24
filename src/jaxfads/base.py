@@ -138,116 +138,101 @@ class Approx(SubclassRegistryMixin, ABC):
         ...
 
     @abstractmethod
-    def constrain_mean(self, unconstrained: Array) -> Array:
+    def to_structured(self, free: Array) -> Array:
         """
-        Transform unconstrained parameters to valid mean parameters.
+        Transform free-form parameters to valid structured parameters.
 
         Parameters
         ----------
-        unconstrained : Array
-            Unconstrained parameter vector from optimization.
+        free : Array
+            Free-form (unconstrained) parameter vector from optimization.
 
         Returns
         -------
         Array
-            Valid mean parameters satisfying distribution constraints
-            (e.g., positive definite covariance).
+            Valid structured parameters (e.g., loc and positive
+            covariance components for MVN).
         """
         ...
 
     @abstractmethod
-    def constrain_natural(self, unconstrained: Array) -> Array:
+    def structured_to_natural(self, structured: Array) -> Array:
         """
-        Transform unconstrained parameters to valid natural parameters.
+        Convert structured parameters to natural parameters.
 
         Parameters
         ----------
-        unconstrained : Array
-            Unconstrained parameter vector from optimization.
+        structured : Array
+            Valid structured parameter vector (output of
+            :meth:`to_structured`).
 
         Returns
         -------
         Array
-            Valid natural parameters satisfying distribution constraints
-            (e.g., negative definite precision for Gaussians).
+            Natural parameters of the exponential family.
         """
         ...
 
     @abstractmethod
-    def unconstrain_natural(self, natural: Array) -> Array:
+    def structured_to_mean(self, structured: Array) -> Array:
         """
-        Transform natural parameters to unconstrained space.
+        Convert structured parameters to mean parameters.
+
+        Direct path avoiding the roundtrip through natural parameters,
+        which may be numerically unstable (e.g. matrix inversion).
 
         Parameters
         ----------
-        natural : Array
-            Valid natural parameter vector.
+        structured : Array
+            Valid structured parameter vector (output of
+            :meth:`to_structured`).
 
         Returns
         -------
         Array
-            Unconstrained parameters suitable for optimization.
+            Mean parameters (expected sufficient statistics).
         """
         ...
 
     @abstractmethod
-    def unconstrain_mean(self, mean: Array) -> Array:
+    def to_free(self, structured: Array) -> Array:
         """
-        Transform valid mean parameters to unconstrained space.
+        Transform valid structured parameters to free-form.
 
-        Inverse of :meth:`constrain_mean`.
+        Inverse of :meth:`to_structured`.
 
         Parameters
         ----------
-        mean : Array
-            Valid mean parameter vector.
+        structured : Array
+            Valid structured parameter vector.
 
         Returns
         -------
         Array
-            Unconstrained parameters suitable for optimization.
+            Free-form (unconstrained) parameters suitable for
+            optimization.
         """
         ...
 
     @abstractmethod
-    def prior_natural(self, state_dim: int) -> Array:
+    def param_from_conf(self, **kwargs) -> Array:
         """
-        Get natural parameters for the standard normal prior.
+        Create free-form parameters from a serializable spec.
+
+        Each subclass defines which keyword arguments it accepts.
+        The returned array is in free-form (unconstrained), suitable
+        for storage on ``XFADS`` and optimization by SGD.
 
         Parameters
         ----------
-        state_dim : int
-            Dimensionality of the state space.
+        **kwargs
+            Family-specific keyword arguments (e.g. ``scale=1.0``
+            for MVN to create isotropic N(0, scale·I)).
 
         Returns
         -------
         Array
-            Natural parameters for N(0, I) prior distribution.
-        """
-        ...
-
-    @abstractmethod
-    def init_noise(self, scale: float, state_dim: int) -> Array:
-        """
-        Create unconstrained noise mean parameters.
-
-        Each exponential-family subclass decides how to interpret
-        *scale* for its own parameterisation and returns an array
-        suitable for storage in
-        ``XFADS.unconstrained_noise_mean``.
-
-        Parameters
-        ----------
-        scale : float
-            Noise scale (interpretation is family-specific,
-            e.g. variance for Gaussians).
-        state_dim : int
-            Dimensionality of the latent state.
-
-        Returns
-        -------
-        Array
-            Unconstrained mean parameters.
+            Free-form parameter array.
         """
         ...
 

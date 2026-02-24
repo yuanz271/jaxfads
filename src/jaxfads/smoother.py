@@ -139,7 +139,6 @@ class XFADS(ConfModule):
         """
         self.conf = conf
 
-        state_dim = self.conf.state_dim
         seed = self.conf.seed
         dropout = self.conf.dropout
         forward = self.conf.forward
@@ -168,8 +167,8 @@ class XFADS(ConfModule):
             key=ky,
         )
 
-        self.unconstrained_noise_mean = self.approx.init_noise(
-            self.conf.dyn_conf.state_noise, state_dim
+        self.unconstrained_noise_mean = self.approx.param_from_conf(
+            scale=self.conf.dyn_conf.state_noise
         )
 
         key, ky = jrnd.split(key)
@@ -192,9 +191,7 @@ class XFADS(ConfModule):
         # if "s" in static_params:
         #     self.forward.set_static()
 
-        self.unconstrained_prior_natural = self.approx.unconstrain_natural(
-            self.approx.prior_natural(state_dim)
-        )
+        self.unconstrained_prior_natural = self.approx.param_from_conf(scale=1.0)
 
     def initialize(self, t, y, u, c):
         """
@@ -284,7 +281,9 @@ class XFADS(ConfModule):
         Applies constraints to ensure parameters are in valid range
         for the chosen exponential family approximation.
         """
-        return self.approx.constrain_natural(self.unconstrained_prior_natural)
+        return self.approx.structured_to_natural(
+            self.approx.to_structured(self.unconstrained_prior_natural)
+        )
 
     def noise_mean(self) -> Array:
         """
@@ -295,7 +294,9 @@ class XFADS(ConfModule):
         Array
             Mean parameters of the noise distribution.
         """
-        return self.approx.constrain_mean(self.unconstrained_noise_mean)
+        return self.approx.structured_to_mean(
+            self.approx.to_structured(self.unconstrained_noise_mean)
+        )
 
     def noise_cov(self) -> Array:
         """
@@ -388,7 +389,10 @@ class XFADS(ConfModule):
         >>>
         >>> natural, mean, pred = model(t, y_batch, u_batch, c_batch, key=key)
         """
-        batch_constrain_natural = vmap(vmap(self.approx.constrain_natural))
+        def _free_to_natural(free):
+            return self.approx.structured_to_natural(self.approx.to_structured(free))
+
+        batch_free_to_natural = vmap(vmap(_free_to_natural))
         batch_alpha_encode = vmap_with_key(vmap_with_key(self.alpha_encoder))
         batch_beta_encode = vmap_with_key(self.beta_encoder)
 
@@ -407,7 +411,7 @@ class XFADS(ConfModule):
                     y = jnp.where(mask_y, y, 0)
 
                     key, alpha_key = jrnd.split(key)
-                    a = batch_constrain_natural(batch_alpha_encode(y, key=alpha_key))
+                    a = batch_free_to_natural(batch_alpha_encode(y, key=alpha_key))
                     a = jnp.where(mask_y, a, 0)  # miss_values have no updates to state
 
                     key, mask_key = jrnd.split(key)
@@ -415,7 +419,7 @@ class XFADS(ConfModule):
                     a = jnp.where(mask_a, a, 0)  # pseudo missing values
 
                     key, beta_key = jrnd.split(key)
-                    b = batch_constrain_natural(batch_beta_encode(a, key=beta_key))
+                    b = batch_free_to_natural(batch_beta_encode(a, key=beta_key))
 
                     key, mask_key = jrnd.split(key)
                     mask_b = self.masker(y, key=mask_key)
