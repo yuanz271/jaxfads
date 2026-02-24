@@ -14,11 +14,11 @@ from jax import numpy as jnp
 from jax import random as jrnd
 from tensorflow_probability.substrates.jax import distributions as tfd
 
-from .base import Approx
-from .constraints import _EPS, constrain_positive, unconstrain_positive
+from ..base import Approx
+from ..constraints import _EPS, constrain_positive, unconstrain_positive
 
 
-def damping_inv(a: Array, damping: float = _EPS) -> Array:
+def _damping_inv(a: Array, damping: float = _EPS) -> Array:
     """
     Compute the inverse of a matrix with damping for numerical stability.
 
@@ -188,7 +188,7 @@ class MVN(Approx):
         eta1, eta2_flat = jnp.split(natural, [d])
         P = -2.0 * jnp.reshape(eta2_flat, (d, d))
         loc = jnp.linalg.solve(P, eta1)
-        sigma = damping_inv(P)
+        sigma = _damping_inv(P)
         cov_diag, cov_factor = self._decompose_cov(sigma, d, r)
         return self._pack_moment(loc, cov_diag, cov_factor)
 
@@ -210,7 +210,7 @@ class MVN(Approx):
 
         loc, cov_diag, cov_factor = self._split_moment(moment)
         sigma = self._build_cov(jnp.maximum(cov_diag, _EPS), cov_factor)
-        P = damping_inv(sigma)
+        P = _damping_inv(sigma)
         eta1 = P @ loc
         eta2 = -0.5 * P
         return jnp.concatenate((eta1, eta2.flatten()))
