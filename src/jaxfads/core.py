@@ -156,10 +156,12 @@ def filter(
         model.prior_natural()
     )  # TODO: where should prior belongs, approx or dynamics?
 
+    noise_mean = approx.structured_to_mean(approx.to_structured(model.noise_free))
+
     expected_mean_forward = partial(
         sample_expected_mean,
         f=model.forward,
-        noise_mean=model.noise_mean(),
+        noise_mean=noise_mean,
         approx=approx,
         mc_size=model.conf.mc_size,
     )
@@ -258,18 +260,20 @@ def bismooth(
     approx = model.approx
     nature_prior = model.prior_natural()
 
+    noise_mean = approx.structured_to_mean(approx.to_structured(model.noise_free))
+
     natural_to_mean = jax.vmap(approx.natural_to_mean)
     expected_mean_forward = partial(
         sample_expected_mean,
         f=model.forward,
-        noise_mean=model.noise_mean(),
+        noise_mean=noise_mean,
         approx=approx,
         mc_size=mc_size,
     )
     expected_mean_backward = partial(
         sample_expected_mean,
         f=model.backward,
-        noise_mean=model.noise_mean(),
+        noise_mean=noise_mean,
         approx=approx,
         mc_size=mc_size,
     )

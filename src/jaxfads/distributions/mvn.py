@@ -337,15 +337,21 @@ class MVN(Approx):
 
     # -- param_from_conf -----------------------------------------------------
 
-    def param_from_conf(self, *, scale: float = 1.0) -> Array:
+    def param_from_conf(
+        self, *, loc: float | list[float] = 0.0, scale: float | list[float] = 1.0
+    ) -> Array:
         """See base class.
 
-        Creates free-form parameters for isotropic N(0, scale·I).
+        Creates free-form parameters for N(loc, diag(scale)).
 
         Parameters
         ----------
-        scale : float
-            Diagonal covariance value (default 1.0).
+        loc : float or list[float]
+            Mean value(s). Scalar is broadcast to all dimensions.
+            List must have length ``dim``.
+        scale : float or list[float]
+            Diagonal covariance value(s). Scalar is broadcast to all
+            dimensions. List must have length ``dim``.
 
         Returns
         -------
@@ -353,8 +359,8 @@ class MVN(Approx):
             Free-form parameter array.
         """
         d, r = self._dim, self._rank
-        loc = jnp.zeros(d)
-        cov_diag = jnp.full(d, scale)
+        loc = jnp.broadcast_to(jnp.asarray(loc, dtype=jnp.float32), (d,))
+        cov_diag = jnp.broadcast_to(jnp.asarray(scale, dtype=jnp.float32), (d,))
         cov_factor = jnp.zeros(d * r)
         structured = jnp.concatenate((loc, cov_diag, cov_factor))
         return self.to_free(structured)

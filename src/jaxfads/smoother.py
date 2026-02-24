@@ -65,7 +65,9 @@ class XFADS(ConfModule):
     masker : DataMasker
         Dropout masker for pseudo-observations during training.
     unconstrained_prior_natural : Array
-        Unconstrained prior natural parameters.
+        Free-form prior parameters (constrained to natural at inference).
+    noise_free : Array
+        Free-form noise parameters (constrained to structured/mean at inference).
 
     Notes
     -----
@@ -118,7 +120,7 @@ class XFADS(ConfModule):
     beta_encoder: Callable
     masker: DataMasker
     unconstrained_prior_natural: Array
-    unconstrained_noise_mean: Array
+    noise_free: Array
 
     def __init__(self, conf, key=None):  # key unused; seed from conf for serializable reproducibility
         """
@@ -167,7 +169,7 @@ class XFADS(ConfModule):
             key=ky,
         )
 
-        self.unconstrained_noise_mean = self.approx.param_from_conf(
+        self.noise_free = self.approx.param_from_conf(
             scale=self.conf.dyn_conf.state_noise
         )
 
@@ -287,19 +289,6 @@ class XFADS(ConfModule):
             )
         )
 
-    def noise_mean(self) -> Array:
-        """
-        Get constrained noise mean parameters.
-
-        Returns
-        -------
-        Array
-            Mean parameters of the noise distribution.
-        """
-        return self.approx.structured_to_mean(
-            self.approx.to_structured(self.unconstrained_noise_mean)
-        )
-
     def noise_cov(self) -> Array:
         """
         Get the process noise dispersion in canonical format.
@@ -309,7 +298,10 @@ class XFADS(ConfModule):
         Array
             Canonical dispersion (e.g., covariance for Gaussian).
         """
-        _, disp = self.approx.mean_to_canon(self.noise_mean())
+        noise_mean = self.approx.structured_to_mean(
+            self.approx.to_structured(self.noise_free)
+        )
+        _, disp = self.approx.mean_to_canon(noise_mean)
         return disp
 
     def noise_loss(self) -> Array:

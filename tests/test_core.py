@@ -27,7 +27,7 @@ class DummyModel:
         self.forward = IdentityDynamics(state_dim)
         self.backward = IdentityDynamics(state_dim)
         self._state_dim = state_dim
-        self._unconstrained_noise = approx.param_from_conf(scale=cov)
+        self.noise_free = approx.param_from_conf(scale=cov)
 
     def prior_natural(self):
         return self.approx.mean_to_natural(
@@ -35,9 +35,6 @@ class DummyModel:
                 self.approx.to_structured(self.approx.param_from_conf(scale=1.0))
             )
         )
-
-    def noise_mean(self):
-        return self.approx.to_structured(self._unconstrained_noise)
 
 
 def test_filter_shapes_and_finite(diag):
