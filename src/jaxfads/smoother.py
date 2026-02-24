@@ -17,7 +17,7 @@ from jax import numpy as jnp
 from jax import random as jrnd
 from gearax.modules import ConfModule, load_model, save_model
 
-from . import core, encoders
+from . import core, distributions, encoders  # noqa: F401 — distributions registers Approx subclasses
 from .core import Mode
 from .base import Approx
 from .base import Dynamics

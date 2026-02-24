@@ -277,7 +277,7 @@ def evaluate(
 
     # Inference
     _, means, _ = trained(times, obs, inputs, covs, key=key)
-    means, post_covs = jax.vmap(jax.vmap(approx.mean_to_canon))(means)
+    means, post_covs = jax.vmap(jax.vmap(approx.unpack))(means)
 
     # Procrustes alignment
     aff = procrustes_affine(latent_states.reshape(-1, D), means.reshape(-1, D))
