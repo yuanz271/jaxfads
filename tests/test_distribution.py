@@ -280,13 +280,24 @@ def test_sample_shape_and_statistics(dim, rank):
 
 @pytest.mark.parametrize("dim, rank", _ALL_RANKS)
 def test_predict_mean_single_loc(dim, rank):
-    """Single loc → contract recovers (loc, noise_cov)."""
+    """predict_mean returns paper-convention expected sufficient stats."""
     mvn = MVN(dim=dim, rank=rank)
     scale = 1.5
     noise = mvn.canon_to_mean(mvn.free_to_canon(mvn.free_from_kw(scale=scale)))
     z = jrnd.normal(jrnd.key(0), (dim,))
 
     expanded = mvn.predict_mean(z, noise)
+
+    if rank == 0:
+        _, q_diag = jnp.split(noise, 2)
+        expected = jnp.concatenate((z, -0.5 * (z**2 + q_diag)))
+    else:
+        _, q = mvn.unpack(noise)
+        expected = jnp.concatenate((z, (-0.5 * (jnp.outer(z, z) + q)).ravel()))
+
+    chex.assert_trees_all_close(expanded, expected, atol=1e-6)
+
+    # Roundtrip through from_sufficient_stats yields (mean=z, cov=Q)
     mp = mvn.from_sufficient_stats(expanded)
     recovered_loc, recovered_cov = mvn.unpack(mp)
     chex.assert_trees_all_close(recovered_loc, z, atol=1e-5)
