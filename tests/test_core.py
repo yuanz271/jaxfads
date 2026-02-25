@@ -27,12 +27,12 @@ class DummyModel:
         self.forward = IdentityDynamics(state_dim)
         self.backward = IdentityDynamics(state_dim)
         self._state_dim = state_dim
-        self.noise_free = approx.param_from_conf(scale=cov)
+        self.noise_free = approx.free_from_kw(scale=cov)
 
     def prior_natural(self):
         return self.approx.mean_to_natural(
             self.approx.canon_to_mean(
-                self.approx.free_to_canon(self.approx.param_from_conf(scale=1.0))
+                self.approx.free_to_canon(self.approx.free_from_kw(scale=1.0))
             )
         )
 

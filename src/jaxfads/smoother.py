@@ -10,6 +10,7 @@ algorithms.
 from collections.abc import Callable
 from functools import partial
 from pathlib import Path
+from typing import Any
 
 import equinox as eqx
 from jax import Array, vmap
@@ -119,8 +120,8 @@ class XFADS(ConfModule):
     alpha_encoder: Callable
     beta_encoder: Callable
     masker: DataMasker
-    unconstrained_prior_natural: Array
-    noise_free: Array
+    unconstrained_prior_natural: Any
+    noise_free: Any
 
     def __init__(self, conf, key=None):  # key unused; seed from conf for serializable reproducibility
         """
@@ -169,7 +170,7 @@ class XFADS(ConfModule):
             key=ky,
         )
 
-        self.noise_free = self.approx.param_from_conf(
+        self.noise_free = self.approx.free_from_kw(
             scale=self.conf.dyn_conf.state_noise
         )
 
@@ -193,7 +194,7 @@ class XFADS(ConfModule):
         # if "s" in static_params:
         #     self.forward.set_static()
 
-        self.unconstrained_prior_natural = self.approx.param_from_conf(scale=1.0)
+        self.unconstrained_prior_natural = self.approx.free_from_kw(scale=1.0)
 
     def initialize(self, t, y, u, c):
         """

@@ -357,11 +357,11 @@ class MVN(Approx):
             cov_factor=canon.cov_factor,
         )
 
-    # -- param_from_conf -----------------------------------------------------
+    # -- free_from_kw -----------------------------------------------------
 
-    def param_from_conf(
+    def free_from_kw(
         self, *, loc: float | list[float] = 0.0, scale: float | list[float] = 1.0
-    ) -> Array:
+    ) -> MVNParam:
         """See base class.
 
         Creates free-form parameters for N(loc, diag(scale)).
@@ -377,8 +377,8 @@ class MVN(Approx):
 
         Returns
         -------
-        Array
-            Free-form parameter array.
+        MVNParam
+            Free-form parameter pytree.
         """
         d, r = self._dim, self._rank
         loc_arr = jnp.broadcast_to(jnp.asarray(loc, dtype=jnp.float32), (d,))

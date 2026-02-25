@@ -75,16 +75,16 @@ def test_natural_mean_roundtrip(dim, rank):
 
 
 # ---------------------------------------------------------------------------
-# param_from_conf
+# free_from_kw
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("dim, rank", _ALL_RANKS)
 @pytest.mark.parametrize("scale", [1.0, 2.5])
-def test_param_from_conf(dim, rank, scale):
-    """param_from_conf → to_canon → canon_to_mean gives N(0, scale·I)."""
+def test_free_from_kw(dim, rank, scale):
+    """free_from_kw → to_canon → canon_to_mean gives N(0, scale·I)."""
     mvn = MVN(dim=dim, rank=rank)
-    free = mvn.param_from_conf(scale=scale)
+    free = mvn.free_from_kw(scale=scale)
     canon = mvn.free_to_canon(free)
     mp = mvn.canon_to_mean(canon)
 
@@ -151,7 +151,7 @@ def test_canon_mean_roundtrip(dim, rank):
 def test_canon_to_natural_neg_def(dim, rank):
     """canon_to_natural produces negative-definite η₂ for rank > 0."""
     mvn = MVN(dim=dim, rank=rank)
-    free = mvn.param_from_conf(scale=2.0)
+    free = mvn.free_from_kw(scale=2.0)
     canon = mvn.free_to_canon(free)
     natural = mvn.canon_to_natural(canon)
     chex.assert_tree_all_finite(natural)
@@ -283,7 +283,7 @@ def test_predict_mean_single_loc(dim, rank):
     """Single loc → contract recovers (loc, noise_cov)."""
     mvn = MVN(dim=dim, rank=rank)
     scale = 1.5
-    noise = mvn.canon_to_mean(mvn.free_to_canon(mvn.param_from_conf(scale=scale)))
+    noise = mvn.canon_to_mean(mvn.free_to_canon(mvn.free_from_kw(scale=scale)))
     z = jrnd.normal(jrnd.key(0), (dim,))
 
     expanded = mvn.predict_mean(z, noise)
@@ -298,7 +298,7 @@ def test_predict_mean_average_captures_variance(dim, rank):
     """Averaged expanded stats produce larger covariance than noise alone."""
     mvn = MVN(dim=dim, rank=rank)
     scale = 0.1
-    noise = mvn.canon_to_mean(mvn.free_to_canon(mvn.param_from_conf(scale=scale)))
+    noise = mvn.canon_to_mean(mvn.free_to_canon(mvn.free_from_kw(scale=scale)))
     zs = jrnd.normal(jrnd.key(42), (200, dim)) * 3.0
 
     expanded = jax.vmap(lambda z: mvn.predict_mean(z, noise))(zs)

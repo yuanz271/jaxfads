@@ -52,7 +52,7 @@ Every exponential-family distribution has four representations:
 ## Conversion Flow
 
 ```
-param_from_conf(**kwargs)
+free_from_kw(**kwargs)
         │
         ▼
     free-form (pytree)  ◄──── stored on XFADS, optimized by optax
@@ -89,7 +89,7 @@ where needed (`canon_to_free`, `mean_to_natural`, `mean_to_canon`).
 
 | Method | Signature | Role |
 |--------|-----------|------|
-| `param_from_conf` | `(**kwargs) → pytree` | Create free-form pytree from serializable spec |
+| `free_from_kw` | `(**kwargs) → pytree` | Create free-form pytree from serializable spec |
 | `param_size` | `(dim) → int` | Natural parameter vector size |
 
 ### Canon ↔ free-form (pytree ↔ pytree)
@@ -125,8 +125,8 @@ where needed (`canon_to_free`, `mean_to_natural`, `mean_to_canon`).
 
 ```python
 # Construction — stored as free-form pytrees on the module
-self.noise_free = self.approx.param_from_conf(scale=conf.state_noise)
-self.unconstrained_prior_natural = self.approx.param_from_conf(scale=1.0)
+self.noise_free = self.approx.free_from_kw(scale=conf.state_noise)
+self.unconstrained_prior_natural = self.approx.free_from_kw(scale=1.0)
 
 # Inference — derive natural/mean on the fly
 prior_natural = self.approx.mean_to_natural(

@@ -217,7 +217,7 @@ class Approx(SubclassRegistryMixin, ABC):
         ...
 
     @abstractmethod
-    def param_from_conf(self, **kwargs) -> Any:
+    def free_from_kw(self, **kwargs) -> Any:
         """
         Create free-form parameters from a serializable spec.
 
