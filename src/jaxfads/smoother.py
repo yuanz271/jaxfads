@@ -290,31 +290,6 @@ class XFADS(ConfModule):
             )
         )
 
-    def noise_cov(self) -> Array:
-        """
-        Get the process noise dispersion in canonical format.
-
-        Returns
-        -------
-        Array
-            Canonical dispersion (e.g., covariance for Gaussian).
-        """
-        noise = self.approx.canon_to_moment(
-            self.approx.free_to_canon(self.noise_free)
-        )
-        _, disp = self.approx.unpack(noise)
-        return disp
-
-    def noise_loss(self) -> Array:
-        """
-        Compute regularization loss for the process noise.
-
-        Returns
-        -------
-        Array
-            Mean of canonical dispersion.
-        """
-        return jnp.mean(self.noise_cov())
 
     def __call__(self, t, y, u, c, *, key) -> tuple[Array, Array, Array]:
         """

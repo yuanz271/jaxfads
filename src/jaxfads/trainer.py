@@ -48,6 +48,8 @@ DEFAULT_TRAINER_CONFIG = DictConfig(
         "validation_size": 80,
         "patience": 10,
         "kl_warmup_steps": 0,
+        # Optional user-provided regularizer: Callable[[XFADS], Array]
+        "noise_regularizer": None,
     }
 )
 
@@ -148,7 +150,15 @@ def batch_elbo(
     return _elbo(keys, times, posterior_moments, predicted_moments, observations)
 
 
-def batch_loss(model, batch, key, step, *, kl_warmup_steps=0):
+def batch_loss(
+    model,
+    batch,
+    key,
+    step,
+    *,
+    kl_warmup_steps=0,
+    noise_regularizer=None,
+):
     """
     Compute negative ELBO loss for a batch of sequences.
 
@@ -195,12 +205,8 @@ def batch_loss(model, batch, key, step, *, kl_warmup_steps=0):
         beta=beta,
     )
 
-    loss = (
-        jnp.mean(free_energy) + model.conf.noise_penalty * model.noise_loss()
-        # + model.conf.noise_penalty * model.backward_noise_loss()
-    )
-
-    return loss
+    reg = noise_regularizer(model) if noise_regularizer is not None else 0.0
+    return jnp.mean(free_energy) + reg
 
 
 def dataloader(arrays, batch_size, num_epochs, key, shuffle=True):
@@ -333,7 +339,7 @@ def train(model, data, *, conf):
        - Early stopping based on convergence criteria
 
     4. **Loss Computation**: Maximizes ELBO (Evidence Lower Bound):
-       Loss = -E[log p(y|z)] + KL(q(z)||p(z)) + noise_penalty
+       Loss = -E[log p(y|z)] + KL(q(z)||p(z)) + optional regularizers
 
     The implementation is optimized for performance with:
     - JIT compilation of critical functions
@@ -407,7 +413,11 @@ def train(model, data, *, conf):
         optax.scale_by_learning_rate(conf.learning_rate),
     )
 
-    loss_fn = partial(batch_loss, kl_warmup_steps=conf.kl_warmup_steps)
+    loss_fn = partial(
+        batch_loss,
+        kl_warmup_steps=conf.kl_warmup_steps,
+        noise_regularizer=conf.noise_regularizer,
+    )
 
     model = gt.train(
         model,
