@@ -31,16 +31,18 @@ Plugin distributions in external packages register on user import.
 ## Parameter Forms
 
 Terminology note:
-- **Moment parameters** are the flat parameter vectors used throughout the
-  algorithm. For MVN, this storage moment layout is `[loc, cov]` (encoded as
-  diagonal + low-rank factor).
-- `predict_moment(z, noise)` returns **moment parameters in sufficient-statistic
-  layout** (i.e. expected sufficient statistics `E[T(z_t) | z_{t-1}]`).
-- `from_sufficient_stats(stats)` converts those sufficient-stat moments into the
-  storage moment layout.
-- For the transition model, the **predictive moment parameters** at time `t`
-  are integrated moments
-  `E_{π(z_{t-1})}[ E_{p(z_t|z_{t-1})}[T(z_t)] ]` (Eq 12).
+- **Moment parameters** (`μ`) mean the expected sufficient statistics
+  `E[T(z)]` of the exponential family.
+- In code, moment parameters may be stored in an equivalent *compact*
+  parameterization (e.g. for MVN as `[loc, cov]` encoded as diagonal + low-rank
+  factor), because it is more convenient for sampling and KL.
+- `predict_moment(z, noise)` returns conditional moments in the
+  sufficient-statistic layout `E[T(z_t) | z_{t-1}]`.
+- `from_sufficient_stats(stats)` converts those sufficient-statistic moments
+  into the compact moment representation used elsewhere in the code.
+- For the transition model:
+  - **predictive moments** (Eq 4): `μ_θ(z_{t-1}) = E_{p(z_t|z_{t-1})}[T(z_t)]`
+  - **expected predictive moments** (Eq 12): `E_{π(z_{t-1})}[μ_θ(z_{t-1})]`.
 
 See `docs/notation.md` for mathematical naming/notation.
 
@@ -106,14 +108,14 @@ Quick reference (public API):
 | `free_from_kw(**kw)` | `kw → free` | Create free-form parameters from a serializable spec. |
 | `free_to_canon(free)` | `free → canon` | Apply constraints (e.g. softplus). |
 | `canon_to_free(canon)` | `canon → free` | Inverse constraints. |
-| `canon_to_moment(canon)` | `canon → moment` | Pack canon pytree into flat storage moment vector. |
-| `moment_to_canon(moment)` | `moment → canon` | Unpack flat storage moment vector into canon pytree. |
-| `natural_to_moment(natural)` | `natural → moment` | Natural → storage moment conversion. |
-| `moment_to_natural(moment)` | `moment → natural` | Storage moment → natural conversion. |
-| `sample_by_moment(key, moment, n)` | `moment → samples` | Sampling uses the storage moment representation. |
-| `kl(moment1, moment2)` | `moment × moment → scalar` | KL between two distributions in storage moment form. |
+| `canon_to_moment(canon)` | `canon → moment` | Convert canon pytree to a flat compact moment vector. |
+| `moment_to_canon(moment)` | `moment → canon` | Convert a flat compact moment vector to canon pytree. |
+| `natural_to_moment(natural)` | `natural → moment` | Natural → compact moment conversion. |
+| `moment_to_natural(moment)` | `moment → natural` | Compact moment → natural conversion. |
+| `sample_by_moment(key, moment, n)` | `moment → samples` | Sampling uses the compact moment representation. |
+| `kl(moment1, moment2)` | `moment × moment → scalar` | KL in the compact moment representation. |
 | `predict_moment(z, noise)` | `(z, noise) → stats` | Conditional moments in sufficient-statistic layout `E[T(z_t) | z_{t-1}]`. |
-| `from_sufficient_stats(stats)` | `stats → moment` | Convert sufficient-statistic moments to storage moment layout. |
+| `from_sufficient_stats(stats)` | `stats → moment` | Convert sufficient-statistic moments to the compact moment representation. |
 
 ### Initialization
 
@@ -150,7 +152,7 @@ Quick reference (public API):
 | `sample_by_moment` | `(key, μ, n) → z` | Draw `n` samples from the distribution |
 | `kl` | `(μ₁, μ₂) → scalar` | KL divergence `KL(p₁ ‖ p₂)` |
 | `predict_moment` | `(z, noise) → stats_flat` | Conditional moment parameters `E[T(z_t) | z_{t-1}]` |
-| `from_sufficient_stats` | `(stats_flat) → μ_flat` | Convert sufficient-stat moments to storage moment layout |
+| `from_sufficient_stats` | `(stats_flat) → μ_flat` | Convert sufficient-stat moments to compact moment representation |
 
 ### Usage in XFADS
 
@@ -188,7 +190,7 @@ alpha = _free_to_natural(encoder(y))
 - Monte Carlo averaging across samples of `z_{t-1}` is handled outside the
   distribution (in `core.expected_predictive_moment`) via `jax.vmap` + `jnp.mean`,
   followed by `approx.from_sufficient_stats(...)` to map averaged sufficient
-  statistics into the storage moment layout used elsewhere.
+  statistics into the compact moment representation used elsewhere.
 - Encoder outputs remain flat arrays (natural parameter updates for additive
   filtering). They pass through `moment_to_canon` → `free_to_canon` →
   `canon_to_moment` → `moment_to_natural` to convert from unconstrained flat to
@@ -261,7 +263,7 @@ to a covariance via:
 `Σ = E[z_t z_tᵀ] - E[z_t] E[z_t]ᵀ`,
 
 
-and then re-encodes `Σ` into the storage moment format
+and then re-encodes `Σ` into the compact moment representation
 `[loc, cov_diag, cov_factor]`.
 
 ### Additional Methods (not on ABC)

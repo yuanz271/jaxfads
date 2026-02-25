@@ -57,12 +57,23 @@ Moment-matching (forward KL minimization):
 
 ```
 μ̄_t = E_{π(z_{t-1})}[μ_θ(z_{t-1})]
+
+where the *predictive moment function* (Eq. 4) is
+
+μ_θ(z_{t-1}) = E_{p(z_t|z_{t-1})}[T(z_t)]
 ```
 
 Approximated via reparameterization trick with `S` samples (Eq 22):
 
 ```
 μ̄_t ≈ (1/S) Σ_s μ_θ(z^s_{t-1})     where z^s_{t-1} ~ π(z_{t-1})
+
+In code this is implemented by `core.expected_predictive_moment`:
+- sample `z_{t-1}^s ~ π(z_{t-1})`
+- compute dynamics mean `f(z_{t-1}^s)`
+- compute conditional moments via `approx.predict_moment(f(z_{t-1}^s), noise)`
+- average across samples and map into the compact moment representation via
+  `approx.from_sufficient_stats`
 ```
 
 This gives predictive mean `m̄_t = (1/S) Σ m_θ(z^s)` and covariance

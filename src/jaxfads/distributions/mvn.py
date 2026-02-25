@@ -423,8 +423,8 @@ class MVN(Approx):
     def from_sufficient_stats(self, stats: Array) -> Array:
         """See base class.
 
-        Converts moment parameters ``[E[z], E[-½ zzᵀ]]`` into the storage mean
-        format ``[loc, cov_diag, cov_factor]``.
+        Converts moment parameters ``[E[z], E[-½ zzᵀ]]`` into the compact moment
+        representation ``[loc, cov_diag, cov_factor]``.
 
         Internally recovers the second moment ``E[zzᵀ] = -2·E[-½ zzᵀ]`` and
         then computes covariance as ``Σ = E[zzᵀ] - E[z]E[z]ᵀ``.

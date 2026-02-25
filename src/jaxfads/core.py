@@ -22,7 +22,7 @@ from .base import Approx
 
 def expected_predictive_moment(
     key: Array,
-    mean: Array,
+    moment: Array,
     u: Array,
     c: Array,
     f: Callable[..., Array],
@@ -38,14 +38,15 @@ def expected_predictive_moment(
 
     Averaging is performed in moment-parameter space (expected sufficient
     statistics, i.e. the output of ``approx.predict_moment``), then converted
-    to the storage mean format via ``approx.from_sufficient_stats``.
+    to the compact moment representation used elsewhere via
+    ``approx.from_sufficient_stats``.
 
     Parameters
     ----------
     key : PRNGKeyArray
         Random key for sampling.
-    mean : Array
-        Moment parameters of current state distribution q(z_t).
+    moment : Array
+        Moment parameters of current state distribution π(z_{t-1}).
     u : Array, shape (input_dim,)
         Control/input vector.
     c : Array, shape (covariate_dim,)
@@ -62,7 +63,8 @@ def expected_predictive_moment(
     Returns
     -------
     Array
-        Predicted mean parameters.
+        Predicted moment parameters (in the compact representation used by the
+        rest of the codebase).
 
     Notes
     -----
@@ -76,7 +78,7 @@ def expected_predictive_moment(
     If every sample is non-finite the result will itself be non-finite.
     """
     key, subkey = jrnd.split(key)
-    z = approx.sample_by_moment(subkey, mean, mc_size)
+    z = approx.sample_by_moment(subkey, moment, mc_size)
     u_bc = jnp.broadcast_to(u, shape=(mc_size,) + u.shape)
     c_bc = jnp.broadcast_to(c, shape=(mc_size,) + c.shape)
 
@@ -96,7 +98,7 @@ def expected_predictive_moment(
         jnp.full(expanded.shape[-1:], jnp.nan),
     )
 
-    # Convert averaged sufficient stats to storage mean parameters
+    # Convert averaged sufficient-stat moments to the compact moment representation
     return approx.from_sufficient_stats(avg)
 
 

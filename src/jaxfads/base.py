@@ -247,7 +247,7 @@ class Approx(SubclassRegistryMixin, ABC):
         noise parameters. The output lives in a flat moment-parameter
         space where averaging across MC samples is linear. Use
         :meth:`from_sufficient_stats` to convert the averaged moment
-        parameters to the storage moment format used elsewhere.
+        parameters to the compact moment representation used elsewhere.
 
         Parameters
         ----------
@@ -268,21 +268,28 @@ class Approx(SubclassRegistryMixin, ABC):
     @abstractmethod
     def from_sufficient_stats(self, stats: Array) -> Array:
         """
-        Convert (averaged) moment parameters to storage moment format.
+        Convert (averaged) moment parameters to the compact moment layout.
 
         Maps from the true moment parameters ``E[T(z)]`` (as returned by
-        :meth:`predict_moment`) to the flat storage moment format used by the
-        rest of the codebase.
+        :meth:`predict_moment`) to the flat compact moment representation used
+        by the rest of the codebase.
+
+        Notes
+        -----
+        Some implementations compute moments directly in a sufficient-statistic
+        layout. This method converts those moments into the compact moment
+        layout used throughout the library.
 
         Parameters
         ----------
         stats : Array
-            Sufficient statistics (expected value of ``T(z)``).
+            Moment parameters in sufficient-statistic layout (i.e.
+            ``E[T(z)]``).
 
         Returns
         -------
         Array
-            Flat moment parameter vector in storage format.
+            Flat moment parameter vector in compact representation.
         """
         ...
 

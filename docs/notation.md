@@ -3,7 +3,7 @@
 This document describes the *mathematical* naming/notation used in JAXFADS.
 (Concrete API surface and method tables live in `docs/design.md`.)
 
-## Parameter forms (concepts)
+## Parameter forms
 
 JAXFADS uses multiple parameter representations for exponential-family
 approximations.
@@ -13,15 +13,15 @@ approximations.
 | **free** | Unconstrained parameters optimized by SGD | pytree |
 | **canon** | Constrained, valid parameters | pytree |
 | **natural** (`η`) | Natural parameters of the exponential family | flat array |
-| **moment** (`μ`) | Flat *storage* moment-parameter vector used throughout the algorithms | flat array |
+| **moment** (`μ`) | Moment parameters of the exponential family | flat array |
 
-Important: the word **moment** is used in two related senses:
+**Moment parameters** are the expected sufficient statistics:
 
-1. **Storage moment layout**: the flat vector representation passed around the
-   codebase (e.g. MVN stores `[loc, cov]` encoded as diagonal + low-rank factor).
-2. **Sufficient-statistic moments**: expected sufficient statistics `E[T(z)]`.
-   Some operations (notably the variational predict Eq. (12)) are most naturally
-   performed in this space, then converted back to the storage layout.
+`μ = E[T(z)]`.
+
+This quantity is commonly called the *mean parameter* in the exponential-family
+literature. To avoid confusion with the expectation of a random variable (e.g.
+`E[z]`), this repo consistently uses the term **moment**.
 
 ## Symbols
 
@@ -33,20 +33,30 @@ Important: the word **moment** is used in two related senses:
 | `c_t` | Covariates/context at time `t` |
 | `T(z)` | Sufficient statistics of the exponential family |
 | `η` | Natural parameters |
-| `μ` | Moment parameters (context-dependent; see above) |
+| `μ` | Moment parameters (`E[T(z)]`) |
 
-## Predictive moments (Eq. 12)
+## Predictive moments (Eq. 4)
 
 For the transition model, the predictive moment parameters at time `t` are the
-integrated moments:
+conditional moments:
 
-`E_{π(z_{t-1})}[ E_{p(z_t|z_{t-1})}[T(z_t)] ]`.
+`μ(z_{t-1}) = E_{p(z_t | z_{t-1})}[T(z_t)]`.
 
-This is an outer expectation over `z_{t-1}` and (in general) an inner
-expectation under the transition distribution `p(z_t|z_{t-1})`.
+This is an inner expectation over `z_t` under the transition distribution
+`p(z_t | z_{t-1})`.
+
+## Expected predictive moments (Eq. 12)
+
+For the transition model, the expected predictive moment parameters at time `t`
+are the integrated moments:
+
+`E_{π(z_{t-1})}[ μ(z_{t-1}) ] = E_{π(z_{t-1})}[ E_{p(z_t | z_{t-1})}[T(z_t)] ]`.
+
+This is an outer expectation over `z_{t-1}` and an inner expectation under the
+transition distribution.
 
 ## Method naming pattern (informal)
 
 When reading code, conversions typically follow an explicit `X_to_Y` naming
-pattern (e.g. natural→moment, free→canon). This is a convention for readability,
-not a mathematical requirement.
+pattern (e.g. natural→moment, free→canon). This is a convention for
+readability, not a mathematical requirement.
