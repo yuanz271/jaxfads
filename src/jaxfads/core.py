@@ -26,7 +26,7 @@ def sample_expected_mean(
     u: Array,
     c: Array,
     f: Callable[..., Array],
-    noise: Array | None,
+    noise: Array,
     approx: Approx,
     mc_size: int,
 ) -> Array:
@@ -52,10 +52,8 @@ def sample_expected_mean(
         Covariate vector.
     f : Callable
         Dynamics function.
-    noise : Array or None
-        Additional transition parameters (e.g. covariance for
-        additive Gaussian noise).  ``None`` for families without
-        separate dispersion.
+    noise : Array
+        Transition noise parameters passed through to ``approx``.
     approx : Approx
         Exponential family approximation instance.
     mc_size : int
@@ -64,7 +62,7 @@ def sample_expected_mean(
     Returns
     -------
     Array
-        Predicted mean parameters with covariance ``Var[f(z)] + Q``.
+        Predicted mean parameters.
 
     Notes
     -----

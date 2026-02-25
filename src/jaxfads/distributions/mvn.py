@@ -389,7 +389,7 @@ class MVN(Approx):
 
     # -- predict_mean --------------------------------------------------------
 
-    def predict_mean(self, z: Array, noise: Array | None = None) -> Array:
+    def predict_mean(self, z: Array, noise: Array) -> Array:
         """See base class.
 
         Returns expanded sufficient statistics ``E[T(z)]`` for a single

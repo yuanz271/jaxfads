@@ -238,23 +238,24 @@ class Approx(SubclassRegistryMixin, ABC):
         ...
 
     @abstractmethod
-    def predict_mean(self, z: Array, noise: Array | None = None) -> Array:
+    def predict_mean(self, z: Array, noise: Array) -> Array:
         """
         Expanded sufficient statistics for a single state realization.
 
-        Computes ``E[T(z)]`` for one dynamics output and optional
-        transition noise parameters.  The output lives in the expanded
+        Computes ``E[T(z)]`` for one dynamics output and transition
+        noise parameters.  The output lives in the expanded
         sufficient-statistic space where averaging across MC samples
-        is linear.  Use :meth:`from_sufficient_stats` to convert the average
-        back to standard mean parameters.
+        is linear.  Use :meth:`from_sufficient_stats` to convert the
+        average back to standard mean parameters.
 
         Parameters
         ----------
         z : Array, shape (state_dim,)
             Single state realization (dynamics output).
-        noise : Array or None, optional
+        noise : Array
             Additional transition parameters (e.g. dispersion).
-            ``None`` for families without separate dispersion.
+            Pass ``jnp.array([])`` for families without separate
+            dispersion.
 
         Returns
         -------
