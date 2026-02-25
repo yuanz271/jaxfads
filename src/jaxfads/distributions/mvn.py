@@ -392,8 +392,8 @@ class MVN(Approx):
     def predict_mean(self, z: Array, noise: Array) -> Array:
         """See base class.
 
-        Returns expected sufficient statistics for a single transition
-        distribution.
+        Returns moment parameters (expected sufficient statistics) for a single
+        transition distribution.
 
         Under the XFADS paper convention, the Gaussian sufficient
         statistics are:
@@ -401,13 +401,13 @@ class MVN(Approx):
         * ``T₁(z_t) = z_t``
         * ``T₂(z_t) = -½ z_t z_tᵀ``
 
-        With transition ``z_t ~ N(μ, Q)`` (here ``μ = z``), the expected
-        sufficient statistics are:
+        With transition ``z_t ~ N(μ, Q)`` (here ``μ = z``), the conditional
+        moments are:
 
         * ``E[T₁ | z] = μ``
         * ``E[T₂ | z] = -½ (Q + μ μᵀ)``
 
-        Flat layout returned by this method:
+        Flat layout returned by this method (moment parameters):
 
         * rank 0: ``[μ, -½(μ² + Q_diag)]``
         * rank > 0: ``[μ, vec(-½(Q + μ μᵀ))]``
@@ -423,8 +423,8 @@ class MVN(Approx):
     def from_sufficient_stats(self, stats: Array) -> Array:
         """See base class.
 
-        Converts expected sufficient statistics ``[E[z], E[-½ zzᵀ]]`` into
-        the storage mean format ``[loc, cov_diag, cov_factor]``.
+        Converts moment parameters ``[E[z], E[-½ zzᵀ]]`` into the storage mean
+        format ``[loc, cov_diag, cov_factor]``.
 
         Internally recovers the second moment ``E[zzᵀ] = -2·E[-½ zzᵀ]`` and
         then computes covariance as ``Σ = E[zzᵀ] - E[z]E[z]ᵀ``.

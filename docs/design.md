@@ -30,6 +30,16 @@ Plugin distributions in external packages register on user import.
 
 ## Parameter Forms
 
+Terminology note:
+- **Moment parameters** = expected sufficient statistics `E[T(z)]`.
+- For the transition model, the **predictive moment parameters** at time `t`
+  are the *integrated* moments
+  `E_{π(z_{t-1})}[ E_{p(z_t|z_{t-1})}[T(z_t)] ]` (Eq 12).
+- In this codebase, the term **mean parameters** refers to a *flat storage
+  representation* used by the algorithms (e.g. for MVN: `[loc, cov]` encoded as
+  diag + low-rank factor). This storage mean is not necessarily identical to
+  the moment parameters.
+
 Every exponential-family distribution has four representations:
 
 | Form | Type | Reason | Example (MVN) |
@@ -152,8 +162,8 @@ alpha = _free_to_natural(encoder(y))
 
 - `predict_mean(z, noise)` is **single-state**: it takes one dynamics output
   `z` with shape `(D,)` and transition noise parameters `noise` (flat array; use
-  `jnp.array([])` if unused). It returns the **expected sufficient statistics**
-  `E[T(z_t) | z_{t-1}]` in a flat vector form.
+  `jnp.array([])` if unused). It returns **moment parameters** (expected
+  sufficient statistics) `E[T(z_t) | z_{t-1}]` in a flat vector form.
 - Monte Carlo averaging across samples of `z_{t-1}` is handled outside the
   distribution (in `core.sample_expected_mean`) via `jax.vmap` + `jnp.mean`,
   followed by `approx.from_sufficient_stats(...)` to map averaged sufficient
@@ -216,8 +226,7 @@ Implementation note:
 - The current JAXFADS `MVN` implementation uses an equivalent convention where
   the second natural-parameter block is *negative definite*.
 
-`MVN.predict_mean(z, noise)` returns these expected sufficient statistics in a
-flat layout:
+`MVN.predict_mean(z, noise)` returns these moment parameters in a flat layout:
 
 - rank 0 (diagonal `Q`): `[μ, -½(μ² + diag(Q))]`
 - rank > 0 (full `Q`): `[μ, vec(-½(Q + μ μᵀ))]`

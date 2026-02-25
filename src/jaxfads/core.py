@@ -36,9 +36,9 @@ def sample_expected_mean(
     Implements Eq (12): ``μ̄_t = E_{π(z_{t-1})}[μ_θ(z_{t-1})]``
     where ``μ_θ`` is the mean parameter of ``p(z_t | f(z_{t-1}), θ)``.
 
-    Averaging is performed in expanded sufficient-statistic space
-    (where it is valid by linearity), then contracted back to the
-    canon mean format for downstream use.
+    Averaging is performed in moment-parameter space (expected sufficient
+    statistics, i.e. the output of ``approx.predict_mean``), then converted
+    to the storage mean format via ``approx.from_sufficient_stats``.
 
     Parameters
     ----------
@@ -167,7 +167,7 @@ def filter(
     approx = model.approx
     nature_p_1 = (
         model.prior_natural()
-    )  # TODO: where should prior belongs, approx or dynamics?
+    )
 
     noise = approx.canon_to_mean(approx.free_to_canon(model.noise_free))
 

@@ -242,10 +242,10 @@ while not converged:
    The low-rank structure of encoder outputs is implicit via the MVN
    rank parameter, not explicitly enforced as outer products.
 
-5. **`predict_mean` averaging**: The paper averages in mean parameter space
-   (Eq 22). The code does this correctly via `predict_mean` on `MVN`,
-   which computes expanded sufficient statistics `E[T(z)]` per sample,
-   averages, then converts back.
+5. **`predict_mean` averaging**: The paper averages in mean (moment) parameter
+   space (Eq 22). The code does this correctly via `predict_mean` on `MVN`,
+   which computes moment parameters (expected sufficient statistics) `E[T(z)]`
+   per sample, averages, then converts back.
 
 6. **KL computation**: Paper derives efficient O(LSr + LS² + Lr²) KL
    evaluation (App C.1) using structured factors. Code uses TFP's
