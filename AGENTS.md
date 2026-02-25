@@ -86,9 +86,23 @@ Invariant for callers:
 
 ```bash
 uv sync
+
+# Lint
 uv run ruff check .
+
+# Format
+uv run ruff format .
+
+# Tests
 uv run pytest
 ```
+
+## Commit checklist
+
+Upon commit (especially when changing code under `src/`):
+- run lint: `uv run ruff check .`
+- run format: `uv run ruff format .`
+- run tests: `uv run pytest` (per Testing conventions)
 
 ## Documentation conventions
 
