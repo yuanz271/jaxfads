@@ -3,6 +3,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from jax import Array, random as jr
+from jax import numpy as jnp
 from omegaconf import OmegaConf, DictConfig
 import equinox as eqx
 from jaxfads.base import Dynamics
@@ -96,3 +97,87 @@ def test_constructor():
         loaded_model = XFADS.load(path)
 
         eqx.tree_equal(model, loaded_model)
+
+
+def test_top_level_dims_override_subconfig_dims():
+    """Top-level state/observation dims must override any sub-config values."""
+    T = 7
+    y_size = 5
+    z_size = 3
+    u_size = 2
+
+    seed = 0
+
+    # Intentionally provide *wrong* dims in sub-configs to ensure XFADS overrides
+    # them with the top-level dimensions.
+    model_conf = OmegaConf.create(
+        dict(
+            mode="pseudo",
+            observation_dim=y_size,
+            state_dim=z_size,
+            forward="Mock",
+            approx="MVN",
+            approx_kwargs={},
+            mc_size=2,
+            seed=seed,
+            n_steps=T,
+            fb_penalty=0,
+            noise_penalty=0,
+            dropout=0.0,
+            dyn_conf=OmegaConf.create(
+                dict(
+                    state_dim=999,
+                    observation_dim=999,
+                    input_dim=u_size,
+                    context_dim=0,
+                    state_noise=1.0,
+                )
+            ),
+            enc_conf=OmegaConf.create(
+                dict(
+                    observation_dim=999,
+                    state_dim=999,
+                    width=8,
+                    depth=1,
+                    dropout=0.0,
+                )
+            ),
+            obs_conf=OmegaConf.create(
+                dict(
+                    model="GLM",
+                    observation_dim=999,
+                    state_dim=999,
+                    emission_noise=1.0,
+                    norm_readout=False,
+                    dropout=0.0,
+                    likelihood="Poisson",
+                )
+            ),
+        )
+    )
+
+    model = XFADS(model_conf, jr.key(seed))
+
+    # Ensure merged sub-configs reflect the top-level dims.
+    assert int(model.forward.conf.state_dim) == z_size
+    assert int(model.forward.conf.observation_dim) == y_size
+    assert int(model.observation.conf.state_dim) == z_size
+    assert int(model.observation.conf.observation_dim) == y_size
+
+    # Readout weights should use (obs_dim, state_dim) from the top-level config.
+    assert model.observation.readout.weight.shape == (y_size, z_size)
+
+    # Smoke-run inference using top-level shapes.
+    key = jr.key(123)
+    times = jnp.broadcast_to(jnp.arange(T), (1, T))
+    y = jr.poisson(key, jnp.ones((1, T, y_size)))
+    u = jnp.zeros((1, T, u_size))
+    c = jnp.zeros((1, T, 0))
+
+    model = model.initialize(times, y, u, c)
+    key, k = jr.split(key)
+    free_energy, post_mom, prior_mom = model(times, y, u, c, key=k)
+
+    assert jnp.isfinite(free_energy).all()
+    assert jnp.isfinite(post_mom).all()
+    assert jnp.isfinite(prior_mom).all()

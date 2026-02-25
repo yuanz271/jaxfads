@@ -183,7 +183,6 @@ class XFADS(ConfModule):
             {
                 "state_dim": self.conf.state_dim,
                 "observation_dim": self.conf.observation_dim,
-                "n_steps": self.conf.n_steps,
             },
         )
 
