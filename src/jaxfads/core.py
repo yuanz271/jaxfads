@@ -31,13 +31,14 @@ def expected_predictive_moment(
     mc_size: int,
 ) -> Array:
     """
-    Compute expected moment parameter via Monte Carlo sampling.
+    Compute expected predictive moment via Monte Carlo sampling.
 
     Implements Eq (12): ``μ̄_t = E_{π(z_{t-1})}[μ_θ(z_{t-1})]``
-    where ``μ_θ`` is the moment parameter of ``p(z_t | f(z_{t-1}), θ)``.
+    where ``μ_θ`` is the predictive moment function (Eq 4)
+    ``μ_θ(z_{t-1}) = E_{p(z_t|z_{t-1})}[T(z_t)]``.
 
-    Averaging is performed in moment-parameter space (expected sufficient
-    statistics, i.e. the output of ``approx.predictive_moment``).
+    Averaging is performed in moment-parameter space, i.e. the output of
+    ``approx.predictive_moment``.
 
     Parameters
     ----------
@@ -61,7 +62,8 @@ def expected_predictive_moment(
     Returns
     -------
     Array
-        Expected predictive moment parameters (i.e. averaged ``E[T(z_t)|z_{t-1}]``).
+        Expected predictive moment parameters (i.e. averaged
+        ``E[T(z_t) | z_{t-1}]``).
 
     Notes
     -----
@@ -82,17 +84,17 @@ def expected_predictive_moment(
     # Dynamics outputs for each MC sample
     zs = jax.vmap(partial(f, key=key), in_axes=(0, 0, 0))(z, u_bc, c_bc)
 
-    # Per-sample expanded predictive moment
-    expanded = jax.vmap(partial(approx.predictive_moment, noise=noise))(zs)
+    # Per-sample predictive moment
+    predictive_moment_samples = jax.vmap(partial(approx.predictive_moment, noise=noise))(zs)
 
     # Non-finite safe averaging
-    valid = jnp.all(jnp.isfinite(expanded), axis=-1)  # (S,)
-    safe = jnp.where(valid[:, None], expanded, 0.0)
+    valid = jnp.all(jnp.isfinite(predictive_moment_samples), axis=-1)  # (S,)
+    safe = jnp.where(valid[:, None], predictive_moment_samples, 0.0)
     n_valid = jnp.sum(valid)
     avg = jnp.where(
         n_valid > 0,
         jnp.sum(safe, axis=0) / n_valid,
-        jnp.full(expanded.shape[-1:], jnp.nan),
+        jnp.full(predictive_moment_samples.shape[-1:], jnp.nan),
     )
 
     return avg
@@ -148,10 +150,10 @@ def filter(
     -------
     nature_f : Array, shape (T, param_dim)
         Filtered natural parameters for each time step.
-    mean_f : Array, shape (T, param_dim)
-        Filtered mean parameters for each time step.
-    mean_p : Array, shape (T, param_dim)
-        Predicted mean parameters from dynamics.
+    moment_f : Array, shape (T, param_dim)
+        Filtered moment parameters for each time step.
+    moment_p : Array, shape (T, param_dim)
+        Predicted moment parameters from dynamics.
 
     Notes
     -----
@@ -169,7 +171,7 @@ def filter(
 
     noise = approx.canon_to_moment(approx.free_to_canon(model.noise_free))
 
-    expected_mean_forward = partial(
+    expected_moment_forward = partial(
         expected_predictive_moment,
         f=model.forward,
         noise=noise,
@@ -179,33 +181,33 @@ def filter(
 
     nature_f_1 = nature_p_1 + alpha[0]
 
-    def ff(carry, obs, expected_mean):
+    def ff(carry, obs, expected_moment):
         key, nature_tm1 = carry
         key, ky = jrnd.split(key)
         a_t, u_tm1, c_tm1 = obs
-        mean_tm1 = approx.natural_to_moment(nature_tm1)
-        mean_p_t = expected_mean(ky, mean_tm1, u_tm1, c_tm1)
-        nature_p_t = approx.moment_to_natural(mean_p_t)
+        moment_tm1 = approx.natural_to_moment(nature_tm1)
+        moment_p_t = expected_moment(ky, moment_tm1, u_tm1, c_tm1)
+        nature_p_t = approx.moment_to_natural(moment_p_t)
         nature_t = nature_p_t + a_t
-        return (key, nature_t), (mean_p_t, nature_p_t, nature_t)
+        return (key, nature_t), (moment_p_t, nature_p_t, nature_t)
 
     key, ky = jrnd.split(key)
     scan_body = eqx.filter_checkpoint(
-        partial(ff, expected_mean=expected_mean_forward)
+        partial(ff, expected_moment=expected_moment_forward)
     )
-    _, (mean_p, _, nature_f) = scan(
+    _, (moment_p, _, nature_f) = scan(
         scan_body,
         init=(ky, nature_f_1),
         xs=(alpha[1:], u[:-1], c[:-1]),  # t = 2 ... T+1
     )
     nature_f = jnp.vstack((nature_f_1, nature_f))  # 1...T
 
-    mean_f = jax.vmap(approx.natural_to_moment)(nature_f)
-    mean_p = jnp.vstack(
-        (approx.natural_to_moment(nature_f_1), mean_p)
+    moment_f = jax.vmap(approx.natural_to_moment)(nature_f)
+    moment_p = jnp.vstack(
+        (approx.natural_to_moment(nature_f_1), moment_p)
     )  # prediction of t=1 is the prior
 
-    return nature_f, mean_f, mean_p
+    return nature_f, moment_f, moment_p
 
 
 # NOTE: bismooth() requires model.backward (a Dynamics instance) which is
@@ -245,10 +247,10 @@ def bismooth(
     -------
     nature_s : Array, shape (T, param_dim)
         Smoothed natural parameters combining forward and backward passes.
-    mean_s : Array, shape (T, param_dim)
-        Smoothed mean parameters.
-    mean_p : Array, shape (T, param_dim)
-        Predicted mean parameters under smoothing distribution.
+    moment_s : Array, shape (T, param_dim)
+        Smoothed moment parameters.
+    moment_p : Array, shape (T, param_dim)
+        Predicted moment parameters under smoothing distribution.
 
     Notes
     -----
@@ -274,14 +276,14 @@ def bismooth(
     noise = approx.canon_to_moment(approx.free_to_canon(model.noise_free))
 
     natural_to_moment = jax.vmap(approx.natural_to_moment)
-    expected_mean_forward = partial(
+    expected_moment_forward = partial(
         expected_predictive_moment,
         f=model.forward,
         noise=noise,
         approx=approx,
         mc_size=mc_size,
     )
-    expected_mean_backward = partial(
+    expected_moment_backward = partial(
         expected_predictive_moment,
         f=model.backward,
         noise=noise,
@@ -291,21 +293,21 @@ def bismooth(
 
     nature_f_1 = nature_prior + alpha[0]
 
-    def ff(carry, obs, expected_mean):
+    def ff(carry, obs, expected_moment):
         key, nature_f_tm1 = carry
         key_tp1, key_t = jrnd.split(key)
         update_obs_t, u, c = obs
-        mean_f_tm1 = approx.natural_to_moment(nature_f_tm1)
-        mean_p_t = expected_mean(key_t, mean_f_tm1, u, c)
-        nature_p_t = approx.moment_to_natural(mean_p_t)
+        moment_f_tm1 = approx.natural_to_moment(nature_f_tm1)
+        moment_p_t = expected_moment(key_t, moment_f_tm1, u, c)
+        nature_p_t = approx.moment_to_natural(moment_p_t)
         nature_f_t = nature_p_t + update_obs_t
-        return (key_tp1, nature_f_t), (mean_p_t, nature_p_t, nature_f_t)
+        return (key_tp1, nature_f_t), (moment_p_t, nature_p_t, nature_f_t)
 
     # Forward
     # TODO: checkpoint scan body when bismooth is implemented
     key, forward_key = jrnd.split(key)
     _, (_, _, nature_f) = scan(
-        partial(ff, expected_mean=expected_mean_forward),
+        partial(ff, expected_moment=expected_moment_forward),
         init=(forward_key, nature_f_1),
         xs=(alpha[1:], u[:-1], c[:-1]),  # t = 2 ... T+1
     )
@@ -316,23 +318,23 @@ def bismooth(
     (_, nature_b_Tp1), _ = ff(
         (ky, nature_f[-1]),
         (jnp.zeros_like(nature_prior), u[-1], c[-1]),
-        expected_mean_forward,
+        expected_moment_forward,
     )
 
     key, backward_key = jrnd.split(key)
     _, (_, nature_p_b, _) = scan(
-        partial(ff, expected_mean=expected_mean_backward),
+        partial(ff, expected_moment=expected_moment_backward),
         init=(backward_key, nature_b_Tp1),
         xs=(alpha, u, c),
         reverse=True,
     )
 
     nature_s = nature_f + nature_p_b - jnp.expand_dims(nature_prior, axis=0)
-    mean_s = natural_to_moment(nature_s)
+    moment_s = natural_to_moment(nature_s)
 
     # expectation should be under smoothing distribution
-    keys = jrnd.split(key, jnp.size(mean_s, 0))
-    mean_p = jax.vmap(expected_mean_forward)(keys, mean_s, u, c)
-    mean_p = jnp.vstack((mean_s[0], mean_p[:-1]))
+    keys = jrnd.split(key, jnp.size(moment_s, 0))
+    moment_p = jax.vmap(expected_moment_forward)(keys, moment_s, u, c)
+    moment_p = jnp.vstack((moment_s[0], moment_p[:-1]))
 
-    return nature_s, mean_s, mean_p
+    return nature_s, moment_s, moment_p
