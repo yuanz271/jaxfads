@@ -19,7 +19,7 @@ from jax import random as jrnd
 from gearax.modules import ConfModule, load_model, save_model
 from omegaconf import OmegaConf
 
-from . import core, distributions, encoders  # noqa: F401 — distributions registers Approx subclasses
+from . import core, distributions, dynamics, encoders  # noqa: F401 — side-effect registers subclasses
 from .core import Mode
 from .base import Approx
 from .base import Dynamics
