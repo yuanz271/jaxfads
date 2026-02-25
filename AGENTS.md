@@ -90,6 +90,15 @@ uv run ruff check .
 uv run pytest
 ```
 
+## Documentation conventions
+
+- When preparing a commit that changes **behavior, APIs, configuration schemas, or examples**, update the relevant documentation in the same PR/commit series.
+- At minimum, consider whether updates are needed for:
+  - `README.md`
+  - `AGENTS.md`
+  - `docs/*.md`
+  - `examples/*` comments/config snippets
+
 ## Testing conventions
 
 - Run tests (`uv run pytest`) when code changes under `src/`.
