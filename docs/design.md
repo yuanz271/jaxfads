@@ -150,13 +150,18 @@ alpha = _free_to_natural(encoder(y))
 
 ### Notes
 
-- `predict_mean` takes a batch of dynamics locations `(N, D)` and noise
-  mean params (flat).  Each subclass handles sufficient-statistic
-  averaging internally.
-- Encoder outputs remain flat arrays (natural parameter updates for
-  additive filtering).  They pass through `mean_to_canon` →
-  `free_to_canon` → `canon_to_mean` → `mean_to_natural` to
-  convert from unconstrained flat to valid natural parameters.
+- `predict_mean(z, noise)` is **single-state**: it takes one dynamics output
+  `z` with shape `(D,)` and transition noise parameters `noise` (flat array; use
+  `jnp.array([])` if unused). It returns the **expected sufficient statistics**
+  `E[T(z_t) | z_{t-1}]` in a flat vector form.
+- Monte Carlo averaging across samples of `z_{t-1}` is handled outside the
+  distribution (in `core.sample_expected_mean`) via `jax.vmap` + `jnp.mean`,
+  followed by `approx.from_sufficient_stats(...)` to map averaged sufficient
+  statistics into the storage mean-parameter format used elsewhere.
+- Encoder outputs remain flat arrays (natural parameter updates for additive
+  filtering). They pass through `mean_to_canon` → `free_to_canon` →
+  `canon_to_mean` → `mean_to_natural` to convert from unconstrained flat to
+  valid natural parameters.
 
 ## MVN Subclass
 
@@ -184,6 +189,51 @@ Both canon and free-form use `MVNParam`.  The difference:
 - rank 0: `[η₁(D), η₂(D)]` → total `2D`
 - rank > 0: `[η₁(D), η₂_flat(D²)]` → total `D + D²`
 
+### Sufficient statistics for the Gaussian transition
+
+In XFADS the MVN transition is used in the form:
+
+```
+z_t | z_{t-1}=z  ~  N( f(z), Q )
+```
+
+For a multivariate normal (an exponential family in `z_t`), a common
+canonical choice of sufficient statistics (matching the XFADS paper) is:
+
+- `T₁(z_t) = z_t`
+- `T₂(z_t) = -½ z_t z_tᵀ`
+
+Hence the conditional expected sufficient statistics given `z_{t-1}=z` are:
+
+- `E[T₁(z_t) | z] = μ = f(z)`
+- `E[T₂(z_t) | z] = -½ (Q + μ μᵀ)`
+
+Implementation note:
+
+- The XFADS paper defines `T₂(z) = -½ zzᵀ`, so the second natural-parameter
+  block is precision-like (positive definite) and pseudo-observation updates
+  add PSD terms.
+- The current JAXFADS `MVN` implementation uses an equivalent convention where
+  the second natural-parameter block is *negative definite*.
+
+`MVN.predict_mean(z, noise)` returns these expected sufficient statistics in a
+flat layout:
+
+- rank 0 (diagonal `Q`): `[μ, -½(μ² + diag(Q))]`
+- rank > 0 (full `Q`): `[μ, vec(-½(Q + μ μᵀ))]`
+
+After averaging these vectors across Monte Carlo samples of `z_{t-1}`,
+`MVN.from_sufficient_stats(stats)` recovers the second moment and converts it
+to a covariance via:
+
+`E[z_t z_tᵀ] = -2 · E[-½ z_t z_tᵀ]`,
+
+`Σ = E[z_t z_tᵀ] - E[z_t] E[z_t]ᵀ`,
+
+
+and then re-encodes `Σ` into the storage mean format
+`[loc, cov_diag, cov_factor]`.
+
 ### Additional Methods (not on ABC)
 
 | Method | Role |
@@ -192,7 +242,7 @@ Both canon and free-form use `MVNParam`.  The difference:
 | `unpack(μ_flat) → (loc, cov)` | Extract `(loc, cov_diag_or_full)` from flat mean |
 | `pack(loc, cov) → μ_flat` | Inverse of `unpack` (lossy for rank > 0 via `_decompose_cov`) |
 | `full_cov(cov) → (D, D)` | Materialize full covariance matrix |
-| `mean_size(dim) → int` | Mean parameter vector size |
+| `mean_size(dim) → int` | Mean parameter vector size (testing/debug convenience) |
 
 ### Implementation Details
 

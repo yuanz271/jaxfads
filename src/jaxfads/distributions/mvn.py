@@ -392,36 +392,61 @@ class MVN(Approx):
     def predict_mean(self, z: Array, noise: Array) -> Array:
         """See base class.
 
-        Returns expanded sufficient statistics ``E[T(z)]`` for a single
-        state realization plus additive Gaussian noise:
+        Returns expected sufficient statistics for a single transition
+        distribution.
 
-        * rank 0: ``[z, z² + Q_diag]``
-        * rank > 0: ``[z, vec(z zᵀ + Σ_Q)]``
+        Under the XFADS paper convention, the Gaussian sufficient
+        statistics are:
 
-        These are linear in the state, so safe to average across MC
-        samples before converting back via :meth:`from_sufficient_stats`.
+        * ``T₁(z_t) = z_t``
+        * ``T₂(z_t) = -½ z_t z_tᵀ``
+
+        With transition ``z_t ~ N(μ, Q)`` (here ``μ = z``), the expected
+        sufficient statistics are:
+
+        * ``E[T₁ | z] = μ``
+        * ``E[T₂ | z] = -½ (Q + μ μᵀ)``
+
+        Flat layout returned by this method:
+
+        * rank 0: ``[μ, -½(μ² + Q_diag)]``
+        * rank > 0: ``[μ, vec(-½(Q + μ μᵀ))]``
         """
         if self._rank == 0:
-            _, noise_diag = jnp.split(noise, 2)
-            return jnp.concatenate((z, z ** 2 + noise_diag))
+            _, q_diag = jnp.split(noise, 2)
+            return jnp.concatenate((z, -0.5 * (z**2 + q_diag)))
 
-        _, noise_cov = self.unpack(noise)
-        second = (jnp.outer(z, z) + noise_cov).ravel()
+        _, q = self.unpack(noise)
+        second = (-0.5 * (jnp.outer(z, z) + q)).ravel()
         return jnp.concatenate((z, second))
 
     def from_sufficient_stats(self, stats: Array) -> Array:
         """See base class.
 
-        Converts ``[μ, E[zzᵀ]]`` to storage mean ``[μ, Σ_diag, Σ_factor]``
-        by subtracting ``μμᵀ`` from the second-moment block.
+        Converts expected sufficient statistics ``[E[z], E[-½ zzᵀ]]`` into
+        the storage mean format ``[loc, cov_diag, cov_factor]``.
+
+        Internally recovers the second moment ``E[zzᵀ] = -2·E[-½ zzᵀ]`` and
+        then computes covariance as ``Σ = E[zzᵀ] - E[z]E[z]ᵀ``.
         """
-        return self._expanded_to_mean(stats)
+        d = self._dim
+        if self._rank == 0:
+            loc, t2 = jnp.split(stats, 2)
+            second = -2.0 * t2
+            return jnp.concatenate((loc, second - loc**2))
+
+        loc = stats[:d]
+        t2 = jnp.reshape(stats[d:], (d, d))
+        second = -2.0 * t2
+        cov = second - jnp.outer(loc, loc)
+        cov_diag, cov_factor = self._decompose_cov(cov)
+        return self._pack_mean(loc, cov_diag, cov_factor)
 
     def _expanded_to_mean(self, expanded: Array) -> Array:
-        """Convert averaged expanded mean parameter to canon mean.
+        """Deprecated internal helper.
 
-        * rank 0: ``[m, s] → [m, s − m²]``
-        * rank > 0: extract Σ, eigendecompose into diag + factor
+        Kept for backward-compat with older commits; prefer
+        :meth:`from_sufficient_stats`.
         """
         d = self._dim
         if self._rank == 0:
