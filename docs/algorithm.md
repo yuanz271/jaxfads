@@ -26,7 +26,7 @@ The dynamics are written in exponential family form with sufficient
 statistics `T(z) = [z, -½ zzᵀ]`:
 
 - **Natural parameters** (Eq 3): `λ_θ(z_{t-1}) = [Q⁻¹ m_θ(z_{t-1}), -½ Q⁻¹]`
-- **Mean parameters** (Eq 4): `μ_θ(z_{t-1}) = [m_θ(z_{t-1}), -½(m_θ m_θᵀ + Q)]`
+- **Moment parameters** (Eq 4): `μ_θ(z_{t-1}) = [m_θ(z_{t-1}), -½(m_θ m_θᵀ + Q)]`
 
 ## Variational Approximation
 

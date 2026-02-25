@@ -343,10 +343,10 @@ class XFADS(ConfModule):
         -------
         natural_params : Array, shape (N, T, param_dim)
             Natural parameters of posterior distributions over states.
-        mean_params : Array, shape (N, T, param_dim)
-            Mean parameters of posterior distributions over states.
+        moment_params : Array, shape (N, T, param_dim)
+            Moment parameters of posterior distributions over states.
         predictions : Array, shape (N, T, param_dim)
-            Predicted mean parameters from dynamics model.
+            Predicted moment parameters from dynamics model.
 
         Notes
         -----
@@ -375,19 +375,26 @@ class XFADS(ConfModule):
         >>> u = jnp.zeros((1, 100, 5))
         >>> c = jnp.zeros((1, 100, 3))
         >>>
-        >>> natural, mean, pred = model(t, y, u, c, key=key)
+        >>> natural, moment, pred = model(t, y, u, c, key=key)
         >>>
         >>> # Batch inference
         >>> y_batch = jrnd.normal(key, (32, 100, 50))
         >>> u_batch = jnp.zeros((32, 100, 5))
         >>> c_batch = jnp.zeros((32, 100, 3))
         >>>
-        >>> natural, mean, pred = model(t, y_batch, u_batch, c_batch, key=key)
+        >>> natural, moment, pred = model(t, y_batch, u_batch, c_batch, key=key)
         """
+        approx = self.approx
+
         def _free_to_natural(free_flat):
-            free_pytree = self.approx.moment_to_canon(free_flat)
-            return self.approx.moment_to_natural(
-                self.approx.canon_to_moment(self.approx.free_to_canon(free_pytree))
+            # Encoder outputs are unconstrained. For MVN we map them to a valid
+            # natural update so that the precision-like block stays PSD.
+            if hasattr(approx, "free_to_natural_update"):
+                return approx.free_to_natural_update(free_flat)
+
+            free_pytree = approx.moment_to_canon(free_flat)
+            return approx.moment_to_natural(
+                approx.canon_to_moment(approx.free_to_canon(free_pytree))
             )
 
         batch_free_to_natural = vmap(vmap(_free_to_natural))
