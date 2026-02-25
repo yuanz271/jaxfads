@@ -74,8 +74,6 @@ def test_constructor():
                     dropout=dropout,
                     observation_dim=y_size,
                     state_dim=z_size,
-                    approx="MVN",
-                    approx_kwargs={},
                 )
             ),
             obs_conf=OmegaConf.create(

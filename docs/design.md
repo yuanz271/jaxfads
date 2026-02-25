@@ -187,6 +187,9 @@ alpha = _free_to_natural(encoder(y))
   filtering). They pass through `moment_to_canon` → `free_to_canon` →
   `canon_to_moment` → `moment_to_natural` to convert from unconstrained flat to
   valid natural parameters.
+- Encoders are `Approx`-agnostic: they only need the flat parameter-vector
+  length (`param_size`) to size their output layers. `XFADS` injects
+  `param_size` into `enc_conf` when constructing the encoders.
 
 ## MVN Subclass
 

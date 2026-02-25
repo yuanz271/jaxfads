@@ -98,8 +98,6 @@ def model_conf():
                     "dropout": 0.0,
                     "observation_dim": 10,
                     "state_dim": 2,
-                    "approx": "MVN",
-                    "approx_kwargs": {},
                 }
             ),
             "obs_conf": OmegaConf.create(

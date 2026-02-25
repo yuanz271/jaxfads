@@ -17,6 +17,7 @@ from jax import Array, vmap
 from jax import numpy as jnp
 from jax import random as jrnd
 from gearax.modules import ConfModule, load_model, save_model
+from omegaconf import OmegaConf
 
 from . import core, distributions, encoders  # noqa: F401 — distributions registers Approx subclasses
 from .core import Mode
@@ -178,17 +179,16 @@ class XFADS(ConfModule):
         observation_model_cls = Observation.get_subclass(self.conf.obs_conf.model)
         self.observation = observation_model_cls(self.conf.obs_conf, key=ky)
 
-        key, ky = jrnd.split(key)
-        self.alpha_encoder = encoders.AlphaEncoder(
-            self.conf.enc_conf,
-            ky,
-        )
+        # Encoders are approx-agnostic; inject the flat parameter size derived
+        # from the configured approximation.
+        param_size = int(self.approx.param_size(self.conf.state_dim))
+        enc_conf = OmegaConf.merge(self.conf.enc_conf, {"param_size": param_size})
 
         key, ky = jrnd.split(key)
-        self.beta_encoder = encoders.BetaEncoder(
-            self.conf.enc_conf,
-            ky,
-        )
+        self.alpha_encoder = encoders.AlphaEncoder(enc_conf, ky)
+
+        key, ky = jrnd.split(key)
+        self.beta_encoder = encoders.BetaEncoder(enc_conf, ky)
 
         # TODO: add hooks to freeze observation parameters if needed.
         # if "s" in static_params:

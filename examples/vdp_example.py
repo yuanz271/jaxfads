@@ -439,8 +439,11 @@ def main() -> None:
     xlim, vlim, grid = (-3.0, 3.0), (-3.0, 3.0), 25
 
     enc_conf = dict(
-        observation_dim=obs_dim, state_dim=state_dim,
-        approx="MVN", approx_kwargs={}, width=32, depth=2, dropout=None,
+        observation_dim=obs_dim,
+        state_dim=state_dim,
+        width=32,
+        depth=2,
+        dropout=None,
     )
     obs_conf = dict(
         model="GLM", likelihood="Gaussian",
@@ -480,7 +483,7 @@ def main() -> None:
     })
     model1 = XFADS(conf1, jr.key(123))
     model1 = model1.initialize(*data)
-    approx = model1.approx  # MVN(rank=0) — shared by both cases
+    approx = model1.approx  # shared by both cases
 
     trained1 = train(model1, data, conf=trainer_conf)
 
