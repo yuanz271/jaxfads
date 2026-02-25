@@ -163,7 +163,10 @@ Docstrings that say "See base class" are allowed to omit summary/Parameters/Retu
 
 ## Testing Conventions
 
-- Always run tests (`uv run pytest`) before committing.
+- Run tests (`uv run pytest`) at committing **when code changes** (anything
+  under `src/`, or changes that affect runtime behavior).
+- If only documentation/comments change (e.g. `docs/*.md`), tests are optional
+  and may be skipped.
 
 - Test files: `tests/test_<module>.py`
 - Fixtures: Use `spec` from `conftest.py` for shared params

@@ -42,6 +42,8 @@ Terminology note:
   are integrated moments
   `E_{π(z_{t-1})}[ E_{p(z_t|z_{t-1})}[T(z_t)] ]` (Eq 12).
 
+See `docs/notation.md` for mathematical naming/notation.
+
 Every exponential-family distribution has four representations:
 
 | Form | Type | Reason | Example (MVN) |
@@ -96,6 +98,22 @@ Each arrow is an `Approx` method.  The reverse direction is available
 where needed (`canon_to_free`, `moment_to_natural`, `moment_to_canon`).
 
 ## `Approx` ABC Interface
+
+Quick reference (public API):
+
+| Method | Input → Output | Notes |
+|--------|----------------|------|
+| `free_from_kw(**kw)` | `kw → free` | Create free-form parameters from a serializable spec. |
+| `free_to_canon(free)` | `free → canon` | Apply constraints (e.g. softplus). |
+| `canon_to_free(canon)` | `canon → free` | Inverse constraints. |
+| `canon_to_moment(canon)` | `canon → moment` | Pack canon pytree into flat storage moment vector. |
+| `moment_to_canon(moment)` | `moment → canon` | Unpack flat storage moment vector into canon pytree. |
+| `natural_to_moment(natural)` | `natural → moment` | Natural → storage moment conversion. |
+| `moment_to_natural(moment)` | `moment → natural` | Storage moment → natural conversion. |
+| `sample_by_moment(key, moment, n)` | `moment → samples` | Sampling uses the storage moment representation. |
+| `kl(moment1, moment2)` | `moment × moment → scalar` | KL between two distributions in storage moment form. |
+| `predict_moment(z, noise)` | `(z, noise) → stats` | Conditional moments in sufficient-statistic layout `E[T(z_t) | z_{t-1}]`. |
+| `from_sufficient_stats(stats)` | `stats → moment` | Convert sufficient-statistic moments to storage moment layout. |
 
 ### Initialization
 
