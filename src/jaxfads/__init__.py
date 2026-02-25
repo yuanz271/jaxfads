@@ -29,8 +29,6 @@ Examples
 ...     'forward': 'Linear',
 ...     'obs_conf': {
 ...         'model': 'GLM',
-...         'observation_dim': 50,
-...         'state_dim': 10,
 ...         'likelihood': 'Poisson',
 ...         'cov': [1.0] * 50,
 ...         'norm_readout': False,

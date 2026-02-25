@@ -439,17 +439,16 @@ def main() -> None:
     xlim, vlim, grid = (-3.0, 3.0), (-3.0, 3.0), 25
 
     enc_conf = dict(
-        observation_dim=obs_dim,
-        state_dim=state_dim,
         width=32,
         depth=2,
         dropout=None,
     )
     obs_conf = dict(
-        model="GLM", likelihood="Gaussian",
-        observation_dim=obs_dim, state_dim=state_dim,
+        model="GLM",
+        likelihood="Gaussian",
         cov=[float(sigma_obs ** 2)] * obs_dim,
-        norm_readout=False, dropout=0.0,
+        norm_readout=False,
+        dropout=0.0,
         readout_init_conf=dict(obs_noise_var=float(sigma_obs ** 2)),
     )
     shared_conf = dict(
@@ -477,8 +476,11 @@ def main() -> None:
     conf1 = OmegaConf.create({
         **shared_conf, "forward": "VDPDynamics", "mc_size": 1,
         "dyn_conf": dict(
-            state_dim=state_dim, input_dim=0, context_dim=0,
-            mu=mu, dt=dt, state_noise=1.0,
+            input_dim=0,
+            context_dim=0,
+            mu=mu,
+            dt=dt,
+            state_noise=1.0,
         ),
     })
     model1 = XFADS(conf1, jr.key(123))
@@ -520,8 +522,12 @@ def main() -> None:
     conf2 = OmegaConf.create({
         **shared_conf, "forward": "MLPDynamics", "mc_size": 4,
         "dyn_conf": dict(
-            state_dim=state_dim, input_dim=0, context_dim=0,
-            state_noise=1.0, width=32, depth=1, dt=dt,
+            input_dim=0,
+            context_dim=0,
+            state_noise=1.0,
+            width=32,
+            depth=1,
+            dt=dt,
         ),
     })
     model2 = XFADS(conf2, jr.key(456))

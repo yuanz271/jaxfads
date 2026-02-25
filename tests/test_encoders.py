@@ -15,7 +15,6 @@ def _enc_conf(spec, *, dropout=None):
     return OmegaConf.create(
         dict(
             observation_dim=spec["observation_dim"],
-            state_dim=spec["state_dim"],
             param_size=param_size,
             width=spec["width"],
             depth=spec["depth"],

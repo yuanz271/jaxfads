@@ -60,8 +60,6 @@ def test_constructor():
                     depth=depth,
                     linear_input_size=1,
                     dropout=dropout,
-                    observation_dim=y_size,
-                    state_dim=z_size,
                     input_dim=u_size,
                     context_dim=0,
                     state_noise=state_noise,
@@ -72,15 +70,11 @@ def test_constructor():
                     width=width,
                     depth=depth,
                     dropout=dropout,
-                    observation_dim=y_size,
-                    state_dim=z_size,
                 )
             ),
             obs_conf=OmegaConf.create(
                 dict(
                     model="GLM",
-                    observation_dim=y_size,
-                    state_dim=z_size,
                     emission_noise=emission_noise,
                     norm_readout=normed_readout,
                     dropout=dropout,

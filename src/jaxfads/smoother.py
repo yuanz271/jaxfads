@@ -95,8 +95,6 @@ class XFADS(ConfModule):
     ...     'forward': 'Linear',
     ...     'obs_conf': {
     ...         'model': 'GLM',
-    ...         'observation_dim': 50,
-    ...         'state_dim': 10,
     ...         'likelihood': 'Poisson',
     ...         'cov': [1.0] * 50,
     ...         'norm_readout': False,
@@ -165,24 +163,41 @@ class XFADS(ConfModule):
 
         self.masker = DataMasker(dropout)
 
-        key, ky = jrnd.split(key)
-        self.forward = Dynamics.get_subclass(forward)(
+        # Sub-configs may omit duplicated dimension fields; inject the global
+        # dimensions so submodules have a consistent view.
+        dyn_conf = OmegaConf.merge(
             self.conf.dyn_conf,
-            key=ky,
-        )
-
-        self.noise_free = self.approx.free_from_kw(
-            scale=self.conf.dyn_conf.state_noise
+            {
+                "state_dim": self.conf.state_dim,
+                "observation_dim": self.conf.observation_dim,
+            },
         )
 
         key, ky = jrnd.split(key)
-        observation_model_cls = Observation.get_subclass(self.conf.obs_conf.model)
-        self.observation = observation_model_cls(self.conf.obs_conf, key=ky)
+        self.forward = Dynamics.get_subclass(forward)(dyn_conf, key=ky)
+
+        self.noise_free = self.approx.free_from_kw(scale=dyn_conf.state_noise)
+
+        obs_conf = OmegaConf.merge(
+            self.conf.obs_conf,
+            {
+                "state_dim": self.conf.state_dim,
+                "observation_dim": self.conf.observation_dim,
+                "n_steps": self.conf.n_steps,
+            },
+        )
+
+        key, ky = jrnd.split(key)
+        observation_model_cls = Observation.get_subclass(obs_conf.model)
+        self.observation = observation_model_cls(obs_conf, key=ky)
 
         # Encoders are approx-agnostic; inject the flat parameter size derived
         # from the configured approximation.
         param_size = int(self.approx.param_size(self.conf.state_dim))
-        enc_conf = OmegaConf.merge(self.conf.enc_conf, {"param_size": param_size})
+        enc_conf = OmegaConf.merge(
+            self.conf.enc_conf,
+            {"param_size": param_size, "observation_dim": self.conf.observation_dim},
+        )
 
         key, ky = jrnd.split(key)
         self.alpha_encoder = encoders.AlphaEncoder(enc_conf, ky)

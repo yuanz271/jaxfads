@@ -84,8 +84,6 @@ def model_conf():
                 {
                     "width": 8,
                     "depth": 1,
-                    "observation_dim": 10,
-                    "state_dim": 2,
                     "input_dim": 1,
                     "context_dim": 0,
                     "state_noise": 1.0,
@@ -96,15 +94,11 @@ def model_conf():
                     "width": 8,
                     "depth": 1,
                     "dropout": 0.0,
-                    "observation_dim": 10,
-                    "state_dim": 2,
                 }
             ),
             "obs_conf": OmegaConf.create(
                 {
                     "model": "GLM",
-                    "observation_dim": 10,
-                    "state_dim": 2,
                     "emission_noise": 1.0,
                     "norm_readout": False,
                     "dropout": 0.0,
