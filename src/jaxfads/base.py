@@ -239,7 +239,7 @@ class Approx(SubclassRegistryMixin, ABC):
         ...
 
     @abstractmethod
-    def predict_moment(self, z: Array, noise: Array) -> Array:
+    def predictive_moment(self, z: Array, noise: Array) -> Array:
         """
         Moment parameters for a single state realization.
 
@@ -271,7 +271,7 @@ class Approx(SubclassRegistryMixin, ABC):
         Convert (averaged) moment parameters to the compact moment layout.
 
         Maps from the true moment parameters ``E[T(z)]`` (as returned by
-        :meth:`predict_moment`) to the flat compact moment representation used
+        :meth:`predictive_moment`) to the flat compact moment representation used
         by the rest of the codebase.
 
         Notes

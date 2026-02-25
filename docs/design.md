@@ -36,7 +36,7 @@ Terminology note:
 - In code, moment parameters may be stored in an equivalent *compact*
   parameterization (e.g. for MVN as `[loc, cov]` encoded as diagonal + low-rank
   factor), because it is more convenient for sampling and KL.
-- `predict_moment(z, noise)` returns conditional moments in the
+- `predictive_moment(z, noise)` returns conditional moments in the
   sufficient-statistic layout `E[T(z_t) | z_{t-1}]`.
 - `from_sufficient_stats(stats)` converts those sufficient-statistic moments
   into the compact moment representation used elsewhere in the code.
@@ -114,7 +114,7 @@ Quick reference (public API):
 | `moment_to_natural(moment)` | `moment → natural` | Compact moment → natural conversion. |
 | `sample_by_moment(key, moment, n)` | `moment → samples` | Sampling uses the compact moment representation. |
 | `kl(moment1, moment2)` | `moment × moment → scalar` | KL in the compact moment representation. |
-| `predict_moment(z, noise)` | `(z, noise) → stats` | Conditional moments in sufficient-statistic layout `E[T(z_t) | z_{t-1}]`. |
+| `predictive_moment(z, noise)` | `(z, noise) → stats` | Conditional moments in sufficient-statistic layout `E[T(z_t) | z_{t-1}]`. |
 | `from_sufficient_stats(stats)` | `stats → moment` | Convert sufficient-statistic moments to the compact moment representation. |
 
 ### Initialization
@@ -151,7 +151,7 @@ Quick reference (public API):
 |--------|-----------|------|
 | `sample_by_moment` | `(key, μ, n) → z` | Draw `n` samples from the distribution |
 | `kl` | `(μ₁, μ₂) → scalar` | KL divergence `KL(p₁ ‖ p₂)` |
-| `predict_moment` | `(z, noise) → stats_flat` | Conditional moment parameters `E[T(z_t) | z_{t-1}]` |
+| `predictive_moment` | `(z, noise) → stats_flat` | Conditional moment parameters `E[T(z_t) | z_{t-1}]` |
 | `from_sufficient_stats` | `(stats_flat) → μ_flat` | Convert sufficient-stat moments to compact moment representation |
 
 ### Usage in XFADS
@@ -183,7 +183,7 @@ alpha = _free_to_natural(encoder(y))
 
 ### Notes
 
-- `predict_moment(z, noise)` is **single-state**: it takes one dynamics output
+- `predictive_moment(z, noise)` is **single-state**: it takes one dynamics output
   `z` with shape `(D,)` and transition noise parameters `noise` (flat array; use
   `jnp.array([])` if unused). It returns **moment parameters** (expected
   sufficient statistics) `E[T(z_t) | z_{t-1}]` in a flat vector form.
@@ -249,7 +249,7 @@ Implementation note:
 - The current JAXFADS `MVN` implementation uses an equivalent convention where
   the second natural-parameter block is *negative definite*.
 
-`MVN.predict_moment(z, noise)` returns these moment parameters in a flat layout:
+`MVN.predictive_moment(z, noise)` returns these moment parameters in a flat layout:
 
 - rank 0 (diagonal `Q`): `[μ, -½(μ² + diag(Q))]`
 - rank > 0 (full `Q`): `[μ, vec(-½(Q + μ μᵀ))]`

@@ -387,9 +387,9 @@ class MVN(Approx):
         canon = MVNParam(loc=loc_arr, cov_diag=cov_diag_arr, cov_factor=cov_factor_arr)
         return self.canon_to_free(canon)
 
-    # -- predict_moment --------------------------------------------------------
+    # -- predictive_moment --------------------------------------------------------
 
-    def predict_moment(self, z: Array, noise: Array) -> Array:
+    def predictive_moment(self, z: Array, noise: Array) -> Array:
         """See base class.
 
         Returns moment parameters (expected sufficient statistics) for a single

@@ -37,7 +37,7 @@ def expected_predictive_moment(
     where ``μ_θ`` is the moment parameter of ``p(z_t | f(z_{t-1}), θ)``.
 
     Averaging is performed in moment-parameter space (expected sufficient
-    statistics, i.e. the output of ``approx.predict_moment``), then converted
+    statistics, i.e. the output of ``approx.predictive_moment``), then converted
     to the compact moment representation used elsewhere via
     ``approx.from_sufficient_stats``.
 
@@ -86,7 +86,7 @@ def expected_predictive_moment(
     zs = jax.vmap(partial(f, key=key), in_axes=(0, 0, 0))(z, u_bc, c_bc)
 
     # Per-sample expanded sufficient statistics
-    expanded = jax.vmap(partial(approx.predict_moment, noise=noise))(zs)
+    expanded = jax.vmap(partial(approx.predictive_moment, noise=noise))(zs)
 
     # Non-finite safe averaging
     valid = jnp.all(jnp.isfinite(expanded), axis=-1)  # (S,)

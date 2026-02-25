@@ -71,7 +71,7 @@ Approximated via reparameterization trick with `S` samples (Eq 22):
 In code this is implemented by `core.expected_predictive_moment`:
 - sample `z_{t-1}^s ~ π(z_{t-1})`
 - compute dynamics mean `f(z_{t-1}^s)`
-- compute conditional moments via `approx.predict_moment(f(z_{t-1}^s), noise)`
+- compute conditional moments via `approx.predictive_moment(f(z_{t-1}^s), noise)`
 - average across samples and map into the compact moment representation via
   `approx.from_sufficient_stats`
 ```
@@ -253,8 +253,8 @@ while not converged:
    The low-rank structure of encoder outputs is implicit via the MVN
    rank parameter, not explicitly enforced as outer products.
 
-5. **`predict_moment` averaging**: The paper averages in mean (moment) parameter
-   space (Eq 22). The code does this correctly via `predict_moment` on `MVN`,
+5. **`predictive_moment` averaging**: The paper averages in mean (moment) parameter
+   space (Eq 22). The code does this correctly via `predictive_moment` on `MVN`,
    which computes moment parameters (expected sufficient statistics) `E[T(z)]`
    per sample, averages, then converts back.
 

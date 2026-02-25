@@ -274,19 +274,19 @@ def test_sample_shape_and_statistics(dim, rank):
 
 
 # ---------------------------------------------------------------------------
-# predict_moment / from_sufficient_stats
+# predictive_moment / from_sufficient_stats
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("dim, rank", _ALL_RANKS)
 def test_predict_mean_single_loc(dim, rank):
-    """predict_moment returns paper-convention expected sufficient stats."""
+    """predictive_moment returns paper-convention expected sufficient stats."""
     mvn = MVN(dim=dim, rank=rank)
     scale = 1.5
     noise = mvn.canon_to_moment(mvn.free_to_canon(mvn.free_from_kw(scale=scale)))
     z = jrnd.normal(jrnd.key(0), (dim,))
 
-    expanded = mvn.predict_moment(z, noise)
+    expanded = mvn.predictive_moment(z, noise)
 
     if rank == 0:
         _, q_diag = jnp.split(noise, 2)
@@ -312,7 +312,7 @@ def test_predict_mean_average_captures_variance(dim, rank):
     noise = mvn.canon_to_moment(mvn.free_to_canon(mvn.free_from_kw(scale=scale)))
     zs = jrnd.normal(jrnd.key(42), (200, dim)) * 3.0
 
-    expanded = jax.vmap(lambda z: mvn.predict_moment(z, noise))(zs)
+    expanded = jax.vmap(lambda z: mvn.predictive_moment(z, noise))(zs)
     avg = jnp.mean(expanded, axis=0)
     mp = mvn.from_sufficient_stats(avg)
     _, cov = mvn.unpack(mp)
