@@ -99,14 +99,9 @@ uv run pytest
 
 ## Commit checklist
 
-Upon commit (especially when changing code under `src/`):
-- run lint: `uv run ruff check .`
-- run format: `uv run ruff format .`
-- run tests: `uv run pytest` (per Testing conventions)
-
-Optional (recommended): install and use git hooks via `prek`:
-- install hooks: `uv run prek install`
-- run hooks manually: `uv run prek run --all-files`
+- Ensure git hooks are installed: `uv run prek install`
+- If hooks are not available (or for CI/debug), run manually: `uv run prek run --all-files`
+- Run tests when code changes under `src/`: `uv run pytest` (per Testing conventions)
 
 ## Documentation conventions
 
