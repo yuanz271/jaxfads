@@ -398,7 +398,7 @@ def main() -> None:
     print("JAX devices:", jax.devices())
 
     # ----- Synthesis -----
-    N, T, dt, mu = 128, 800, 0.02, 2.0
+    N, T, dt, mu = 128, 500, 0.04, 2.0
     obs_dim, state_dim = 10, 2
     sigma_obs = 0.3
 
@@ -452,10 +452,20 @@ def main() -> None:
         readout_init_conf=dict(obs_noise_var=float(sigma_obs ** 2)),
     )
     shared_conf = dict(
-        mode="pseudo", observation_dim=obs_dim, state_dim=state_dim,
-        approx="MVN", approx_kwargs={}, seed=0, n_steps=T,
-        fb_penalty=0.0, noise_penalty=0.01, dropout=0.0,
-        enc_conf=enc_conf, obs_conf=obs_conf,
+        mode="pseudo",
+        observation_dim=obs_dim,
+        state_dim=state_dim,
+        approx="MVN",
+        # Explicit for tutorial purposes. Use {"structure": "diag"} for a
+        # diagonal exponential-family Gaussian approximation.
+        approx_kwargs={"structure": "full"},
+        seed=0,
+        n_steps=T,
+        fb_penalty=0.0,
+        noise_penalty=0.01,
+        dropout=0.0,
+        enc_conf=enc_conf,
+        obs_conf=obs_conf,
     )
 
     n_devices = len(jax.devices())
