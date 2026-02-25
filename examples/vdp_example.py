@@ -470,11 +470,22 @@ def main() -> None:
 
     n_devices = len(jax.devices())
     batch_size = max(n_devices, (32 // n_devices) * n_devices)
-    trainer_conf = OmegaConf.create(dict(
-        seed=0, learning_rate=1e-3, clip_norm=5.0, weight_decay=1e-3,
-        noise_eta=0.0, noise_gamma=0.8, min_epoch=0, max_epoch=300,
-        batch_size=batch_size, validation_size=batch_size, valid_ratio=0.2,
-    ))
+
+    base_trainer_conf = dict(
+        seed=0,
+        learning_rate=1e-3,
+        clip_norm=5.0,
+        weight_decay=1e-3,
+        noise_eta=0.0,
+        noise_gamma=0.8,
+        min_epoch=0,
+        batch_size=batch_size,
+        validation_size=batch_size,
+        valid_ratio=0.2,
+    )
+
+    trainer_conf_vdp = OmegaConf.create({**base_trainer_conf, "max_epoch": 100})
+    trainer_conf_mlp = OmegaConf.create({**base_trainer_conf, "max_epoch": 500})
 
     # ===================================================================
     # Case 1: VDPDynamics (exact Van der Pol)
@@ -497,7 +508,7 @@ def main() -> None:
     model1 = model1.initialize(*data)
     approx = model1.approx  # shared by both cases
 
-    trained1 = train(model1, data, conf=trainer_conf)
+    trained1 = train(model1, data, conf=trainer_conf_vdp)
 
     key, k = jr.split(key)
     eval_kw = dict(approx=approx, mu=mu, xlim=xlim, vlim=vlim, grid=grid)
@@ -543,7 +554,7 @@ def main() -> None:
     model2 = XFADS(conf2, jr.key(456))
     model2 = model2.initialize(*data)
 
-    trained2 = train(model2, data, conf=trainer_conf)
+    trained2 = train(model2, data, conf=trainer_conf_mlp)
 
     key, k = jr.split(key)
     r2 = evaluate(
