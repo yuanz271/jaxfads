@@ -20,7 +20,9 @@ def test_ilqr():
     # Initial state
     x0 = rng.standard_normal(size=(5, 2)) * 0.1
     # Define a target trajectory (T+1 entries including terminal target)
-    target = np.array([np.array([np.sin(0.1 * k), np.cos(0.1 * k)]) for k in range(T + 1)])
+    target = np.array(
+        [np.array([np.sin(0.1 * k), np.cos(0.1 * k)]) for k in range(T + 1)]
+    )
     # Initialize the control sequence; here control dimension is 1.
     u_init = np.zeros((5, T, 2))
     c = jnp.full((T, 1), fill_value=dt)
@@ -130,10 +132,10 @@ def test_backward_pass_analytical_1d():
 
     # Non-trivial trajectory consistent with dynamics (x_{t+1} = x_t + u_t):
     #   x_0=0 + u_0=0.5 -> x_1=0.5 + u_1=0.5 -> x_2=1.0 + u_2=1.0 -> x_3=2.0
-    x = jnp.array([[0.0], [0.5], [1.0], [2.0]])    # T+1 states
-    u = jnp.array([[0.5], [0.5], [1.0]])            # T controls
+    x = jnp.array([[0.0], [0.5], [1.0], [2.0]])  # T+1 states
+    u = jnp.array([[0.5], [0.5], [1.0]])  # T controls
     c = jnp.zeros((T, 1))
-    target = jnp.zeros((T + 1, 1))                  # regulate to zero
+    target = jnp.zeros((T + 1, 1))  # regulate to zero
     Q = jnp.broadcast_to(jnp.array([[q]]), (T + 1, 1, 1))
     R = jnp.broadcast_to(jnp.array([[r]]), (T, 1, 1))
 

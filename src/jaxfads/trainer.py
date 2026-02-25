@@ -201,7 +201,12 @@ def batch_loss(
 
     key, elbo_key = jr.split(key)
     free_energy = -batch_elbo(
-        model, elbo_key, times, posterior_moments, prior_moments, observations,
+        model,
+        elbo_key,
+        times,
+        posterior_moments,
+        prior_moments,
+        observations,
         beta=beta,
     )
 

@@ -60,8 +60,6 @@ def test_poisson_eloglik_shape_and_finite():
     chex.assert_tree_all_finite(ll)
 
 
-
-
 def test_diag_gaussian_eloglik_shape_and_finite():
     key = jrnd.key(1)
     state_dim = 2
@@ -137,6 +135,7 @@ def test_diag_gaussian_initialize_biases():
 # Readout initializer registry tests
 # ---------------------------------------------------------------------------
 
+
 def _make_synthetic_data(key, state_dim, observation_dim, batch, time_steps):
     """Generate synthetic y = C @ z + b + noise for testing FA init."""
     k1, k2, k3, k4 = jrnd.split(key, 4)
@@ -159,15 +158,17 @@ def test_fa_default_sets_weight_and_bias():
         key, state_dim, observation_dim, batch, time_steps
     )
 
-    conf = OmegaConf.create(dict(
-        model="GLM",
-        state_dim=state_dim,
-        observation_dim=observation_dim,
-        cov=[obs_noise_var] * observation_dim,
-        n_steps=0,
-        norm_readout=False,
-        likelihood="Gaussian",
-    ))
+    conf = OmegaConf.create(
+        dict(
+            model="GLM",
+            state_dim=state_dim,
+            observation_dim=observation_dim,
+            cov=[obs_noise_var] * observation_dim,
+            n_steps=0,
+            norm_readout=False,
+            likelihood="Gaussian",
+        )
+    )
     glm = GLM(conf, jrnd.key(0))
     weight_before = glm.readout.weight.copy()
 
@@ -182,10 +183,7 @@ def test_fa_default_sets_weight_and_bias():
     chex.assert_shape(initialized.readout.weight, (observation_dim, state_dim))
     # Bias should be close to mean(y)
     mean_y = jnp.mean(y.reshape(-1, observation_dim), axis=0)
-    chex.assert_trees_all_close(
-        initialized.readout.layer.bias, mean_y, atol=1e-5
-    )
-
+    chex.assert_trees_all_close(initialized.readout.layer.bias, mean_y, atol=1e-5)
 
 
 def test_none_skips_readout_init():
@@ -196,16 +194,18 @@ def test_none_skips_readout_init():
 
     y = jrnd.normal(key, (batch, time_steps, observation_dim))
 
-    conf = OmegaConf.create(dict(
-        model="GLM",
-        state_dim=state_dim,
-        observation_dim=observation_dim,
-        cov=[1.0] * observation_dim,
-        n_steps=0,
-        norm_readout=False,
-        likelihood="Gaussian",
-        readout_init=None,
-    ))
+    conf = OmegaConf.create(
+        dict(
+            model="GLM",
+            state_dim=state_dim,
+            observation_dim=observation_dim,
+            cov=[1.0] * observation_dim,
+            n_steps=0,
+            norm_readout=False,
+            likelihood="Gaussian",
+            readout_init=None,
+        )
+    )
     glm = GLM(conf, jrnd.key(2))
     weight_before = glm.readout.weight.copy()
     bias_before = glm.readout.layer.bias.copy()
@@ -237,15 +237,17 @@ def test_set_readout_variant_bias():
     """GLM.set_readout sets weight and bias on VariantBiasLinear."""
     state_dim, observation_dim = 3, 5
     n_steps = 10
-    conf = OmegaConf.create(dict(
-        model="GLM",
-        state_dim=state_dim,
-        observation_dim=observation_dim,
-        cov=[1.0] * observation_dim,
-        n_steps=n_steps,
-        norm_readout=False,
-        likelihood="Gaussian",
-    ))
+    conf = OmegaConf.create(
+        dict(
+            model="GLM",
+            state_dim=state_dim,
+            observation_dim=observation_dim,
+            cov=[1.0] * observation_dim,
+            n_steps=n_steps,
+            norm_readout=False,
+            likelihood="Gaussian",
+        )
+    )
     glm = GLM(conf, jrnd.key(0))
 
     new_weight = jnp.ones((observation_dim, state_dim)) * 2.0
@@ -260,15 +262,17 @@ def test_set_readout_variant_bias_broadcast():
     """VariantBiasLinear.set_bias broadcasts 1-D bias to all steps."""
     state_dim, observation_dim = 3, 5
     n_steps = 10
-    conf = OmegaConf.create(dict(
-        model="GLM",
-        state_dim=state_dim,
-        observation_dim=observation_dim,
-        cov=[1.0] * observation_dim,
-        n_steps=n_steps,
-        norm_readout=False,
-        likelihood="Gaussian",
-    ))
+    conf = OmegaConf.create(
+        dict(
+            model="GLM",
+            state_dim=state_dim,
+            observation_dim=observation_dim,
+            cov=[1.0] * observation_dim,
+            n_steps=n_steps,
+            norm_readout=False,
+            likelihood="Gaussian",
+        )
+    )
     glm = GLM(conf, jrnd.key(0))
 
     scalar_bias = jnp.ones(observation_dim) * 5.0
@@ -283,19 +287,19 @@ def test_variant_bias_fa_init():
     state_dim, observation_dim = 2, 6
     batch, time_steps = 16, 20
 
-    y, _, _ = _make_synthetic_data(
-        key, state_dim, observation_dim, batch, time_steps
-    )
+    y, _, _ = _make_synthetic_data(key, state_dim, observation_dim, batch, time_steps)
 
-    conf = OmegaConf.create(dict(
-        model="GLM",
-        state_dim=state_dim,
-        observation_dim=observation_dim,
-        cov=[0.01] * observation_dim,
-        n_steps=time_steps,
-        norm_readout=False,
-        likelihood="Gaussian",
-    ))
+    conf = OmegaConf.create(
+        dict(
+            model="GLM",
+            state_dim=state_dim,
+            observation_dim=observation_dim,
+            cov=[0.01] * observation_dim,
+            n_steps=time_steps,
+            norm_readout=False,
+            likelihood="Gaussian",
+        )
+    )
     glm = GLM(conf, jrnd.key(0))
     weight_before = glm.readout.weight.copy()
 
@@ -311,9 +315,7 @@ def test_variant_bias_fa_init():
     chex.assert_shape(initialized.readout.biases, (time_steps, observation_dim))
     # Per-step bias should be mean over batch
     expected_bias = jnp.mean(y, axis=0)  # (T, obs_dim)
-    chex.assert_trees_all_close(
-        initialized.readout.biases, expected_bias, atol=1e-5
-    )
+    chex.assert_trees_all_close(initialized.readout.biases, expected_bias, atol=1e-5)
 
 
 def test_poisson_fa_init():
@@ -327,14 +329,16 @@ def test_poisson_fa_init():
         jnp.float32
     )
 
-    conf = OmegaConf.create(dict(
-        model="GLM",
-        state_dim=state_dim,
-        observation_dim=observation_dim,
-        n_steps=0,
-        norm_readout=False,
-        likelihood="Poisson",
-    ))
+    conf = OmegaConf.create(
+        dict(
+            model="GLM",
+            state_dim=state_dim,
+            observation_dim=observation_dim,
+            n_steps=0,
+            norm_readout=False,
+            likelihood="Poisson",
+        )
+    )
     glm = GLM(conf, jrnd.key(0))
 
     t = jnp.arange(time_steps)
@@ -369,16 +373,18 @@ def test_custom_readout_initializer():
         batch, time_steps = 4, 5
         y = jrnd.normal(jrnd.key(0), (batch, time_steps, observation_dim))
 
-        conf = OmegaConf.create(dict(
-            model="GLM",
-            state_dim=state_dim,
-            observation_dim=observation_dim,
-            cov=[1.0] * observation_dim,
-            n_steps=0,
-            norm_readout=False,
-            likelihood="Gaussian",
-            readout_init="_test_custom",
-        ))
+        conf = OmegaConf.create(
+            dict(
+                model="GLM",
+                state_dim=state_dim,
+                observation_dim=observation_dim,
+                cov=[1.0] * observation_dim,
+                n_steps=0,
+                norm_readout=False,
+                likelihood="Gaussian",
+                readout_init="_test_custom",
+            )
+        )
         glm = GLM(conf, jrnd.key(1))
 
         t = jnp.arange(time_steps)
@@ -400,21 +406,21 @@ def test_fa_init_with_explicit_obs_noise_var():
     state_dim, observation_dim = 2, 6
     batch, time_steps = 32, 50
 
-    y, _, _ = _make_synthetic_data(
-        key, state_dim, observation_dim, batch, time_steps
-    )
+    y, _, _ = _make_synthetic_data(key, state_dim, observation_dim, batch, time_steps)
 
     # conf.cov = 999 (very wrong), but readout_init_conf overrides
-    conf = OmegaConf.create(dict(
-        model="GLM",
-        state_dim=state_dim,
-        observation_dim=observation_dim,
-        cov=[999.0] * observation_dim,
-        n_steps=0,
-        norm_readout=False,
-        likelihood="Gaussian",
-        readout_init_conf=dict(obs_noise_var=0.01),
-    ))
+    conf = OmegaConf.create(
+        dict(
+            model="GLM",
+            state_dim=state_dim,
+            observation_dim=observation_dim,
+            cov=[999.0] * observation_dim,
+            n_steps=0,
+            norm_readout=False,
+            likelihood="Gaussian",
+            readout_init_conf=dict(obs_noise_var=0.01),
+        )
+    )
     glm = GLM(conf, jrnd.key(0))
 
     t = jnp.arange(time_steps)
@@ -429,16 +435,18 @@ def test_fa_init_with_explicit_obs_noise_var():
 
 def test_unknown_readout_init_raises():
     """Unknown readout_init raises ValueError."""
-    conf = OmegaConf.create(dict(
-        model="GLM",
-        state_dim=2,
-        observation_dim=4,
-        cov=[1.0] * 4,
-        n_steps=0,
-        norm_readout=False,
-        likelihood="Gaussian",
-        readout_init="nonexistent",
-    ))
+    conf = OmegaConf.create(
+        dict(
+            model="GLM",
+            state_dim=2,
+            observation_dim=4,
+            cov=[1.0] * 4,
+            n_steps=0,
+            norm_readout=False,
+            likelihood="Gaussian",
+            readout_init="nonexistent",
+        )
+    )
     glm = GLM(conf, jrnd.key(0))
 
     t = jnp.arange(5)
@@ -456,15 +464,17 @@ def test_unknown_readout_init_raises():
 def test_norm_readout_set_weight_and_bias():
     """set_weight/set_bias work through NormalizedLinear wrapper."""
     state_dim, observation_dim = 3, 5
-    conf = OmegaConf.create(dict(
-        model="GLM",
-        state_dim=state_dim,
-        observation_dim=observation_dim,
-        cov=[1.0] * observation_dim,
-        n_steps=0,
-        norm_readout=True,
-        likelihood="Gaussian",
-    ))
+    conf = OmegaConf.create(
+        dict(
+            model="GLM",
+            state_dim=state_dim,
+            observation_dim=observation_dim,
+            cov=[1.0] * observation_dim,
+            n_steps=0,
+            norm_readout=True,
+            likelihood="Gaussian",
+        )
+    )
     glm = GLM(conf, jrnd.key(0))
 
     new_weight = jnp.ones((observation_dim, state_dim)) * 2.0
@@ -484,19 +494,19 @@ def test_norm_readout_fa_init():
     state_dim, observation_dim = 2, 6
     batch, time_steps = 32, 50
 
-    y, _, _ = _make_synthetic_data(
-        key, state_dim, observation_dim, batch, time_steps
-    )
+    y, _, _ = _make_synthetic_data(key, state_dim, observation_dim, batch, time_steps)
 
-    conf = OmegaConf.create(dict(
-        model="GLM",
-        state_dim=state_dim,
-        observation_dim=observation_dim,
-        cov=[0.01] * observation_dim,
-        n_steps=0,
-        norm_readout=True,
-        likelihood="Gaussian",
-    ))
+    conf = OmegaConf.create(
+        dict(
+            model="GLM",
+            state_dim=state_dim,
+            observation_dim=observation_dim,
+            cov=[0.01] * observation_dim,
+            n_steps=0,
+            norm_readout=True,
+            likelihood="Gaussian",
+        )
+    )
     glm = GLM(conf, jrnd.key(0))
     weight_before = glm.readout.weight.copy()
 
@@ -512,6 +522,4 @@ def test_norm_readout_fa_init():
     chex.assert_trees_all_close(norm, 1.0, atol=1e-5)
     # Bias is mean(y)
     mean_y = jnp.mean(y.reshape(-1, observation_dim), axis=0)
-    chex.assert_trees_all_close(
-        initialized.readout.layer.bias, mean_y, atol=1e-5
-    )
+    chex.assert_trees_all_close(initialized.readout.layer.bias, mean_y, atol=1e-5)

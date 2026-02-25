@@ -97,6 +97,3 @@ def softplus_inverse(x: Array):
     return jnp.where(
         is_too_small, too_small_value, jnp.where(is_too_large, too_large_value, y)
     )
-
-
-

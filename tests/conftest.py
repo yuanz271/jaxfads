@@ -16,7 +16,7 @@ def spec():
         width=32,
         depth=2,
         approx="MVN",
-        approx_kwargs={}, 
+        approx_kwargs={},
     )
 
 

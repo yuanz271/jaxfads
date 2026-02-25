@@ -122,7 +122,9 @@ class XFADS(ConfModule):
     unconstrained_prior_natural: Any
     noise_free: Any
 
-    def __init__(self, conf, key=None):  # key unused; seed from conf for serializable reproducibility
+    def __init__(
+        self, conf, key=None
+    ):  # key unused; seed from conf for serializable reproducibility
         """
         Initialize XFADS model components.
 
@@ -303,7 +305,6 @@ class XFADS(ConfModule):
                 self.approx.free_to_canon(self.unconstrained_prior_natural)
             )
         )
-
 
     def __call__(self, t, y, u, c, *, key) -> tuple[Array, Array, Array]:
         """

@@ -264,7 +264,6 @@ class Approx(SubclassRegistryMixin, ABC):
         ...
 
 
-
 class Dynamics(SubclassRegistryMixin, ConfModule):  # pyright: ignore[reportImplicitAbstractClass]
     """
     Abstract base class for dynamics models in XFADS.

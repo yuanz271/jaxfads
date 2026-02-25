@@ -28,6 +28,3 @@ def test_softplus_inverse_roundtrip():
     y = softplus_inverse(x)
     recon = jax.nn.softplus(y)
     chex.assert_trees_all_close(recon, x, atol=1e-6, rtol=1e-6)
-
-
-

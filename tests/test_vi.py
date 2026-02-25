@@ -17,9 +17,7 @@ def test_elbo_matches_manual(diag):
     mp_p = diag.pack(jnp.zeros(2), jnp.eye(2))
     y = jnp.array([1.0, 2.0])
 
-    expected = _eloglik_stub(None, None, None, y, None, None) - diag.kl(
-        mp, mp_p
-    )
+    expected = _eloglik_stub(None, None, None, y, None, None) - diag.kl(mp, mp_p)
     value = elbo(
         jrnd.key(0),
         jnp.array(0),

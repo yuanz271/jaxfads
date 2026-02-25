@@ -85,7 +85,9 @@ def expected_predictive_moment(
     zs = jax.vmap(partial(f, key=key), in_axes=(0, 0, 0))(z, u_bc, c_bc)
 
     # Per-sample predictive moment
-    predictive_moment_samples = jax.vmap(partial(approx.predictive_moment, noise=noise))(zs)
+    predictive_moment_samples = jax.vmap(
+        partial(approx.predictive_moment, noise=noise)
+    )(zs)
 
     # Non-finite safe averaging
     valid = jnp.all(jnp.isfinite(predictive_moment_samples), axis=-1)  # (S,)
@@ -165,9 +167,7 @@ def filter(
     Uses natural parameter representation for numerical stability.
     """
     approx = model.approx
-    nature_p_1 = (
-        model.prior_natural()
-    )
+    nature_p_1 = model.prior_natural()
 
     noise = approx.canon_to_moment(approx.free_to_canon(model.noise_free))
 

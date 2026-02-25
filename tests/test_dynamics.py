@@ -76,9 +76,7 @@ def test_expected_predictive_moment(diag, spec):
     f = _make_nonlinear(spec, key)
     noise = make_noise(diag, state_dim)
 
-    mp = diag.pack(
-        jrnd.normal(key, (state_dim,)), jnp.eye(state_dim)
-    )
+    mp = diag.pack(jrnd.normal(key, (state_dim,)), jnp.eye(state_dim))
     u = jrnd.normal(key, (spec["input_dim"],))
 
     result = expected_predictive_moment(key, mp, u, jnp.zeros((0,)), f, noise, diag, 10)
@@ -104,6 +102,7 @@ def test_expected_predictive_moment_partial_invalid():
     state_dim, mc_size = 4, 64
     key = jrnd.key(42)
     from jaxfads.distributions import MVN
+
     diag4 = MVN(dim=state_dim)
     noise = make_noise(diag4, state_dim)
 

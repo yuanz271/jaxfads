@@ -98,9 +98,7 @@ def _init_bias(y: Array, n_steps: int) -> Array:
     return jnp.mean(y.reshape(-1, y.shape[-1]), axis=0)  # (obs_dim,)
 
 
-def _fa_weight(
-    y_centered: Array, state_dim: int, obs_noise_var: float
-) -> Array:
+def _fa_weight(y_centered: Array, state_dim: int, obs_noise_var: float) -> Array:
     """Estimate Factor Analysis loading matrix from centred data.
 
     Parameters

@@ -9,7 +9,6 @@ from jaxfads.base import Dynamics
 
 
 class IdentityDynamics(Dynamics):
-
     def __init__(self, state_dim: int):
         self.conf = SimpleNamespace(state_dim=state_dim)
 
