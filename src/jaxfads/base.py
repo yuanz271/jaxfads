@@ -12,6 +12,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from jax import Array
+from jaxtyping import PyTree
 
 from gearax.mixin import SubclassRegistryMixin
 from gearax.modules import ConfModule
@@ -217,7 +218,7 @@ class Approx(SubclassRegistryMixin, ABC):
         ...
 
     @abstractmethod
-    def free_from_kw(self, **kwargs) -> Any:
+    def free_from_kw(self, **kwargs) -> PyTree:
         """
         Create free-form parameters from a serializable spec.
 
