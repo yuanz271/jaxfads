@@ -534,6 +534,7 @@ def main() -> None:
 
     trainer_conf_vdp = OmegaConf.create({**base_trainer_conf, "max_epoch": 100})
     trainer_conf_mlp = OmegaConf.create({**base_trainer_conf, "max_epoch": 500})
+    trainer_conf_ou = OmegaConf.create({**base_trainer_conf, "max_epoch": 100})
 
     # ===================================================================
     # Case 1: VDPDynamics (exact Van der Pol)
@@ -669,12 +670,74 @@ def main() -> None:
     )
 
     # ===================================================================
+    # Case 3: OUDynamics (diffusion-style tracking prior)
+    # ===================================================================
+    print("\n" + "=" * 60)
+    print("Case 3: OUDynamics (diffusion-style tracking prior)")
+    print("=" * 60)
+
+    conf3 = OmegaConf.create(
+        {
+            **shared_conf,
+            "forward": "OUDynamics",
+            "mc_size": 4,
+            "dyn_conf": dict(
+                input_dim=0,
+                context_dim=0,
+                theta=2.0,
+                dt=dt,
+                state_noise=1.0,
+            ),
+        }
+    )
+    model3 = XFADS(conf3, jr.key(789))
+    model3 = model3.initialize(*data)
+
+    trained3 = train(model3, data, conf=trainer_conf_ou)
+
+    key, k = jr.split(key)
+    r3 = evaluate(
+        "OUDynamics",
+        trained3,
+        latent_states,
+        observations,
+        data,
+        C_true,
+        b_true,
+        key=k,
+        **eval_kw,
+    )
+    plot_posterior(
+        "ou",
+        r3["aligned_means"],
+        r3["covs"],
+        latent_states,
+        0,
+        T,
+        out_dir,
+    )
+    plot_flow_field(
+        "ou",
+        trained3,
+        latent_states[0],
+        r3["aligned_means"][0],
+        mu,
+        xlim,
+        vlim,
+        grid,
+        out_dir,
+        alignment=r3["alignment"],
+    )
+
+    # ===================================================================
     # Summary
     # ===================================================================
     print("\n" + "=" * 72)
     print(f"Summary  (Procrustes-aligned; obs noise σ = {sigma_obs})")
     print("=" * 72)
-    header = f"{'Metric':<30s} {'VDPDynamics':>14s} {'MLPDynamics':>14s}"
+    header = (
+        f"{'Metric':<30s} {'VDPDynamics':>14s} {'MLPDynamics':>14s} {'OUDynamics':>14s}"
+    )
     print(header)
     print("-" * len(header))
     for metric, label in [
@@ -685,7 +748,9 @@ def main() -> None:
         ("flow_nrmse", "Flow NRMSE"),
         ("flow_angle", "Flow angle (rad)"),
     ]:
-        print(f"{label:<30s} {r1[metric]:>14.4f} {r2[metric]:>14.4f}")
+        print(
+            f"{label:<30s} {r1[metric]:>14.4f} {r2[metric]:>14.4f} {r3[metric]:>14.4f}"
+        )
     print("=" * len(header))
 
 
