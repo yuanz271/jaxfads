@@ -5,7 +5,6 @@ import chex
 import tensorflow_probability.substrates.jax.distributions as tfp
 
 from jaxfads.distributions import MVN
-from jaxfads.distributions.mvn import MVNParam
 
 
 def _random_pd(key, dim: int, jitter: float = 1e-1) -> jnp.ndarray:
@@ -53,7 +52,7 @@ def test_free_canon_roundtrip(dim):
     key = jrnd.key(0)
     loc = jrnd.normal(key, (dim,))
     chol_free = jrnd.normal(jrnd.key(1), (dim, dim))
-    free = MVNParam(loc=loc, chol=chol_free)
+    free = jnp.concatenate((loc, chol_free.ravel()))
 
     canon = mvn.free_to_canon(free)
     free_rt = mvn.canon_to_free(canon)

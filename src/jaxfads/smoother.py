@@ -387,15 +387,9 @@ class XFADS(ConfModule):
         approx = self.approx
 
         def _free_to_natural(free_flat):
-            # Encoder outputs are unconstrained. For MVN we map them to a valid
-            # natural update so that the precision-like block stays PSD.
-            if hasattr(approx, "free_to_natural_update"):
-                return approx.free_to_natural_update(free_flat)
-
-            free_pytree = approx.moment_to_canon(free_flat)
-            return approx.moment_to_natural(
-                approx.canon_to_moment(approx.free_to_canon(free_pytree))
-            )
+            canon = approx.free_to_canon(free_flat)
+            moment = approx.canon_to_moment(canon)
+            return approx.moment_to_natural(moment)
 
         batch_free_to_natural = vmap(vmap(_free_to_natural))
         batch_alpha_encode = vmap_with_key(vmap_with_key(self.alpha_encoder))

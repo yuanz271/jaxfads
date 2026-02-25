@@ -133,6 +133,7 @@ class MVN(Approx):
         second = -2.0 * t2
         cov = second - jnp.outer(m, m)
         cov = 0.5 * (cov + cov.T)
+        cov = cov + _EPS * jnp.eye(self._dim, dtype=cov.dtype)
         return m, cov
 
     def pack(self, mean: Array, cov: Array) -> Array:
@@ -190,13 +191,27 @@ class MVN(Approx):
     # free ↔ canon
     # ---------------------------------------------------------------------
 
-    def free_to_canon(self, free: MVNParam) -> MVNParam:
-        """See base class."""
-        return MVNParam(loc=free.loc, chol=_constrain_chol(free.chol))
+    def _split_free(self, free: Array) -> tuple[Array, Array]:
+        d = self._dim
+        loc = free[:d]
+        chol_free = jnp.reshape(free[d:], (d, d))
+        return loc, chol_free
 
-    def canon_to_free(self, canon: MVNParam) -> MVNParam:
+    def free_to_canon(self, free: Array) -> MVNParam:
+        """See base class.
+
+        Parameters
+        ----------
+        free : Array
+            Flat unconstrained parameters with layout ``[loc, chol_free_flat]``.
+        """
+        loc, chol_free = self._split_free(free)
+        return MVNParam(loc=loc, chol=_constrain_chol(chol_free))
+
+    def canon_to_free(self, canon: MVNParam) -> Array:
         """See base class."""
-        return MVNParam(loc=canon.loc, chol=_unconstrain_chol(canon.chol))
+        chol_free = _unconstrain_chol(canon.chol)
+        return jnp.concatenate((canon.loc, chol_free.ravel()))
 
     # ---------------------------------------------------------------------
     # canon ↔ moment
@@ -220,10 +235,15 @@ class MVN(Approx):
 
     def free_from_kw(
         self, *, loc: float | list[float] = 0.0, scale: float | list[float] = 1.0
-    ) -> MVNParam:
+    ) -> Array:
         """See base class.
 
         Creates free-form parameters for ``N(loc, diag(scale))``.
+
+        Returns
+        -------
+        Array
+            Flat free-form parameters with layout ``[loc, chol_free_flat]``.
         """
         d = self._dim
         loc_arr = jnp.broadcast_to(jnp.asarray(loc, dtype=jnp.float32), (d,))
@@ -248,3 +268,4 @@ class MVN(Approx):
         """
         _, Q = self.unpack(noise)
         return self.pack(z, Q)
+
