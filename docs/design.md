@@ -190,7 +190,8 @@ alpha = _free_to_natural(encoder(y))
 
 ## MVN Subclass
 
-`MVN(dim)` implements a full-covariance multivariate normal.
+`MVN(dim, structure=...)` implements either a full-covariance or diagonal
+multivariate normal exponential family:
 
 ### MVNParam NamedTuple
 
@@ -231,6 +232,17 @@ With `T(z_t) = [z_t, -½ z_t z_tᵀ]`, the conditional moment parameters are:
 
 `MVN.predictive_moment(z, noise)` returns exactly these conditional moment
 parameters in the flat moment layout.
+
+### Diagonal MVN variant
+
+`MVN(..., structure="diag")` uses diagonal sufficient statistics:
+
+- `T(z) = [z, -½ (z ⊙ z)]`
+
+and therefore stores flat moment/natural parameters of size `2D`.
+
+For caller uniformity, `MVN.unpack(moment)` still returns a *full* covariance
+matrix of shape `(D, D)` (diagonal in value).
 
 ### Additional methods (MVN-specific)
 
