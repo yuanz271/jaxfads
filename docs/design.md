@@ -186,7 +186,7 @@ alpha = _free_to_natural(encoder(y))
   `jnp.array([])` if unused). It returns **moment parameters** (expected
   sufficient statistics) `E[T(z_t) | z_{t-1}]` in a flat vector form.
 - Monte Carlo averaging across samples of `z_{t-1}` is handled outside the
-  distribution (in `core.sample_expected_mean`) via `jax.vmap` + `jnp.mean`,
+  distribution (in `core.expected_predictive_moment`) via `jax.vmap` + `jnp.mean`,
   followed by `approx.from_sufficient_stats(...)` to map averaged sufficient
   statistics into the storage moment layout used elsewhere.
 - Encoder outputs remain flat arrays (natural parameter updates for additive

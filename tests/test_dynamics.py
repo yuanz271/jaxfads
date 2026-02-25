@@ -7,7 +7,7 @@ import chex
 from omegaconf import OmegaConf
 
 from jaxfads.base import Dynamics
-from jaxfads.dynamics import sample_expected_mean
+from jaxfads.core import expected_predictive_moment
 from jaxfads.nn import make_mlp
 from conftest import make_noise
 
@@ -72,7 +72,7 @@ def test_predict_mean(diag, spec):
     chex.assert_trees_all_close(cov, Q, atol=1e-5)
 
 
-def test_sample_expected_mean(diag, spec):
+def test_expected_predictive_moment(diag, spec):
     key = jrnd.key(0)
     state_dim = spec["state_dim"]
     f = _make_nonlinear(spec, key)
@@ -83,7 +83,7 @@ def test_sample_expected_mean(diag, spec):
     )
     u = jrnd.normal(key, (spec["input_dim"],))
 
-    result = sample_expected_mean(key, mp, u, jnp.zeros((0,)), f, noise, diag, 10)
+    result = expected_predictive_moment(key, mp, u, jnp.zeros((0,)), f, noise, diag, 10)
     chex.assert_shape(result, (diag.mean_size(state_dim),))
     chex.assert_tree_all_finite(result)
 
@@ -101,7 +101,7 @@ def _threshold_dynamics(
     return jnp.where(safe, z * 0.9, jnp.full_like(z, jnp.nan))
 
 
-def test_sample_expected_mean_partial_invalid():
+def test_expected_predictive_moment_partial_invalid():
     """When some MC samples produce NaN, the output should still be finite."""
     state_dim, mc_size = 4, 64
     key = jrnd.key(42)
@@ -113,7 +113,7 @@ def test_sample_expected_mean_partial_invalid():
     f = fpartial(_threshold_dynamics, radius=3.0)
 
     result = jax.jit(
-        lambda k: sample_expected_mean(
+        lambda k: expected_predictive_moment(
             k, mp, jnp.zeros(0), jnp.zeros(0), f, noise, diag4, mc_size
         )
     )(key)
@@ -122,7 +122,7 @@ def test_sample_expected_mean_partial_invalid():
     chex.assert_shape(result, (diag4.mean_size(state_dim),))
 
 
-def test_sample_expected_mean_all_invalid(diag):
+def test_expected_predictive_moment_all_invalid(diag):
     """When all MC samples produce NaN, the result should be non-finite."""
     state_dim, mc_size = 2, 16
     key = jrnd.key(99)
@@ -133,7 +133,7 @@ def test_sample_expected_mean_all_invalid(diag):
     f = fpartial(_threshold_dynamics, radius=0.001)
 
     result = jax.jit(
-        lambda k: sample_expected_mean(k, mp, u, c, f, noise, diag, mc_size)
+        lambda k: expected_predictive_moment(k, mp, u, c, f, noise, diag, mc_size)
     )(key)
 
     chex.assert_shape(result, (diag.mean_size(state_dim),))

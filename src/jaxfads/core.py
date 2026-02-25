@@ -20,7 +20,7 @@ from jax.lax import scan
 from .base import Approx
 
 
-def sample_expected_mean(
+def expected_predictive_moment(
     key: Array,
     mean: Array,
     u: Array,
@@ -31,10 +31,10 @@ def sample_expected_mean(
     mc_size: int,
 ) -> Array:
     """
-    Compute expected mean parameter via Monte Carlo sampling.
+    Compute expected moment parameter via Monte Carlo sampling.
 
     Implements Eq (12): ``μ̄_t = E_{π(z_{t-1})}[μ_θ(z_{t-1})]``
-    where ``μ_θ`` is the mean parameter of ``p(z_t | f(z_{t-1}), θ)``.
+    where ``μ_θ`` is the moment parameter of ``p(z_t | f(z_{t-1}), θ)``.
 
     Averaging is performed in moment-parameter space (expected sufficient
     statistics, i.e. the output of ``approx.predict_moment``), then converted
@@ -45,7 +45,7 @@ def sample_expected_mean(
     key : PRNGKeyArray
         Random key for sampling.
     mean : Array
-        Mean parameters of current state distribution q(z_t).
+        Moment parameters of current state distribution q(z_t).
     u : Array, shape (input_dim,)
         Control/input vector.
     c : Array, shape (covariate_dim,)
@@ -172,7 +172,7 @@ def filter(
     noise = approx.canon_to_moment(approx.free_to_canon(model.noise_free))
 
     expected_mean_forward = partial(
-        sample_expected_mean,
+        expected_predictive_moment,
         f=model.forward,
         noise=noise,
         approx=approx,
@@ -277,14 +277,14 @@ def bismooth(
 
     natural_to_moment = jax.vmap(approx.natural_to_moment)
     expected_mean_forward = partial(
-        sample_expected_mean,
+        expected_predictive_moment,
         f=model.forward,
         noise=noise,
         approx=approx,
         mc_size=mc_size,
     )
     expected_mean_backward = partial(
-        sample_expected_mean,
+        expected_predictive_moment,
         f=model.backward,
         noise=noise,
         approx=approx,
