@@ -50,7 +50,7 @@ def _make_nonlinear(spec, key):
 
 
 def test_predict_mean(diag, spec):
-    """predict_mean returns correct shape and recovers (loc, Q)."""
+    """predict_moment returns correct shape and recovers (loc, Q)."""
     key = jrnd.key(0)
     state_dim = spec["state_dim"]
     f = _make_nonlinear(spec, key)
@@ -60,8 +60,8 @@ def test_predict_mean(diag, spec):
     u = jrnd.normal(key, (spec["input_dim"],))
     loc = f(z, u, jnp.zeros((0,)))
 
-    # Single loc: predict_mean → from_sufficient_stats recovers (loc, Q_diag)
-    expanded = diag.predict_mean(loc, noise)
+    # Single loc: predict_moment → from_sufficient_stats recovers (loc, Q_diag)
+    expanded = diag.predict_moment(loc, noise)
     mp = diag.from_sufficient_stats(expanded)
     chex.assert_shape(mp, (diag.mean_size(state_dim),))
     chex.assert_tree_all_finite(mp)

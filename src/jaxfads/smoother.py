@@ -284,8 +284,8 @@ class XFADS(ConfModule):
         Applies constraints to ensure parameters are in valid range
         for the chosen exponential family approximation.
         """
-        return self.approx.mean_to_natural(
-            self.approx.canon_to_mean(
+        return self.approx.moment_to_natural(
+            self.approx.canon_to_moment(
                 self.approx.free_to_canon(self.unconstrained_prior_natural)
             )
         )
@@ -299,7 +299,7 @@ class XFADS(ConfModule):
         Array
             Canonical dispersion (e.g., covariance for Gaussian).
         """
-        noise = self.approx.canon_to_mean(
+        noise = self.approx.canon_to_moment(
             self.approx.free_to_canon(self.noise_free)
         )
         _, disp = self.approx.unpack(noise)
@@ -385,9 +385,9 @@ class XFADS(ConfModule):
         >>> natural, mean, pred = model(t, y_batch, u_batch, c_batch, key=key)
         """
         def _free_to_natural(free_flat):
-            free_pytree = self.approx.mean_to_canon(free_flat)
-            return self.approx.mean_to_natural(
-                self.approx.canon_to_mean(self.approx.free_to_canon(free_pytree))
+            free_pytree = self.approx.moment_to_canon(free_flat)
+            return self.approx.moment_to_natural(
+                self.approx.canon_to_moment(self.approx.free_to_canon(free_pytree))
             )
 
         batch_free_to_natural = vmap(vmap(_free_to_natural))

@@ -37,7 +37,7 @@ def sample_expected_mean(
     where ``μ_θ`` is the mean parameter of ``p(z_t | f(z_{t-1}), θ)``.
 
     Averaging is performed in moment-parameter space (expected sufficient
-    statistics, i.e. the output of ``approx.predict_mean``), then converted
+    statistics, i.e. the output of ``approx.predict_moment``), then converted
     to the storage mean format via ``approx.from_sufficient_stats``.
 
     Parameters
@@ -76,7 +76,7 @@ def sample_expected_mean(
     If every sample is non-finite the result will itself be non-finite.
     """
     key, subkey = jrnd.split(key)
-    z = approx.sample_by_mean(subkey, mean, mc_size)
+    z = approx.sample_by_moment(subkey, mean, mc_size)
     u_bc = jnp.broadcast_to(u, shape=(mc_size,) + u.shape)
     c_bc = jnp.broadcast_to(c, shape=(mc_size,) + c.shape)
 
@@ -84,7 +84,7 @@ def sample_expected_mean(
     zs = jax.vmap(partial(f, key=key), in_axes=(0, 0, 0))(z, u_bc, c_bc)
 
     # Per-sample expanded sufficient statistics
-    expanded = jax.vmap(partial(approx.predict_mean, noise=noise))(zs)
+    expanded = jax.vmap(partial(approx.predict_moment, noise=noise))(zs)
 
     # Non-finite safe averaging
     valid = jnp.all(jnp.isfinite(expanded), axis=-1)  # (S,)
@@ -169,7 +169,7 @@ def filter(
         model.prior_natural()
     )
 
-    noise = approx.canon_to_mean(approx.free_to_canon(model.noise_free))
+    noise = approx.canon_to_moment(approx.free_to_canon(model.noise_free))
 
     expected_mean_forward = partial(
         sample_expected_mean,
@@ -185,9 +185,9 @@ def filter(
         key, nature_tm1 = carry
         key, ky = jrnd.split(key)
         a_t, u_tm1, c_tm1 = obs
-        mean_tm1 = approx.natural_to_mean(nature_tm1)
+        mean_tm1 = approx.natural_to_moment(nature_tm1)
         mean_p_t = expected_mean(ky, mean_tm1, u_tm1, c_tm1)
-        nature_p_t = approx.mean_to_natural(mean_p_t)
+        nature_p_t = approx.moment_to_natural(mean_p_t)
         nature_t = nature_p_t + a_t
         return (key, nature_t), (mean_p_t, nature_p_t, nature_t)
 
@@ -202,9 +202,9 @@ def filter(
     )
     nature_f = jnp.vstack((nature_f_1, nature_f))  # 1...T
 
-    mean_f = jax.vmap(approx.natural_to_mean)(nature_f)
+    mean_f = jax.vmap(approx.natural_to_moment)(nature_f)
     mean_p = jnp.vstack(
-        (approx.natural_to_mean(nature_f_1), mean_p)
+        (approx.natural_to_moment(nature_f_1), mean_p)
     )  # prediction of t=1 is the prior
 
     return nature_f, mean_f, mean_p
@@ -273,9 +273,9 @@ def bismooth(
     approx = model.approx
     nature_prior = model.prior_natural()
 
-    noise = approx.canon_to_mean(approx.free_to_canon(model.noise_free))
+    noise = approx.canon_to_moment(approx.free_to_canon(model.noise_free))
 
-    natural_to_mean = jax.vmap(approx.natural_to_mean)
+    natural_to_moment = jax.vmap(approx.natural_to_moment)
     expected_mean_forward = partial(
         sample_expected_mean,
         f=model.forward,
@@ -297,9 +297,9 @@ def bismooth(
         key, nature_f_tm1 = carry
         key_tp1, key_t = jrnd.split(key)
         update_obs_t, u, c = obs
-        mean_f_tm1 = approx.natural_to_mean(nature_f_tm1)
+        mean_f_tm1 = approx.natural_to_moment(nature_f_tm1)
         mean_p_t = expected_mean(key_t, mean_f_tm1, u, c)
-        nature_p_t = approx.mean_to_natural(mean_p_t)
+        nature_p_t = approx.moment_to_natural(mean_p_t)
         nature_f_t = nature_p_t + update_obs_t
         return (key_tp1, nature_f_t), (mean_p_t, nature_p_t, nature_f_t)
 
@@ -330,7 +330,7 @@ def bismooth(
     )
 
     nature_s = nature_f + nature_p_b - jnp.expand_dims(nature_prior, axis=0)
-    mean_s = natural_to_mean(nature_s)
+    mean_s = natural_to_moment(nature_s)
 
     # expectation should be under smoothing distribution
     keys = jrnd.split(key, jnp.size(mean_s, 0))

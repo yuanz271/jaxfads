@@ -30,8 +30,8 @@ class DummyModel:
         self.noise_free = approx.free_from_kw(scale=cov)
 
     def prior_natural(self):
-        return self.approx.mean_to_natural(
-            self.approx.canon_to_mean(
+        return self.approx.moment_to_natural(
+            self.approx.canon_to_moment(
                 self.approx.free_to_canon(self.approx.free_from_kw(scale=1.0))
             )
         )

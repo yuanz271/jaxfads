@@ -5,7 +5,7 @@
 The distribution system follows a two-layer design:
 
 1. **`Approx` ABC** — defines the exponential-family interface.  Natural
-   and mean parameters are **flat arrays** (required for array arithmetic).
+   and moment parameters are **flat arrays** (required for array arithmetic).
    Canon and free-form parameters are **pytrees** (distribution-specific
    layout handled natively by JAX/Equinox/optax).
 2. **Subclasses** (e.g. `MVN`) — define the concrete pytree structure and
@@ -31,14 +31,16 @@ Plugin distributions in external packages register on user import.
 ## Parameter Forms
 
 Terminology note:
-- **Moment parameters** = expected sufficient statistics `E[T(z)]`.
+- **Moment parameters** are the flat parameter vectors used throughout the
+  algorithm. For MVN, this storage moment layout is `[loc, cov]` (encoded as
+  diagonal + low-rank factor).
+- `predict_moment(z, noise)` returns **moment parameters in sufficient-statistic
+  layout** (i.e. expected sufficient statistics `E[T(z_t) | z_{t-1}]`).
+- `from_sufficient_stats(stats)` converts those sufficient-stat moments into the
+  storage moment layout.
 - For the transition model, the **predictive moment parameters** at time `t`
-  are the *integrated* moments
+  are integrated moments
   `E_{π(z_{t-1})}[ E_{p(z_t|z_{t-1})}[T(z_t)] ]` (Eq 12).
-- In this codebase, the term **mean parameters** refers to a *flat storage
-  representation* used by the algorithms (e.g. for MVN: `[loc, cov]` encoded as
-  diag + low-rank factor). This storage mean is not necessarily identical to
-  the moment parameters.
 
 Every exponential-family distribution has four representations:
 
@@ -47,11 +49,11 @@ Every exponential-family distribution has four representations:
 | **Free-form** | pytree | SGD via optax (handles pytrees natively) | `MVNParam(loc, diag_free, factor)` |
 | **Canon** | pytree | Human-readable, constraints satisfied | `MVNParam(loc, cov_diag, cov_factor)` with `cov_diag > 0` |
 | **Natural** (η) | flat array | Additive updates in filtering: `η_f = η_p + α` | `[η₁, η₂]` with `η₂` negative definite |
-| **Mean** (μ) | flat array | Averaging in `predict_mean`, TFP for KL/sampling | `[loc, cov_diag, cov_factor]` packed flat |
+| **Moment** (μ) | flat array | Natural↔moment conversions, sampling, KL | `[loc, cov_diag, cov_factor]` packed flat |
 
-**Why natural and mean must be flat:**
+**Why natural and moment must be flat:**
 - Natural: additive updates `η_p + α_t` require element-wise addition
-- Mean: averaging `(1/S) Σ μ_θ(z^s)` in `predict_mean`, passed to TFP
+- Moment: averaging (Eq 12) and passing flat vectors to sampling/KL backends
 
 **Why canon and free-form are pytrees:**
 - JAX and optax handle pytrees natively — no manual flatten/unflatten
@@ -72,26 +74,26 @@ free_from_kw(**kwargs)
         ▼
   canon (pytree)  ◄── valid, human-readable parameters
         │
-        ├── mean_to_natural ∘ canon_to_mean
+        ├── moment_to_natural ∘ canon_to_moment
         │           │
         │           ▼
         │       natural (flat)  ◄── additive updates in filtering
         │           │
-        │      natural_to_mean
+        │      natural_to_moment
         │           │
-        └── canon_to_mean (direct, numerically stable)
+        └── canon_to_moment (direct, numerically stable)
                     │
                     ▼
-              mean (flat)  ◄── sampling, KL, predict_mean
+            moment (flat)  ◄── sampling, KL
                     │
-              mean_to_canon
+              moment_to_canon
                     │
                     ▼
               canon (pytree)
 ```
 
 Each arrow is an `Approx` method.  The reverse direction is available
-where needed (`canon_to_free`, `mean_to_natural`, `mean_to_canon`).
+where needed (`canon_to_free`, `moment_to_natural`, `moment_to_canon`).
 
 ## `Approx` ABC Interface
 
@@ -109,27 +111,28 @@ where needed (`canon_to_free`, `mean_to_natural`, `mean_to_canon`).
 | `free_to_canon` | `(free_pytree) → canon_pytree` | Apply constraints (e.g. softplus) |
 | `canon_to_free` | `(canon_pytree) → free_pytree` | Inverse constraints |
 
-### Canon ↔ mean (pytree ↔ flat)
+### Canon ↔ moment (pytree ↔ flat)
 
 | Method | Signature | Role |
 |--------|-----------|------|
-| `canon_to_mean` | `(canon_pytree) → μ_flat` | Pack pytree into flat mean array |
-| `mean_to_canon` | `(μ_flat) → canon_pytree` | Unpack flat mean array into pytree |
+| `canon_to_moment` | `(canon_pytree) → μ_flat` | Pack pytree into flat moment array |
+| `moment_to_canon` | `(μ_flat) → canon_pytree` | Unpack flat moment array into pytree |
 
-### Natural ↔ mean (flat ↔ flat)
+### Natural ↔ moment (flat ↔ flat)
 
 | Method | Signature | Role |
 |--------|-----------|------|
-| `natural_to_mean` | `(η_flat) → μ_flat` | Natural to mean conversion |
-| `mean_to_natural` | `(μ_flat) → η_flat` | Mean to natural conversion |
+| `natural_to_moment` | `(η_flat) → μ_flat` | Natural to moment conversion |
+| `moment_to_natural` | `(μ_flat) → η_flat` | Moment to natural conversion |
 
 ### Inference (flat arrays)
 
 | Method | Signature | Role |
 |--------|-----------|------|
-| `sample_by_mean` | `(key, μ, n) → z` | Draw `n` samples from the distribution |
+| `sample_by_moment` | `(key, μ, n) → z` | Draw `n` samples from the distribution |
 | `kl` | `(μ₁, μ₂) → scalar` | KL divergence `KL(p₁ ‖ p₂)` |
-| `predict_mean` | `(locs, noise_μ) → μ` | Predicted mean from batch of dynamics locations |
+| `predict_moment` | `(z, noise) → stats_flat` | Conditional moment parameters `E[T(z_t) | z_{t-1}]` |
+| `from_sufficient_stats` | `(stats_flat) → μ_flat` | Convert sufficient-stat moments to storage moment layout |
 
 ### Usage in XFADS
 
@@ -138,39 +141,39 @@ where needed (`canon_to_free`, `mean_to_natural`, `mean_to_canon`).
 self.noise_free = self.approx.free_from_kw(scale=conf.state_noise)
 self.unconstrained_prior_natural = self.approx.free_from_kw(scale=1.0)
 
-# Inference — derive natural/mean on the fly
-prior_natural = self.approx.mean_to_natural(
-    self.approx.canon_to_mean(
+# Inference — derive natural/moment on the fly
+prior_natural = self.approx.moment_to_natural(
+    self.approx.canon_to_moment(
         self.approx.free_to_canon(self.unconstrained_prior_natural)
     )
 )
-noise_mean = self.approx.canon_to_mean(
+noise = self.approx.canon_to_moment(
     self.approx.free_to_canon(self.noise_free)
 )
 
 # Encoder outputs are flat arrays → flat natural params
 # (encoders output flat for additive updates in filtering)
 def _free_to_natural(free_flat):
-    free_pytree = self.approx.mean_to_canon(free_flat)
-    return self.approx.mean_to_natural(
-        self.approx.canon_to_mean(self.approx.free_to_canon(free_pytree))
+    free_pytree = self.approx.moment_to_canon(free_flat)
+    return self.approx.moment_to_natural(
+        self.approx.canon_to_moment(self.approx.free_to_canon(free_pytree))
     )
 alpha = _free_to_natural(encoder(y))
 ```
 
 ### Notes
 
-- `predict_mean(z, noise)` is **single-state**: it takes one dynamics output
+- `predict_moment(z, noise)` is **single-state**: it takes one dynamics output
   `z` with shape `(D,)` and transition noise parameters `noise` (flat array; use
   `jnp.array([])` if unused). It returns **moment parameters** (expected
   sufficient statistics) `E[T(z_t) | z_{t-1}]` in a flat vector form.
 - Monte Carlo averaging across samples of `z_{t-1}` is handled outside the
   distribution (in `core.sample_expected_mean`) via `jax.vmap` + `jnp.mean`,
   followed by `approx.from_sufficient_stats(...)` to map averaged sufficient
-  statistics into the storage mean-parameter format used elsewhere.
+  statistics into the storage moment layout used elsewhere.
 - Encoder outputs remain flat arrays (natural parameter updates for additive
-  filtering). They pass through `mean_to_canon` → `free_to_canon` →
-  `canon_to_mean` → `mean_to_natural` to convert from unconstrained flat to
+  filtering). They pass through `moment_to_canon` → `free_to_canon` →
+  `canon_to_moment` → `moment_to_natural` to convert from unconstrained flat to
   valid natural parameters.
 
 ## MVN Subclass
@@ -226,7 +229,7 @@ Implementation note:
 - The current JAXFADS `MVN` implementation uses an equivalent convention where
   the second natural-parameter block is *negative definite*.
 
-`MVN.predict_mean(z, noise)` returns these moment parameters in a flat layout:
+`MVN.predict_moment(z, noise)` returns these moment parameters in a flat layout:
 
 - rank 0 (diagonal `Q`): `[μ, -½(μ² + diag(Q))]`
 - rank > 0 (full `Q`): `[μ, vec(-½(Q + μ μᵀ))]`
@@ -240,15 +243,15 @@ to a covariance via:
 `Σ = E[z_t z_tᵀ] - E[z_t] E[z_t]ᵀ`,
 
 
-and then re-encodes `Σ` into the storage mean format
+and then re-encodes `Σ` into the storage moment format
 `[loc, cov_diag, cov_factor]`.
 
 ### Additional Methods (not on ABC)
 
 | Method | Role |
 |--------|------|
-| `canon_to_natural(MVNParam) → η_flat` | Convenience: compose `mean_to_natural(canon_to_mean(...))` |
-| `unpack(μ_flat) → (loc, cov)` | Extract `(loc, cov_diag_or_full)` from flat mean |
+| `canon_to_natural(MVNParam) → η_flat` | Convenience: compose `moment_to_natural(canon_to_moment(...))` |
+| `unpack(μ_flat) → (loc, cov)` | Extract `(loc, cov_diag_or_full)` from flat moment vector |
 | `pack(loc, cov) → μ_flat` | Inverse of `unpack` (lossy for rank > 0 via `_decompose_cov`) |
 | `full_cov(cov) → (D, D)` | Materialize full covariance matrix |
 | `mean_size(dim) → int` | Mean parameter vector size (testing/debug convenience) |
@@ -272,13 +275,13 @@ The codebase has two distinct distribution concerns:
 
 | Concern | Class | Requirements | Constraint |
 |---------|-------|-------------|------------|
-| **Latent posterior** | `Approx` | Natural/mean parameterization, KL, sampling, predict | Must be exponential family |
+| **Latent posterior** | `Approx` | Natural/moment parameterization, KL, sampling, predict | Must be exponential family |
 | **Observation likelihood** | `Likelihood` | `eloglik(z, y)` | None — can be any distribution |
 
 These are fundamentally different:
 
 - **`Approx`** needs the exponential-family machinery (natural parameters
-  for additive filtering updates, mean parameters for KL and sampling).
+  for additive filtering updates, moment parameters for KL and sampling).
 - **Observation likelihoods** (Poisson, Gaussian, Bernoulli, etc.) only
   need to evaluate `E_q[log p(y | z)]`.  They are not restricted to
   exponential families — any density or even a neural likelihood works.
@@ -292,7 +295,7 @@ strategy:
   extract posterior moments via `approx` for closed-form
   `E_q[log p(y | z)]` — lower variance, more efficient.
 - **Monte Carlo** (e.g. Poisson, or any complex likelihood):
-  use `approx.sample_by_mean` to draw samples and average
+  use `approx.sample_by_moment` to draw samples and average
   `log p(y | z)`.
 
 This coupling is deliberate — it lets each `Observation` subclass

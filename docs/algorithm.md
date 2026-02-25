@@ -190,8 +190,8 @@ while not converged:
 | Variational update (Eq 13) | `nature_t = nature_p_t + a_t` in `core.filter()` | Additive natural parameter update |
 | Approximate ELBO (Eq 17) | `elbo()` in `vi.py` | `E[log p(y\|z)] - β·KL(π \|\| π̄)` |
 | KL(π ∥ π̄) | `approx.kl()` on `MVN` | Via TFP `MultivariateNormalFullCovariance` |
-| Exp-family natural params | `Approx.mean_to_natural()` | Flat array; layout defined by MVN |
-| Exp-family mean params | `Approx.natural_to_mean()` | Flat array `[loc, cov_diag, cov_factor]` |
+| Exp-family natural params | `Approx.moment_to_natural()` | Flat array; layout defined by MVN |
+| Exp-family mean params | `Approx.natural_to_moment()` | Flat array `[loc, cov_diag, cov_factor]` |
 | Low-rank `Σ = diag(d) + UUᵀ` | `MVN(dim, rank)` | Rank 0 = diagonal; rank > 0 = low-rank |
 | Causal inference (Eq 29) | Not yet implemented | `Mode.BIFILTER` exists but raises `NotImplementedError` |
 | Efficient structured ops (App B.5) | Not implemented | Current impl materializes full covariance |
@@ -242,8 +242,8 @@ while not converged:
    The low-rank structure of encoder outputs is implicit via the MVN
    rank parameter, not explicitly enforced as outer products.
 
-5. **`predict_mean` averaging**: The paper averages in mean (moment) parameter
-   space (Eq 22). The code does this correctly via `predict_mean` on `MVN`,
+5. **`predict_moment` averaging**: The paper averages in mean (moment) parameter
+   space (Eq 22). The code does this correctly via `predict_moment` on `MVN`,
    which computes moment parameters (expected sufficient statistics) `E[T(z)]`
    per sample, averages, then converts back.
 

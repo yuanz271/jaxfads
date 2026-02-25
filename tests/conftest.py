@@ -34,4 +34,4 @@ def make_approx(dim: int, approx_name: str = "MVN", **kwargs) -> Approx:
 
 def make_noise(approx: Approx, state_dim: int, cov: float = 1.0):
     """Create noise transition params (flat) for test use."""
-    return approx.canon_to_mean(approx.free_to_canon(approx.free_from_kw(scale=cov)))
+    return approx.canon_to_moment(approx.free_to_canon(approx.free_from_kw(scale=cov)))

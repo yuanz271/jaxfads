@@ -174,9 +174,9 @@ class MVN(Approx):
         """See base class. Mean parameter size: D(2 + r)."""
         return self._dim * (2 + self._rank)
 
-    # -- natural ↔ mean ------------------------------------------------------
+    # -- natural ↔ moment ------------------------------------------------------
 
-    def natural_to_mean(self, natural: Array) -> Array:
+    def natural_to_moment(self, natural: Array) -> Array:
         """See base class."""
         d, r = self._dim, self._rank
         if r == 0:
@@ -192,7 +192,7 @@ class MVN(Approx):
         cov_diag, cov_factor = self._decompose_cov(sigma)
         return self._pack_mean(loc, cov_diag, cov_factor)
 
-    def mean_to_natural(self, mean: Array) -> Array:
+    def moment_to_natural(self, moment: Array) -> Array:
         """See base class.
 
         Notes
@@ -202,13 +202,13 @@ class MVN(Approx):
         parameters.
         """
         if self._rank == 0:
-            loc, cov_diag = jnp.split(mean, 2)
+            loc, cov_diag = jnp.split(moment, 2)
             cov_diag = jnp.maximum(cov_diag, _EPS)
             eta2 = -0.5 / cov_diag
             eta1 = loc / cov_diag
             return jnp.concatenate((eta1, eta2))
 
-        loc, cov_diag, cov_factor = self._split_mean(mean)
+        loc, cov_diag, cov_factor = self._split_mean(moment)
         sigma = self._build_cov(jnp.maximum(cov_diag, _EPS), cov_factor)
         P = _damping_inv(sigma)
         eta1 = P @ loc
@@ -217,17 +217,17 @@ class MVN(Approx):
 
     # -- sampling -----------------------------------------------------------
 
-    def sample_by_mean(
-        self, key: Array, mean: Array, mc_size: int | None = None
+    def sample_by_moment(
+        self, key: Array, moment: Array, mc_size: int | None = None
     ) -> Array:
         """See base class."""
         if self._rank == 0:
-            loc, cov_diag = jnp.split(mean, 2)
+            loc, cov_diag = jnp.split(moment, 2)
             std = jnp.sqrt(jnp.maximum(cov_diag, _EPS))
             shape = loc.shape if mc_size is None else (mc_size,) + loc.shape
             return loc + std * jrnd.normal(key, shape)
 
-        loc, cov_diag, cov_factor = self._split_mean(mean)
+        loc, cov_diag, cov_factor = self._split_mean(moment)
         dist = tfd.MultivariateNormalDiagPlusLowRankCovariance(
             loc=loc,
             cov_diag_factor=jnp.maximum(cov_diag, _EPS),
@@ -237,14 +237,14 @@ class MVN(Approx):
 
     # -- KL divergence ------------------------------------------------------
 
-    def kl(self, mean1: Array, mean2: Array) -> Array:
+    def kl(self, moment1: Array, moment2: Array) -> Array:
         """See base class.
 
         Uses ``MultivariateNormalFullCovariance`` for all ranks to
         ensure KL is always registered.
         """
-        m1, cov1 = self.unpack(mean1)
-        m2, cov2 = self.unpack(mean2)
+        m1, cov1 = self.unpack(moment1)
+        m2, cov2 = self.unpack(moment2)
         if self._rank == 0:
             # unpack returns diagonal vectors
             cov1_full = jnp.diag(jnp.maximum(cov1, _EPS))
@@ -324,11 +324,11 @@ class MVN(Approx):
     def canon_to_natural(self, canon: MVNParam) -> Array:
         """MVN-specific (not on ABC).
 
-        Delegates to :meth:`mean_to_natural` via :meth:`canon_to_mean`.
+        Delegates to :meth:`moment_to_natural` via :meth:`canon_to_moment`.
         """
-        return self.mean_to_natural(self.canon_to_mean(canon))
+        return self.moment_to_natural(self.canon_to_moment(canon))
 
-    def canon_to_mean(self, canon: MVNParam) -> Array:
+    def canon_to_moment(self, canon: MVNParam) -> Array:
         """See base class.
 
         Packs the pytree into a flat mean array.
@@ -337,7 +337,7 @@ class MVN(Approx):
             canon.loc, canon.cov_diag, canon.cov_factor
         )
 
-    def mean_to_canon(self, mean: Array) -> MVNParam:
+    def moment_to_canon(self, mean: Array) -> MVNParam:
         """See base class.
 
         Unpacks a flat mean array into an MVNParam pytree.
@@ -387,9 +387,9 @@ class MVN(Approx):
         canon = MVNParam(loc=loc_arr, cov_diag=cov_diag_arr, cov_factor=cov_factor_arr)
         return self.canon_to_free(canon)
 
-    # -- predict_mean --------------------------------------------------------
+    # -- predict_moment --------------------------------------------------------
 
-    def predict_mean(self, z: Array, noise: Array) -> Array:
+    def predict_moment(self, z: Array, noise: Array) -> Array:
         """See base class.
 
         Returns moment parameters (expected sufficient statistics) for a single

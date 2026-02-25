@@ -24,7 +24,7 @@ class Approx(SubclassRegistryMixin, ABC):
 
     This class defines the interface for exponential family distributions
     used in variational inference, providing conversions between natural
-    and mean parameterizations, sampling methods, and other utilities.
+    and moment parameterizations, sampling methods, and other utilities.
 
     Implementations are instantiated with family-specific parameters.
     All methods are instance methods so that the distribution
@@ -32,9 +32,9 @@ class Approx(SubclassRegistryMixin, ABC):
     """
 
     @abstractmethod
-    def natural_to_mean(self, natural: Array) -> Array:
+    def natural_to_moment(self, natural: Array) -> Array:
         """
-        Convert natural parameters to mean parameters.
+        Convert natural parameters to moment parameters.
 
         Parameters
         ----------
@@ -44,24 +44,24 @@ class Approx(SubclassRegistryMixin, ABC):
         Returns
         -------
         Array
-            Corresponding mean parameter vector.
+            Corresponding moment parameter vector.
 
         Notes
         -----
-        For exponential families, the mean parameters are the expected
+        For exponential families, the moment parameters are the expected
         values of the sufficient statistics under the distribution.
         """
         ...
 
     @abstractmethod
-    def mean_to_natural(self, mean: Array) -> Array:
+    def moment_to_natural(self, moment: Array) -> Array:
         """
-        Convert mean parameters to natural parameters.
+        Convert moment parameters to natural parameters.
 
         Parameters
         ----------
-        mean : Array
-            Mean parameter vector of the exponential-family distribution.
+        moment : Array
+            Moment parameter vector of the exponential-family distribution.
 
         Returns
         -------
@@ -77,16 +77,16 @@ class Approx(SubclassRegistryMixin, ABC):
         ...
 
     @abstractmethod
-    def sample_by_mean(self, key: Array, mean: Array, mc_size: int) -> Array:
+    def sample_by_moment(self, key: Array, moment: Array, mc_size: int) -> Array:
         """
-        Generate samples from the distribution using mean parameters.
+        Generate samples from the distribution using moment parameters.
 
         Parameters
         ----------
         key : Array
             JAX PRNG key for randomness.
-        mean : Array
-            Mean parameter vector defining the distribution.
+        moment : Array
+            Moment parameter vector defining the distribution.
         mc_size : int
             Number of Monte Carlo samples to draw.
 
@@ -120,22 +120,22 @@ class Approx(SubclassRegistryMixin, ABC):
         ...
 
     @abstractmethod
-    def kl(self, mean1: Array, mean2: Array) -> Array:
+    def kl(self, moment1: Array, moment2: Array) -> Array:
         """
         Compute KL divergence between two distributions.
 
         Parameters
         ----------
-        mean1 : Array
-            Mean parameters of the first distribution.
-        mean2 : Array
-            Mean parameters of the second distribution.
+        moment1 : Array
+            Moment parameters of the first distribution.
+        moment2 : Array
+            Moment parameters of the second distribution.
 
         Returns
         -------
         Array
             KL divergence KL(p1 || p2) where p1 and p2 are parameterized
-            by mean1 and mean2 respectively.
+            by moment1 and moment2 respectively.
         """
         ...
 
@@ -158,9 +158,9 @@ class Approx(SubclassRegistryMixin, ABC):
         ...
 
     @abstractmethod
-    def canon_to_mean(self, canon: Any) -> Array:
+    def canon_to_moment(self, canon: Any) -> Array:
         """
-        Convert canon pytree to flat mean parameters.
+        Convert canon pytree to flat moment parameters.
 
         Direct path avoiding the roundtrip through natural parameters,
         which may be numerically unstable (e.g. matrix inversion).
@@ -174,21 +174,21 @@ class Approx(SubclassRegistryMixin, ABC):
         Returns
         -------
         Array
-            Flat mean parameters (expected sufficient statistics).
+            Flat moment parameters (expected sufficient statistics).
         """
         ...
 
     @abstractmethod
-    def mean_to_canon(self, mean: Array) -> Any:
+    def moment_to_canon(self, moment: Array) -> Any:
         """
-        Convert flat mean parameters to canon pytree.
+        Convert flat moment parameters to canon pytree.
 
-        Inverse of :meth:`canon_to_mean`.
+        Inverse of :meth:`canon_to_moment`.
 
         Parameters
         ----------
-        mean : Array
-            Flat mean parameters (expected sufficient statistics).
+        moment : Array
+            Flat moment parameters (expected sufficient statistics).
 
         Returns
         -------
@@ -239,15 +239,15 @@ class Approx(SubclassRegistryMixin, ABC):
         ...
 
     @abstractmethod
-    def predict_mean(self, z: Array, noise: Array) -> Array:
+    def predict_moment(self, z: Array, noise: Array) -> Array:
         """
-        Expanded sufficient statistics for a single state realization.
+        Moment parameters for a single state realization.
 
         Computes ``E[T(z)]`` for one dynamics output and transition
-        noise parameters.  The output lives in the expanded
-        sufficient-statistic space where averaging across MC samples
-        is linear.  Use :meth:`from_sufficient_stats` to convert the
-        average back to standard mean parameters.
+        noise parameters. The output lives in a flat moment-parameter
+        space where averaging across MC samples is linear. Use
+        :meth:`from_sufficient_stats` to convert the averaged moment
+        parameters to the storage moment format used elsewhere.
 
         Parameters
         ----------
@@ -268,11 +268,11 @@ class Approx(SubclassRegistryMixin, ABC):
     @abstractmethod
     def from_sufficient_stats(self, stats: Array) -> Array:
         """
-        Convert (averaged) sufficient statistics to mean parameters.
+        Convert (averaged) moment parameters to storage moment format.
 
-        Maps from the true expected sufficient statistics ``E[T(z)]``
-        (as returned by :meth:`predict_mean`) to the storage mean
-        parameter format used by the rest of the codebase.
+        Maps from the true moment parameters ``E[T(z)]`` (as returned by
+        :meth:`predict_moment`) to the flat storage moment format used by the
+        rest of the codebase.
 
         Parameters
         ----------
@@ -282,7 +282,7 @@ class Approx(SubclassRegistryMixin, ABC):
         Returns
         -------
         Array
-            Flat mean parameter vector in storage format.
+            Flat moment parameter vector in storage format.
         """
         ...
 

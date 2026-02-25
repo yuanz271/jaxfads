@@ -54,15 +54,15 @@ def _make_canon(mvn: MVN, key) -> MVNParam:
 
 @pytest.mark.parametrize("dim, rank", _ALL_RANKS)
 def test_natural_mean_roundtrip(dim, rank):
-    """mean_to_natural → natural_to_mean preserves covariance structure."""
+    """moment_to_natural → natural_to_moment preserves covariance structure."""
     mvn = MVN(dim=dim, rank=rank)
     mp = _make_mean(mvn, jrnd.key(42))
 
-    natural = mvn.mean_to_natural(mp)
+    natural = mvn.moment_to_natural(mp)
     chex.assert_tree_all_finite(natural)
     chex.assert_shape(natural, (mvn.param_size(dim),))
 
-    mp_rt = mvn.natural_to_mean(natural)
+    mp_rt = mvn.natural_to_moment(natural)
     chex.assert_tree_all_finite(mp_rt)
 
     _, cov_orig = mvn.unpack(mp)
@@ -82,11 +82,11 @@ def test_natural_mean_roundtrip(dim, rank):
 @pytest.mark.parametrize("dim, rank", _ALL_RANKS)
 @pytest.mark.parametrize("scale", [1.0, 2.5])
 def test_free_from_kw(dim, rank, scale):
-    """free_from_kw → to_canon → canon_to_mean gives N(0, scale·I)."""
+    """free_from_kw → to_canon → canon_to_moment gives N(0, scale·I)."""
     mvn = MVN(dim=dim, rank=rank)
     free = mvn.free_from_kw(scale=scale)
     canon = mvn.free_to_canon(free)
-    mp = mvn.canon_to_mean(canon)
+    mp = mvn.canon_to_moment(canon)
 
     loc, cov = mvn.unpack(mp)
     chex.assert_trees_all_close(loc, jnp.zeros(dim), atol=1e-6)
@@ -118,7 +118,7 @@ def test_to_canon_produces_valid_cov(dim, rank):
         cov_factor=jrnd.normal(jrnd.key(2), (d, r)),
     )
     canon = mvn.free_to_canon(free)
-    mp = mvn.canon_to_mean(canon)
+    mp = mvn.canon_to_moment(canon)
 
     _, cov = mvn.unpack(mp)
     cov_full = mvn.full_cov(cov)
@@ -128,17 +128,17 @@ def test_to_canon_produces_valid_cov(dim, rank):
 
 
 # ---------------------------------------------------------------------------
-# canon_to_mean / mean_to_canon roundtrip
+# canon_to_moment / moment_to_canon roundtrip
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("dim, rank", _ALL_RANKS)
 def test_canon_mean_roundtrip(dim, rank):
-    """canon_to_mean → mean_to_canon preserves structure."""
+    """canon_to_moment → moment_to_canon preserves structure."""
     mvn = MVN(dim=dim, rank=rank)
     s = _make_canon(mvn, jrnd.key(33))
-    mp = mvn.canon_to_mean(s)
-    s_rt = mvn.mean_to_canon(mp)
+    mp = mvn.canon_to_moment(s)
+    s_rt = mvn.moment_to_canon(mp)
     chex.assert_trees_all_close(s_rt, s, atol=1e-6)
 
 
@@ -266,7 +266,7 @@ def test_sample_shape_and_statistics(dim, rank):
     loc, cov = mvn.unpack(mp)
     cov_full = mvn.full_cov(cov)
 
-    samples = mvn.sample_by_mean(jrnd.key(1), mp, 50_000)
+    samples = mvn.sample_by_moment(jrnd.key(1), mp, 50_000)
     chex.assert_shape(samples, (50_000, dim))
     chex.assert_tree_all_finite(samples)
     chex.assert_trees_all_close(jnp.mean(samples, axis=0), loc, atol=0.05)
@@ -274,19 +274,19 @@ def test_sample_shape_and_statistics(dim, rank):
 
 
 # ---------------------------------------------------------------------------
-# predict_mean / from_sufficient_stats
+# predict_moment / from_sufficient_stats
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("dim, rank", _ALL_RANKS)
 def test_predict_mean_single_loc(dim, rank):
-    """predict_mean returns paper-convention expected sufficient stats."""
+    """predict_moment returns paper-convention expected sufficient stats."""
     mvn = MVN(dim=dim, rank=rank)
     scale = 1.5
-    noise = mvn.canon_to_mean(mvn.free_to_canon(mvn.free_from_kw(scale=scale)))
+    noise = mvn.canon_to_moment(mvn.free_to_canon(mvn.free_from_kw(scale=scale)))
     z = jrnd.normal(jrnd.key(0), (dim,))
 
-    expanded = mvn.predict_mean(z, noise)
+    expanded = mvn.predict_moment(z, noise)
 
     if rank == 0:
         _, q_diag = jnp.split(noise, 2)
@@ -309,10 +309,10 @@ def test_predict_mean_average_captures_variance(dim, rank):
     """Averaged expanded stats produce larger covariance than noise alone."""
     mvn = MVN(dim=dim, rank=rank)
     scale = 0.1
-    noise = mvn.canon_to_mean(mvn.free_to_canon(mvn.free_from_kw(scale=scale)))
+    noise = mvn.canon_to_moment(mvn.free_to_canon(mvn.free_from_kw(scale=scale)))
     zs = jrnd.normal(jrnd.key(42), (200, dim)) * 3.0
 
-    expanded = jax.vmap(lambda z: mvn.predict_mean(z, noise))(zs)
+    expanded = jax.vmap(lambda z: mvn.predict_moment(z, noise))(zs)
     avg = jnp.mean(expanded, axis=0)
     mp = mvn.from_sufficient_stats(avg)
     _, cov = mvn.unpack(mp)
@@ -352,13 +352,13 @@ def test_near_zero_cov_stability(dim, rank):
     cov_factor = jnp.zeros((dim, rank)) if rank > 0 else jnp.zeros((dim, 0))
     mp = mvn._pack_mean(loc, cov_diag, cov_factor)
 
-    natural = mvn.mean_to_natural(mp)
+    natural = mvn.moment_to_natural(mp)
     chex.assert_tree_all_finite(natural)
     if rank == 0:
         _, nat2 = jnp.split(natural, 2)
         assert float(jnp.max(jnp.abs(nat2)).item()) < 1e7
 
-    mp_rt = mvn.natural_to_mean(natural)
+    mp_rt = mvn.natural_to_moment(natural)
     chex.assert_tree_all_finite(mp_rt)
 
 
