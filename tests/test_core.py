@@ -31,8 +31,8 @@ class DummyModel:
 
     def prior_natural(self):
         return self.approx.mean_to_natural(
-            self.approx.structured_to_mean(
-                self.approx.to_structured(self.approx.param_from_conf(scale=1.0))
+            self.approx.canon_to_mean(
+                self.approx.free_to_canon(self.approx.param_from_conf(scale=1.0))
             )
         )
 

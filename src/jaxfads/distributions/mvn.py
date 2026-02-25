@@ -19,7 +19,7 @@ from ..constraints import _EPS, constrain_positive, unconstrain_positive
 
 
 class MVNParam(NamedTuple):
-    """Structured/free-form pytree for MVN parameters.
+    """Canon/free-form pytree for MVN parameters.
 
     Attributes
     ----------
@@ -139,7 +139,7 @@ class MVN(Approx):
         return cov_diag, cov_factor
 
     def _split_mean(self, mean: Array) -> tuple[Array, Array, Array]:
-        """Unpack structured mean ``[loc, cov_diag, cov_factor_flat]``.
+        """Unpack canon mean ``[loc, cov_diag, cov_factor_flat]``.
 
         Returns
         -------
@@ -154,11 +154,11 @@ class MVN(Approx):
         return loc, cov_diag, cov_factor
 
     def _build_cov(self, cov_diag: Array, cov_factor: Array) -> Array:
-        """Materialize full covariance from structured parts."""
+        """Materialize full covariance from canon parts."""
         return jnp.diag(cov_diag) + cov_factor @ cov_factor.T
 
     def _pack_mean(self, loc: Array, cov_diag: Array, cov_factor: Array) -> Array:
-        """Concatenate structured mean."""
+        """Concatenate canon mean."""
         return jnp.concatenate((loc, cov_diag, cov_factor.flatten()))
 
     # -- Approx interface ----------------------------------------------------
@@ -309,7 +309,7 @@ class MVN(Approx):
 
     # -- constrain / unconstrain --------------------------------------------
 
-    def to_structured(self, free: MVNParam) -> MVNParam:
+    def free_to_canon(self, free: MVNParam) -> MVNParam:
         """See base class.
 
         Applies ``softplus`` to the diagonal covariance entries;
@@ -321,23 +321,23 @@ class MVN(Approx):
             cov_factor=free.cov_factor,
         )
 
-    def structured_to_natural(self, structured: MVNParam) -> Array:
+    def canon_to_natural(self, canon: MVNParam) -> Array:
         """MVN-specific (not on ABC).
 
-        Delegates to :meth:`mean_to_natural` via :meth:`structured_to_mean`.
+        Delegates to :meth:`mean_to_natural` via :meth:`canon_to_mean`.
         """
-        return self.mean_to_natural(self.structured_to_mean(structured))
+        return self.mean_to_natural(self.canon_to_mean(canon))
 
-    def structured_to_mean(self, structured: MVNParam) -> Array:
+    def canon_to_mean(self, canon: MVNParam) -> Array:
         """See base class.
 
         Packs the pytree into a flat mean array.
         """
         return self._pack_mean(
-            structured.loc, structured.cov_diag, structured.cov_factor
+            canon.loc, canon.cov_diag, canon.cov_factor
         )
 
-    def mean_to_structured(self, mean: Array) -> MVNParam:
+    def mean_to_canon(self, mean: Array) -> MVNParam:
         """See base class.
 
         Unpacks a flat mean array into an MVNParam pytree.
@@ -345,16 +345,16 @@ class MVN(Approx):
         loc, cov_diag, cov_factor = self._split_mean(mean)
         return MVNParam(loc=loc, cov_diag=cov_diag, cov_factor=cov_factor)
 
-    def to_free(self, structured: MVNParam) -> MVNParam:
+    def canon_to_free(self, canon: MVNParam) -> MVNParam:
         """See base class.
 
         Applies ``softplus_inverse`` to the diagonal covariance entries;
         loc and low-rank factor are left as-is.
         """
         return MVNParam(
-            loc=structured.loc,
-            cov_diag=unconstrain_positive(structured.cov_diag),
-            cov_factor=structured.cov_factor,
+            loc=canon.loc,
+            cov_diag=unconstrain_positive(canon.cov_diag),
+            cov_factor=canon.cov_factor,
         )
 
     # -- param_from_conf -----------------------------------------------------
@@ -384,8 +384,8 @@ class MVN(Approx):
         loc_arr = jnp.broadcast_to(jnp.asarray(loc, dtype=jnp.float32), (d,))
         cov_diag_arr = jnp.broadcast_to(jnp.asarray(scale, dtype=jnp.float32), (d,))
         cov_factor_arr = jnp.zeros((d, r))
-        structured = MVNParam(loc=loc_arr, cov_diag=cov_diag_arr, cov_factor=cov_factor_arr)
-        return self.to_free(structured)
+        canon = MVNParam(loc=loc_arr, cov_diag=cov_diag_arr, cov_factor=cov_factor_arr)
+        return self.canon_to_free(canon)
 
     # -- predict_mean --------------------------------------------------------
 
@@ -418,7 +418,7 @@ class MVN(Approx):
         return self._expanded_to_mean(stats)
 
     def _expanded_to_mean(self, expanded: Array) -> Array:
-        """Convert averaged expanded mean parameter to structured mean.
+        """Convert averaged expanded mean parameter to canon mean.
 
         * rank 0: ``[m, s] → [m, s − m²]``
         * rank > 0: extract Σ, eigendecompose into diag + factor

@@ -37,7 +37,7 @@ def _make_mean(mvn: MVN, key) -> jnp.ndarray:
     return mvn._pack_mean(loc, cov_diag, cov_factor)
 
 
-def _make_structured(mvn: MVN, key) -> MVNParam:
+def _make_canon(mvn: MVN, key) -> MVNParam:
     """Build a valid MVNParam for any rank."""
     d, r = mvn._dim, mvn._rank
     k1, k2, k3 = jrnd.split(key, 3)
@@ -82,11 +82,11 @@ def test_natural_mean_roundtrip(dim, rank):
 @pytest.mark.parametrize("dim, rank", _ALL_RANKS)
 @pytest.mark.parametrize("scale", [1.0, 2.5])
 def test_param_from_conf(dim, rank, scale):
-    """param_from_conf → to_structured → structured_to_mean gives N(0, scale·I)."""
+    """param_from_conf → to_canon → canon_to_mean gives N(0, scale·I)."""
     mvn = MVN(dim=dim, rank=rank)
     free = mvn.param_from_conf(scale=scale)
-    structured = mvn.to_structured(free)
-    mp = mvn.structured_to_mean(structured)
+    canon = mvn.free_to_canon(free)
+    mp = mvn.canon_to_mean(canon)
 
     loc, cov = mvn.unpack(mp)
     chex.assert_trees_all_close(loc, jnp.zeros(dim), atol=1e-6)
@@ -94,22 +94,22 @@ def test_param_from_conf(dim, rank, scale):
 
 
 # ---------------------------------------------------------------------------
-# to_structured / to_free roundtrip (pytree)
+# to_canon / to_free roundtrip (pytree)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("dim, rank", _ALL_RANKS)
-def test_to_structured_roundtrip(dim, rank):
-    """to_structured(to_free(s)) ≈ s."""
+def test_to_canon_roundtrip(dim, rank):
+    """to_canon(to_free(s)) ≈ s."""
     mvn = MVN(dim=dim, rank=rank)
-    s = _make_structured(mvn, jrnd.key(10))
-    recovered = mvn.to_structured(mvn.to_free(s))
+    s = _make_canon(mvn, jrnd.key(10))
+    recovered = mvn.free_to_canon(mvn.canon_to_free(s))
     chex.assert_trees_all_close(recovered, s, atol=1e-5)
 
 
 @pytest.mark.parametrize("dim, rank", _ALL_RANKS)
-def test_to_structured_produces_valid_cov(dim, rank):
-    """to_structured produces PD covariance from arbitrary free-form."""
+def test_to_canon_produces_valid_cov(dim, rank):
+    """to_canon produces PD covariance from arbitrary free-form."""
     mvn = MVN(dim=dim, rank=rank)
     d, r = dim, rank
     free = MVNParam(
@@ -117,8 +117,8 @@ def test_to_structured_produces_valid_cov(dim, rank):
         cov_diag=jrnd.normal(jrnd.key(1), (d,)),
         cov_factor=jrnd.normal(jrnd.key(2), (d, r)),
     )
-    structured = mvn.to_structured(free)
-    mp = mvn.structured_to_mean(structured)
+    canon = mvn.free_to_canon(free)
+    mp = mvn.canon_to_mean(canon)
 
     _, cov = mvn.unpack(mp)
     cov_full = mvn.full_cov(cov)
@@ -128,32 +128,32 @@ def test_to_structured_produces_valid_cov(dim, rank):
 
 
 # ---------------------------------------------------------------------------
-# structured_to_mean / mean_to_structured roundtrip
+# canon_to_mean / mean_to_canon roundtrip
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("dim, rank", _ALL_RANKS)
-def test_structured_mean_roundtrip(dim, rank):
-    """structured_to_mean → mean_to_structured preserves structure."""
+def test_canon_mean_roundtrip(dim, rank):
+    """canon_to_mean → mean_to_canon preserves structure."""
     mvn = MVN(dim=dim, rank=rank)
-    s = _make_structured(mvn, jrnd.key(33))
-    mp = mvn.structured_to_mean(s)
-    s_rt = mvn.mean_to_structured(mp)
+    s = _make_canon(mvn, jrnd.key(33))
+    mp = mvn.canon_to_mean(s)
+    s_rt = mvn.mean_to_canon(mp)
     chex.assert_trees_all_close(s_rt, s, atol=1e-6)
 
 
 # ---------------------------------------------------------------------------
-# structured_to_natural (MVN-specific, not on ABC)
+# canon_to_natural (MVN-specific, not on ABC)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("dim, rank", _LOWRANK_ONLY)
-def test_structured_to_natural_neg_def(dim, rank):
-    """structured_to_natural produces negative-definite η₂ for rank > 0."""
+def test_canon_to_natural_neg_def(dim, rank):
+    """canon_to_natural produces negative-definite η₂ for rank > 0."""
     mvn = MVN(dim=dim, rank=rank)
     free = mvn.param_from_conf(scale=2.0)
-    structured = mvn.to_structured(free)
-    natural = mvn.structured_to_natural(structured)
+    canon = mvn.free_to_canon(free)
+    natural = mvn.canon_to_natural(canon)
     chex.assert_tree_all_finite(natural)
 
     _, nat2_flat = jnp.split(natural, [dim])
@@ -283,7 +283,7 @@ def test_predict_mean_single_loc(dim, rank):
     """Single loc → contract recovers (loc, noise_cov)."""
     mvn = MVN(dim=dim, rank=rank)
     scale = 1.5
-    noise = mvn.structured_to_mean(mvn.to_structured(mvn.param_from_conf(scale=scale)))
+    noise = mvn.canon_to_mean(mvn.free_to_canon(mvn.param_from_conf(scale=scale)))
     z = jrnd.normal(jrnd.key(0), (dim,))
 
     expanded = mvn.predict_mean(z, noise)
@@ -298,7 +298,7 @@ def test_predict_mean_average_captures_variance(dim, rank):
     """Averaged expanded stats produce larger covariance than noise alone."""
     mvn = MVN(dim=dim, rank=rank)
     scale = 0.1
-    noise = mvn.structured_to_mean(mvn.to_structured(mvn.param_from_conf(scale=scale)))
+    noise = mvn.canon_to_mean(mvn.free_to_canon(mvn.param_from_conf(scale=scale)))
     zs = jrnd.normal(jrnd.key(42), (200, dim)) * 3.0
 
     expanded = jax.vmap(lambda z: mvn.predict_mean(z, noise))(zs)

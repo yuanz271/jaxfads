@@ -38,7 +38,7 @@ def sample_expected_mean(
 
     Averaging is performed in expanded sufficient-statistic space
     (where it is valid by linearity), then contracted back to the
-    structured mean format for downstream use.
+    canon mean format for downstream use.
 
     Parameters
     ----------
@@ -169,7 +169,7 @@ def filter(
         model.prior_natural()
     )  # TODO: where should prior belongs, approx or dynamics?
 
-    noise = approx.structured_to_mean(approx.to_structured(model.noise_free))
+    noise = approx.canon_to_mean(approx.free_to_canon(model.noise_free))
 
     expected_mean_forward = partial(
         sample_expected_mean,
@@ -273,7 +273,7 @@ def bismooth(
     approx = model.approx
     nature_prior = model.prior_natural()
 
-    noise = approx.structured_to_mean(approx.to_structured(model.noise_free))
+    noise = approx.canon_to_mean(approx.free_to_canon(model.noise_free))
 
     natural_to_mean = jax.vmap(approx.natural_to_mean)
     expected_mean_forward = partial(

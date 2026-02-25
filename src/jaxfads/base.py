@@ -139,9 +139,9 @@ class Approx(SubclassRegistryMixin, ABC):
         ...
 
     @abstractmethod
-    def to_structured(self, free: Any) -> Any:
+    def free_to_canon(self, free: Any) -> Any:
         """
-        Transform free-form pytree to valid structured pytree.
+        Transform free-form pytree to valid canon pytree.
 
         Parameters
         ----------
@@ -151,24 +151,24 @@ class Approx(SubclassRegistryMixin, ABC):
         Returns
         -------
         pytree
-            Valid structured parameters with constraints satisfied
+            Valid canon parameters with constraints satisfied
             (e.g., positive covariance components).
         """
         ...
 
     @abstractmethod
-    def structured_to_mean(self, structured: Any) -> Array:
+    def canon_to_mean(self, canon: Any) -> Array:
         """
-        Convert structured pytree to flat mean parameters.
+        Convert canon pytree to flat mean parameters.
 
         Direct path avoiding the roundtrip through natural parameters,
         which may be numerically unstable (e.g. matrix inversion).
 
         Parameters
         ----------
-        structured : pytree
-            Valid structured parameter pytree (output of
-            :meth:`to_structured`).
+        canon : pytree
+            Valid canon parameter pytree (output of
+            :meth:`free_to_canon`).
 
         Returns
         -------
@@ -178,11 +178,11 @@ class Approx(SubclassRegistryMixin, ABC):
         ...
 
     @abstractmethod
-    def mean_to_structured(self, mean: Array) -> Any:
+    def mean_to_canon(self, mean: Array) -> Any:
         """
-        Convert flat mean parameters to structured pytree.
+        Convert flat mean parameters to canon pytree.
 
-        Inverse of :meth:`structured_to_mean`.
+        Inverse of :meth:`canon_to_mean`.
 
         Parameters
         ----------
@@ -192,21 +192,21 @@ class Approx(SubclassRegistryMixin, ABC):
         Returns
         -------
         pytree
-            Valid structured parameter pytree.
+            Valid canon parameter pytree.
         """
         ...
 
     @abstractmethod
-    def to_free(self, structured: Any) -> Any:
+    def canon_to_free(self, canon: Any) -> Any:
         """
-        Transform valid structured pytree to free-form pytree.
+        Transform valid canon pytree to free-form pytree.
 
-        Inverse of :meth:`to_structured`.
+        Inverse of :meth:`free_to_canon`.
 
         Parameters
         ----------
-        structured : pytree
-            Valid structured parameter pytree.
+        canon : pytree
+            Valid canon parameter pytree.
 
         Returns
         -------

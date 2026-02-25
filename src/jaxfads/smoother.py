@@ -67,7 +67,7 @@ class XFADS(ConfModule):
     unconstrained_prior_natural : Array
         Free-form prior parameters (constrained to natural at inference).
     noise_free : Array
-        Free-form noise parameters (constrained to structured/mean at inference).
+        Free-form noise parameters (constrained to canon/mean at inference).
 
     Notes
     -----
@@ -284,8 +284,8 @@ class XFADS(ConfModule):
         for the chosen exponential family approximation.
         """
         return self.approx.mean_to_natural(
-            self.approx.structured_to_mean(
-                self.approx.to_structured(self.unconstrained_prior_natural)
+            self.approx.canon_to_mean(
+                self.approx.free_to_canon(self.unconstrained_prior_natural)
             )
         )
 
@@ -298,8 +298,8 @@ class XFADS(ConfModule):
         Array
             Canonical dispersion (e.g., covariance for Gaussian).
         """
-        noise = self.approx.structured_to_mean(
-            self.approx.to_structured(self.noise_free)
+        noise = self.approx.canon_to_mean(
+            self.approx.free_to_canon(self.noise_free)
         )
         _, disp = self.approx.unpack(noise)
         return disp
@@ -384,9 +384,9 @@ class XFADS(ConfModule):
         >>> natural, mean, pred = model(t, y_batch, u_batch, c_batch, key=key)
         """
         def _free_to_natural(free_flat):
-            free_pytree = self.approx.mean_to_structured(free_flat)
+            free_pytree = self.approx.mean_to_canon(free_flat)
             return self.approx.mean_to_natural(
-                self.approx.structured_to_mean(self.approx.to_structured(free_pytree))
+                self.approx.canon_to_mean(self.approx.free_to_canon(free_pytree))
             )
 
         batch_free_to_natural = vmap(vmap(_free_to_natural))

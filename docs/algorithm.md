@@ -181,7 +181,7 @@ while not converged:
 | Paper Concept | Code Location | Notes |
 |---------------|---------------|-------|
 | Generative model `p(z_t \| z_{t-1})` | `Dynamics.forward()` in `dynamics.py` | Deterministic `m_θ(z)`; noise `Q` owned by `XFADS` |
-| State noise `Q_θ` | `XFADS.unconstrained_noise_mean` in `smoother.py` | Stored as free-form; constrained to mean via `to_structured` |
+| State noise `Q_θ` | `XFADS.unconstrained_noise_mean` in `smoother.py` | Stored as free-form; constrained to mean via `to_canon` |
 | Observation model `p(y_t \| z_t)` | `Observation.eloglik()` in `observations.py` | Poisson and Gaussian implementations |
 | Pseudo-observation `λ̃_t` | `alpha + beta` computed in `XFADS.__call__()` | Added in natural parameter space |
 | Local encoder `α_t = NN(y_t)` | `AlphaEncoder` in `encoders.py` | MLP mapping observations → natural params |
