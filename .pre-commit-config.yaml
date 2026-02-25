@@ -1,0 +1,16 @@
+# Pre-commit hooks (used by `prek`).
+#
+# Install:
+#   uv run prek install
+#
+# Run on all files:
+#   uv run prek run --all-files
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.4
+    hooks:
+      # Format first so lint runs on formatted output.
+      - id: ruff-format
+      - id: ruff
+        args: [--fix]

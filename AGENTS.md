@@ -104,6 +104,10 @@ Upon commit (especially when changing code under `src/`):
 - run format: `uv run ruff format .`
 - run tests: `uv run pytest` (per Testing conventions)
 
+Optional (recommended): install and use git hooks via `prek`:
+- install hooks: `uv run prek install`
+- run hooks manually: `uv run prek run --all-files`
+
 ## Documentation conventions
 
 - When preparing a commit that changes **behavior, APIs, configuration schemas, or examples**, update the relevant documentation in the same PR/commit series.

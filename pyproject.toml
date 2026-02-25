@@ -31,6 +31,7 @@ dev = [
     "chex>=0.1.90",
     "matplotlib>=3.10.1",
     "numpydoc>=1.7.0",
+    "prek>=0.3.3",
     "pytest>=8.3.4",
     "ruff>=0.9.4",
     "ty>=0.0.1",
