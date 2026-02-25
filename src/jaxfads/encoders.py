@@ -3,8 +3,8 @@ Neural encoders for variational inference in XFADS.
 
 This module implements neural network encoders that convert observations and
 temporal information into natural parameter updates for variational inference
-in XFADS. The encoders learn to map raw observations to structured updates for
-the posterior distributions over latent states.
+in XFADS. The encoders learn to map raw observations to natural parameter
+updates for the posterior distributions over latent states.
 """
 
 import math
