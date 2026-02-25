@@ -12,8 +12,10 @@ the OU drift.
 from __future__ import annotations
 
 from jax import Array
+from jax import numpy as jnp
 
 from ..base import Dynamics
+from ..constraints import constrain_positive, unconstrain_positive
 
 
 class OUDynamics(Dynamics):
@@ -37,14 +39,20 @@ class OUDynamics(Dynamics):
     Controls/covariates `u` and `c` are ignored.
     """
 
-    theta: float
+    theta_free: Array
     dt: float
 
     def __init__(self, conf, key: Array):
         del key
         self.conf = conf
-        self.theta = float(conf.theta)
+        theta0 = jnp.asarray(conf.theta)
+        self.theta_free = unconstrain_positive(theta0)
         self.dt = float(conf.dt)
+
+    @property
+    def theta(self) -> Array:
+        """Constrained (positive) mean-reversion rate."""
+        return constrain_positive(self.theta_free)
 
     def rhs(self, z: Array) -> Array:
         """Continuous-time drift: -theta * z."""

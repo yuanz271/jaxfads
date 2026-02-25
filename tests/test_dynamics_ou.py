@@ -30,7 +30,7 @@ def test_ou_dynamics_registry_and_forward():
     z = jr.normal(jr.key(1), (state_dim,))
     out = dyn.forward(z, jnp.zeros((0,)), jnp.zeros((0,)))
 
-    expected = (1.0 - theta * dt) * z
+    expected = (1.0 - dyn.theta * dt) * z
     chex.assert_trees_all_close(out, expected, atol=1e-6)
     chex.assert_shape(out, (state_dim,))
     chex.assert_tree_all_finite(out)

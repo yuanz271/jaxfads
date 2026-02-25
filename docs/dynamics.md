@@ -99,7 +99,7 @@ approx_kwargs: {structure: full}
 # Model-owned process noise
 # (scale this with dt if you want an SDE-consistent interpretation)
 dyn_conf:
-  theta: 2.0
+  theta: 2.0  # trainable (constrained to be positive)
   dt: 0.04
   state_noise: 1.0
   input_dim: 0
