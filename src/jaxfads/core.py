@@ -37,9 +37,7 @@ def expected_predictive_moment(
     where ``μ_θ`` is the moment parameter of ``p(z_t | f(z_{t-1}), θ)``.
 
     Averaging is performed in moment-parameter space (expected sufficient
-    statistics, i.e. the output of ``approx.predictive_moment``), then converted
-    to the compact moment representation used elsewhere via
-    ``approx.from_sufficient_stats``.
+    statistics, i.e. the output of ``approx.predictive_moment``).
 
     Parameters
     ----------
@@ -63,8 +61,7 @@ def expected_predictive_moment(
     Returns
     -------
     Array
-        Predicted moment parameters (in the compact representation used by the
-        rest of the codebase).
+        Expected predictive moment parameters (i.e. averaged ``E[T(z_t)|z_{t-1}]``).
 
     Notes
     -----
@@ -73,7 +70,7 @@ def expected_predictive_moment(
     ``f`` (e.g. dropout) fixed within the expectation.
 
     Non-finite handling:
-    After computing per-sample expanded statistics, any sample containing
+    After computing per-sample predictive moment, any sample containing
     NaN or Inf values is masked out before averaging.
     If every sample is non-finite the result will itself be non-finite.
     """
@@ -85,7 +82,7 @@ def expected_predictive_moment(
     # Dynamics outputs for each MC sample
     zs = jax.vmap(partial(f, key=key), in_axes=(0, 0, 0))(z, u_bc, c_bc)
 
-    # Per-sample expanded sufficient statistics
+    # Per-sample expanded predictive moment
     expanded = jax.vmap(partial(approx.predictive_moment, noise=noise))(zs)
 
     # Non-finite safe averaging
@@ -98,8 +95,7 @@ def expected_predictive_moment(
         jnp.full(expanded.shape[-1:], jnp.nan),
     )
 
-    # Convert averaged sufficient-stat moments to the compact moment representation
-    return approx.from_sufficient_stats(avg)
+    return avg
 
 
 class Mode(StrEnum):

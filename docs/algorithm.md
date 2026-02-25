@@ -72,8 +72,7 @@ In code this is implemented by `core.expected_predictive_moment`:
 - sample `z_{t-1}^s ~ π(z_{t-1})`
 - compute dynamics mean `f(z_{t-1}^s)`
 - compute conditional moments via `approx.predictive_moment(f(z_{t-1}^s), noise)`
-- average across samples and map into the compact moment representation via
-  `approx.from_sufficient_stats`
+- average across samples
 ```
 
 This gives predictive mean `m̄_t = (1/S) Σ m_θ(z^s)` and covariance
@@ -202,8 +201,8 @@ while not converged:
 | Approximate ELBO (Eq 17) | `elbo()` in `vi.py` | `E[log p(y\|z)] - β·KL(π \|\| π̄)` |
 | KL(π ∥ π̄) | `approx.kl()` on `MVN` | Via TFP `MultivariateNormalFullCovariance` |
 | Exp-family natural params | `Approx.moment_to_natural()` | Flat array; layout defined by MVN |
-| Exp-family mean params | `Approx.natural_to_moment()` | Flat array `[loc, cov_diag, cov_factor]` |
-| Low-rank `Σ = diag(d) + UUᵀ` | `MVN(dim, rank)` | Rank 0 = diagonal; rank > 0 = low-rank |
+| Exp-family moment params | `Approx.natural_to_moment()` | Flat array `[E[z], E[-½ zzᵀ]_flat]` |
+| MVN implementation | `MVN(dim)` | Full covariance (no low-rank) |
 | Causal inference (Eq 29) | Not yet implemented | `Mode.BIFILTER` exists but raises `NotImplementedError` |
 | Efficient structured ops (App B.5) | Not implemented | Current impl materializes full covariance |
 

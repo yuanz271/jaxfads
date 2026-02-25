@@ -33,13 +33,8 @@ Plugin distributions in external packages register on user import.
 Terminology note:
 - **Moment parameters** (`μ`) mean the expected sufficient statistics
   `E[T(z)]` of the exponential family.
-- In code, moment parameters may be stored in an equivalent *compact*
-  parameterization (e.g. for MVN as `[loc, cov]` encoded as diagonal + low-rank
-  factor), because it is more convenient for sampling and KL.
-- `predictive_moment(z, noise)` returns conditional moments in the
-  sufficient-statistic layout `E[T(z_t) | z_{t-1}]`.
-- `from_sufficient_stats(stats)` converts those sufficient-statistic moments
-  into the compact moment representation used elsewhere in the code.
+- `predictive_moment(z, noise)` returns conditional moments
+  `E[T(z_t) | z_{t-1}]`.
 - For the transition model:
   - **predictive moments** (Eq 4): `μ_θ(z_{t-1}) = E_{p(z_t|z_{t-1})}[T(z_t)]`
   - **expected predictive moments** (Eq 12): `E_{π(z_{t-1})}[μ_θ(z_{t-1})]`.
@@ -50,10 +45,10 @@ Every exponential-family distribution has four representations:
 
 | Form | Type | Reason | Example (MVN) |
 |------|------|--------|---------------|
-| **Free-form** | pytree | SGD via optax (handles pytrees natively) | `MVNParam(loc, diag_free, factor)` |
-| **Canon** | pytree | Human-readable, constraints satisfied | `MVNParam(loc, cov_diag, cov_factor)` with `cov_diag > 0` |
-| **Natural** (η) | flat array | Additive updates in filtering: `η_f = η_p + α` | `[η₁, η₂]` with `η₂` negative definite |
-| **Moment** (μ) | flat array | Natural↔moment conversions, sampling, KL | `[loc, cov_diag, cov_factor]` packed flat |
+| **Free-form** | pytree | SGD via optax (handles pytrees natively) | `MVNParam(loc, chol_free)` |
+| **Canon** | pytree | Human-readable, constraints satisfied | `MVNParam(loc, chol)` with `diag(chol) > 0` |
+| **Natural** (η) | flat array | Additive updates in filtering: `η_f = η_p + α` | `[h, J_flat]` (precision-like block) |
+| **Moment** (μ) | flat array | Natural↔moment conversions, sampling, KL | `[E[z], E[-½ zzᵀ]_flat]` |
 
 **Why natural and moment must be flat:**
 - Natural: additive updates `η_p + α_t` require element-wise addition
@@ -108,14 +103,13 @@ Quick reference (public API):
 | `free_from_kw(**kw)` | `kw → free` | Create free-form parameters from a serializable spec. |
 | `free_to_canon(free)` | `free → canon` | Apply constraints (e.g. softplus). |
 | `canon_to_free(canon)` | `canon → free` | Inverse constraints. |
-| `canon_to_moment(canon)` | `canon → moment` | Convert canon pytree to a flat compact moment vector. |
-| `moment_to_canon(moment)` | `moment → canon` | Convert a flat compact moment vector to canon pytree. |
-| `natural_to_moment(natural)` | `natural → moment` | Natural → compact moment conversion. |
-| `moment_to_natural(moment)` | `moment → natural` | Compact moment → natural conversion. |
-| `sample_by_moment(key, moment, n)` | `moment → samples` | Sampling uses the compact moment representation. |
-| `kl(moment1, moment2)` | `moment × moment → scalar` | KL in the compact moment representation. |
-| `predictive_moment(z, noise)` | `(z, noise) → stats` | Conditional moments in sufficient-statistic layout `E[T(z_t) | z_{t-1}]`. |
-| `from_sufficient_stats(stats)` | `stats → moment` | Convert sufficient-statistic moments to the compact moment representation. |
+| `canon_to_moment(canon)` | `canon → moment` | Canon → moment conversion. |
+| `moment_to_canon(moment)` | `moment → canon` | Moment → canon conversion. |
+| `natural_to_moment(natural)` | `natural → moment` | Natural → moment conversion. |
+| `moment_to_natural(moment)` | `moment → natural` | Moment → natural conversion. |
+| `sample_by_moment(key, moment, n)` | `moment → samples` | Sampling from the distribution parameterized by `moment`. |
+| `kl(moment1, moment2)` | `moment × moment → scalar` | KL between two distributions. |
+| `predictive_moment(z, noise)` | `(z, noise) → moment` | Conditional moment parameters `E[T(z_t) | z_{t-1}]`. |
 
 ### Initialization
 
@@ -151,8 +145,7 @@ Quick reference (public API):
 |--------|-----------|------|
 | `sample_by_moment` | `(key, μ, n) → z` | Draw `n` samples from the distribution |
 | `kl` | `(μ₁, μ₂) → scalar` | KL divergence `KL(p₁ ‖ p₂)` |
-| `predictive_moment` | `(z, noise) → stats_flat` | Conditional moment parameters `E[T(z_t) | z_{t-1}]` |
-| `from_sufficient_stats` | `(stats_flat) → μ_flat` | Convert sufficient-stat moments to compact moment representation |
+| `predictive_moment` | `(z, noise) → μ_flat` | Conditional moment parameters `E[T(z_t) | z_{t-1}]` |
 
 ### Usage in XFADS
 
@@ -188,9 +181,8 @@ alpha = _free_to_natural(encoder(y))
   `jnp.array([])` if unused). It returns **moment parameters** (expected
   sufficient statistics) `E[T(z_t) | z_{t-1}]` in a flat vector form.
 - Monte Carlo averaging across samples of `z_{t-1}` is handled outside the
-  distribution (in `core.expected_predictive_moment`) via `jax.vmap` + `jnp.mean`,
-  followed by `approx.from_sufficient_stats(...)` to map averaged sufficient
-  statistics into the compact moment representation used elsewhere.
+  distribution (in `core.expected_predictive_moment`) via `jax.vmap` +
+  `jnp.mean`.
 - Encoder outputs remain flat arrays (natural parameter updates for additive
   filtering). They pass through `moment_to_canon` → `free_to_canon` →
   `canon_to_moment` → `moment_to_natural` to convert from unconstrained flat to
@@ -198,96 +190,54 @@ alpha = _free_to_natural(encoder(y))
 
 ## MVN Subclass
 
-`MVN(dim, rank)` implements the multivariate normal with covariance
-structure `Σ = diag(d) + U Uᵀ`.
+`MVN(dim)` implements a full-covariance multivariate normal.
 
 ### MVNParam NamedTuple
 
 ```python
 class MVNParam(NamedTuple):
-    loc: Array        # (D,)
-    cov_diag: Array   # (D,)
-    cov_factor: Array # (D, r)
+    loc: Array   # (D,)
+    chol: Array  # (D, D) lower-triangular Cholesky factor
 ```
 
-Both canon and free-form use `MVNParam`.  The difference:
-- **Canon**: `cov_diag > 0` (constrained)
-- **Free-form**: `cov_diag ∈ ℝ` (unconstrained, softplus maps to positive)
+Both canon and free-form use `MVNParam`. The difference:
+- **Canon**: `chol` has positive diagonal entries.
+- **Free-form**: `chol` has unconstrained diagonal entries.
 
-### Flat Layouts
+### Flat layouts
 
-**Mean** (flat array): `[loc(D), cov_diag(D), cov_factor_flat(D×r)]` → total `D(2+r)`
+**Moment** (flat array): moment parameters `μ = E[T(z)]` with
+`T(z) = [z, -½ zzᵀ]`:
 
-**Natural** (flat array):
-- rank 0: `[η₁(D), η₂(D)]` → total `2D`
-- rank > 0: `[η₁(D), η₂_flat(D²)]` → total `D + D²`
+- `[E[z] (D), E[-½ zzᵀ] (D×D) flattened]` → total `D + D²`.
 
-### Sufficient statistics for the Gaussian transition
+**Natural** (flat array): natural parameters `[h, J_flat]` where `J` is the
+precision matrix:
 
-In XFADS the MVN transition is used in the form:
+- `[h (D), J (D×D) flattened]` → total `D + D²`.
+
+### Gaussian transition sufficient statistics
+
+For the transition:
 
 ```
 z_t | z_{t-1}=z  ~  N( f(z), Q )
 ```
 
-For a multivariate normal (an exponential family in `z_t`), a common
-canonical choice of sufficient statistics (matching the XFADS paper) is:
-
-- `T₁(z_t) = z_t`
-- `T₂(z_t) = -½ z_t z_tᵀ`
-
-Hence the conditional expected sufficient statistics given `z_{t-1}=z` are:
+With `T(z_t) = [z_t, -½ z_t z_tᵀ]`, the conditional moment parameters are:
 
 - `E[T₁(z_t) | z] = μ = f(z)`
 - `E[T₂(z_t) | z] = -½ (Q + μ μᵀ)`
 
-Implementation note:
+`MVN.predictive_moment(z, noise)` returns exactly these conditional moment
+parameters in the flat moment layout.
 
-- The XFADS paper defines `T₂(z) = -½ zzᵀ`, so the second natural-parameter
-  block is precision-like (positive definite) and pseudo-observation updates
-  add PSD terms.
-- The current JAXFADS `MVN` implementation uses an equivalent convention where
-  the second natural-parameter block is *negative definite*.
-
-`MVN.predictive_moment(z, noise)` returns these moment parameters in a flat layout:
-
-- rank 0 (diagonal `Q`): `[μ, -½(μ² + diag(Q))]`
-- rank > 0 (full `Q`): `[μ, vec(-½(Q + μ μᵀ))]`
-
-After averaging these vectors across Monte Carlo samples of `z_{t-1}`,
-`MVN.from_sufficient_stats(stats)` recovers the second moment and converts it
-to a covariance via:
-
-`E[z_t z_tᵀ] = -2 · E[-½ z_t z_tᵀ]`,
-
-`Σ = E[z_t z_tᵀ] - E[z_t] E[z_t]ᵀ`,
-
-
-and then re-encodes `Σ` into the compact moment representation
-`[loc, cov_diag, cov_factor]`.
-
-### Additional Methods (not on ABC)
+### Additional methods (MVN-specific)
 
 | Method | Role |
 |--------|------|
-| `canon_to_natural(MVNParam) → η_flat` | Convenience: compose `moment_to_natural(canon_to_moment(...))` |
-| `unpack(μ_flat) → (loc, cov)` | Extract `(loc, cov_diag_or_full)` from flat moment vector |
-| `pack(loc, cov) → μ_flat` | Inverse of `unpack` (lossy for rank > 0 via `_decompose_cov`) |
-| `full_cov(cov) → (D, D)` | Materialize full covariance matrix |
-| `mean_size(dim) → int` | Mean parameter vector size (testing/debug convenience) |
-
-### Implementation Details
-
-- rank 0 uses element-wise vector operations (`O(D)`) for efficiency.
-- rank > 0 uses matrix operations (`O(D³)`) via `jnp.linalg.solve`.
-- Both paths are JIT-compatible: branching is on `self._rank` (a plain
-  Python int), so only one path is traced.
-- KL divergence uses `tfd.MultivariateNormalFullCovariance` as backend
-  because `tfd.MultivariateNormalDiagPlusLowRankCovariance` does not
-  register a KL kernel in TFP.
-- `_decompose_cov` is lossy for rank > 0: it zeros the diagonal before
-  eigendecomposition, so the off-diagonal reconstruction is a best
-  rank-r approximation.  The diagonal is preserved exactly.
+| `pack(mean, cov) → moment` | Convert `(E[z], Cov(z))` into moment parameters `E[T(z)]`. |
+| `unpack(moment) → (mean, cov)` | Extract `(E[z], Cov(z))` from moment parameters. |
 
 ## Observation Likelihoods vs Latent Approximations
 

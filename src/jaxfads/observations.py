@@ -23,17 +23,11 @@ from .nn import StationaryLinear, VariantBiasLinear
 _MAX_LOGRATE = 7.0
 
 
-def _quadratic_diag(C: Array, cov_z: Array, approx: Approx) -> Array:
-    """Compute diag(C @ Σ_z @ C.T) without materialising (D_obs, D_obs).
-
-    When *cov_z* is a 1-D diagonal vector (rank-0 / diagonal MVN) this
-    is O(D_obs · D_z) via ``(C² @ v)``.  Otherwise it falls back to
-    the full matrix product.
-    """
+def _quadratic_diag(C: Array, cov_z: Array) -> Array:
+    """Compute diag(C @ Σ_z @ C.T) without materialising (D_obs, D_obs)."""
     if cov_z.ndim == 1:
-        return (C ** 2) @ cov_z
-    V = approx.full_cov(cov_z)
-    return jnp.sum((C @ V) * C, axis=-1)
+        return (C**2) @ cov_z
+    return jnp.sum((C @ cov_z) * C, axis=-1)
 
 
 # ---------------------------------------------------------------------------
@@ -554,7 +548,7 @@ class Poisson(eqx.Module, strict=True):
         mean_z, cov_z = approx.unpack(mean)
         eta = readout(t, mean_z)
         C = readout.weight
-        cvc = _quadratic_diag(C, cov_z, approx)
+        cvc = _quadratic_diag(C, cov_z)
         loglam = eta + 0.5 * cvc
         # loglam = jnp.where(loglam < _MAX_LOGRATE, loglam, jnp.log(loglam))
         loglam = jnp.minimum(loglam, _MAX_LOGRATE)
@@ -684,7 +678,7 @@ class Gaussian(eqx.Module, strict=True):
         mean_z, cov_z = approx.unpack(mean)
         mean_y = readout(t, mean_z)
         C = readout.weight  # left matrix
-        cov_y = C @ approx.full_cov(cov_z) @ C.T + jnp.diag(self.cov())
+        cov_y = C @ cov_z @ C.T + jnp.diag(self.cov())
         ll = tfp.MultivariateNormalFullCovariance(mean_y, cov_y).log_prob(y)
         return ll
 

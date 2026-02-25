@@ -7,8 +7,7 @@ from jaxfads.distributions import MVN
 from jaxfads.observations import GLM, register_readout_init
 
 _STATE_DIM = 2
-_diag = MVN(dim=_STATE_DIM, rank=0)
-_full = MVN(dim=_STATE_DIM, rank=_STATE_DIM)
+_mvn = MVN(dim=_STATE_DIM)
 
 
 def _poisson_conf(state_dim: int, observation_dim: int, *, n_steps: int = 0):
@@ -52,30 +51,15 @@ def test_poisson_eloglik_shape_and_finite():
     observation = _make_observation(conf, key, likelihood="Poisson")
 
     mean = jnp.zeros(state_dim)
-    cov = jnp.ones(state_dim)
-    mp = _diag.pack(mean, cov)
+    cov = jnp.diag(jnp.ones(state_dim))
+    mp = _mvn.pack(mean, cov)
     y = jnp.ones((observation_dim,))
 
-    ll = observation.eloglik(key, jnp.array(0), mp, y, _diag, mc_size=1)
+    ll = observation.eloglik(key, jnp.array(0), mp, y, _mvn, mc_size=1)
     chex.assert_shape(ll, ())
     chex.assert_tree_all_finite(ll)
 
 
-def test_poisson_eloglik_full_mvn():
-    key = jrnd.key(10)
-    state_dim = 2
-    observation_dim = 3
-    conf = _poisson_conf(state_dim, observation_dim)
-    observation = _make_observation(conf, key, likelihood="Poisson")
-
-    mean = jnp.zeros(state_dim)
-    cov = jnp.eye(state_dim)
-    mp = _full.pack(mean, cov)
-    y = jnp.ones((observation_dim,))
-
-    ll = observation.eloglik(key, jnp.array(0), mp, y, _full, mc_size=1)
-    chex.assert_shape(ll, ())
-    chex.assert_tree_all_finite(ll)
 
 
 def test_diag_gaussian_eloglik_shape_and_finite():
@@ -86,11 +70,11 @@ def test_diag_gaussian_eloglik_shape_and_finite():
     observation = _make_observation(conf, key, likelihood="Gaussian")
 
     mean = jnp.zeros(state_dim)
-    cov = jnp.ones(state_dim)
-    mp = _diag.pack(mean, cov)
+    cov = jnp.diag(jnp.ones(state_dim))
+    mp = _mvn.pack(mean, cov)
     y = jnp.zeros((observation_dim,))
 
-    ll = observation.eloglik(key, jnp.array(0), mp, y, _diag, mc_size=1)
+    ll = observation.eloglik(key, jnp.array(0), mp, y, _mvn, mc_size=1)
     chex.assert_shape(ll, ())
     chex.assert_tree_all_finite(ll)
 

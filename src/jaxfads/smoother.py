@@ -48,7 +48,7 @@ class XFADS(ConfModule):
         - observation_dim: Dimensionality of observations
         - mc_size: Number of Monte Carlo samples
         - approx: Exponential family approximation name (e.g. 'MVN')
-        - approx_kwargs: Keyword arguments for approx instantiation (e.g. rank)
+        - approx_kwargs: Keyword arguments for approx instantiation
         - forward: Forward dynamics model type
         - obs_conf: Observation model config
         - mode: Inference mode ('pseudo', 'bifilter' not tested)
@@ -90,7 +90,7 @@ class XFADS(ConfModule):
     ...     'observation_dim': 50,
     ...     'mc_size': 100,
     ...     'approx': 'MVN',
-    ...     'approx_kwargs': {'rank': 0},
+    ...     'approx_kwargs': {},
     ...     'forward': 'Linear',
     ...     'obs_conf': {
     ...         'model': 'GLM',

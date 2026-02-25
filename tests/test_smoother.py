@@ -47,7 +47,7 @@ def test_constructor():
             state_dim=z_size,
             forward="Mock",
             approx="MVN",
-            approx_kwargs={"rank": 0},
+            approx_kwargs={},
             mc_size=mc_size,
             seed=seed,
             n_steps=T,
@@ -75,7 +75,7 @@ def test_constructor():
                     observation_dim=y_size,
                     state_dim=z_size,
                     approx="MVN",
-                    approx_kwargs={"rank": 0},
+                    approx_kwargs={},
                 )
             ),
             obs_conf=OmegaConf.create(

@@ -16,14 +16,14 @@ def spec():
         width=32,
         depth=2,
         approx="MVN",
-        approx_kwargs={"rank": 0},
+        approx_kwargs={}, 
     )
 
 
 @pytest.fixture
 def diag():
-    """Diagonal MVN instance (rank=0)."""
-    return MVN(dim=_STATE_DIM, rank=0)
+    """MVN instance."""
+    return MVN(dim=_STATE_DIM)
 
 
 def make_approx(dim: int, approx_name: str = "MVN", **kwargs) -> Approx:

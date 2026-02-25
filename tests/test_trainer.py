@@ -73,7 +73,7 @@ def model_conf():
             "state_dim": 2,
             "forward": "MockDynamics",
             "approx": "MVN",
-            "approx_kwargs": {"rank": 0},
+            "approx_kwargs": {},
             "mc_size": 1,
             "seed": 0,
             "n_steps": 10,
@@ -99,7 +99,7 @@ def model_conf():
                     "observation_dim": 10,
                     "state_dim": 2,
                     "approx": "MVN",
-                    "approx_kwargs": {"rank": 0},
+                    "approx_kwargs": {},
                 }
             ),
             "obs_conf": OmegaConf.create(

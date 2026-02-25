@@ -49,8 +49,8 @@ def _make_nonlinear(spec, key):
     )
 
 
-def test_predict_mean(diag, spec):
-    """predictive_moment returns correct shape and recovers (loc, Q)."""
+def test_predictive_moment(diag, spec):
+    """predictive_moment returns the conditional exp-family moment."""
     key = jrnd.key(0)
     state_dim = spec["state_dim"]
     f = _make_nonlinear(spec, key)
@@ -58,16 +58,14 @@ def test_predict_mean(diag, spec):
 
     z = jrnd.normal(key, (state_dim,))
     u = jrnd.normal(key, (spec["input_dim"],))
-    loc = f(z, u, jnp.zeros((0,)))
+    mu = f(z, u, jnp.zeros((0,)))
 
-    # Single loc: predictive_moment → from_sufficient_stats recovers (loc, Q_diag)
-    expanded = diag.predictive_moment(loc, noise)
-    mp = diag.from_sufficient_stats(expanded)
-    chex.assert_shape(mp, (diag.mean_size(state_dim),))
-    chex.assert_tree_all_finite(mp)
+    stats = diag.predictive_moment(mu, noise)
+    chex.assert_shape(stats, (state_dim + state_dim * state_dim,))
+    chex.assert_tree_all_finite(stats)
 
-    mean, cov = diag.unpack(mp)
-    chex.assert_trees_all_close(mean, loc, atol=1e-6)
+    mean, cov = diag.unpack(stats)
+    chex.assert_trees_all_close(mean, mu, atol=1e-6)
     _, Q = diag.unpack(noise)
     chex.assert_trees_all_close(cov, Q, atol=1e-5)
 
@@ -79,12 +77,12 @@ def test_expected_predictive_moment(diag, spec):
     noise = make_noise(diag, state_dim)
 
     mp = diag.pack(
-        jrnd.normal(key, (state_dim,)), jnp.ones(state_dim)
+        jrnd.normal(key, (state_dim,)), jnp.eye(state_dim)
     )
     u = jrnd.normal(key, (spec["input_dim"],))
 
     result = expected_predictive_moment(key, mp, u, jnp.zeros((0,)), f, noise, diag, 10)
-    chex.assert_shape(result, (diag.mean_size(state_dim),))
+    chex.assert_shape(result, (state_dim + state_dim * state_dim,))
     chex.assert_tree_all_finite(result)
 
 
@@ -106,10 +104,10 @@ def test_expected_predictive_moment_partial_invalid():
     state_dim, mc_size = 4, 64
     key = jrnd.key(42)
     from jaxfads.distributions import MVN
-    diag4 = MVN(dim=state_dim, rank=0)
+    diag4 = MVN(dim=state_dim)
     noise = make_noise(diag4, state_dim)
 
-    mp = diag4.pack(jnp.zeros(state_dim), jnp.full(state_dim, 25.0))
+    mp = diag4.pack(jnp.zeros(state_dim), 25.0 * jnp.eye(state_dim))
     f = fpartial(_threshold_dynamics, radius=3.0)
 
     result = jax.jit(
@@ -119,7 +117,7 @@ def test_expected_predictive_moment_partial_invalid():
     )(key)
 
     assert jnp.all(jnp.isfinite(result))
-    chex.assert_shape(result, (diag4.mean_size(state_dim),))
+    chex.assert_shape(result, (state_dim + state_dim * state_dim,))
 
 
 def test_expected_predictive_moment_all_invalid(diag):
@@ -128,7 +126,7 @@ def test_expected_predictive_moment_all_invalid(diag):
     key = jrnd.key(99)
     noise = make_noise(diag, state_dim)
 
-    mp = diag.pack(jnp.zeros(state_dim), jnp.full(state_dim, 1.0))
+    mp = diag.pack(jnp.zeros(state_dim), jnp.eye(state_dim))
     u, c = jnp.zeros(0), jnp.zeros(0)
     f = fpartial(_threshold_dynamics, radius=0.001)
 
@@ -136,5 +134,5 @@ def test_expected_predictive_moment_all_invalid(diag):
         lambda k: expected_predictive_moment(k, mp, u, c, f, noise, diag, mc_size)
     )(key)
 
-    chex.assert_shape(result, (diag.mean_size(state_dim),))
+    chex.assert_shape(result, (state_dim + state_dim * state_dim,))
     assert not jnp.all(jnp.isfinite(result))
