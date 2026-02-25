@@ -1,3 +1,4 @@
+import jax
 import pytest
 from jax import numpy as jnp
 from jax import random as jrnd
@@ -273,43 +274,38 @@ def test_sample_shape_and_statistics(dim, rank):
 
 
 # ---------------------------------------------------------------------------
-# predict_mean
+# predict_mean / from_sufficient_stats
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("dim, rank", _ALL_RANKS)
 def test_predict_mean_single_loc(dim, rank):
-    """Single loc recovers (loc, noise_cov)."""
+    """Single loc → contract recovers (loc, noise_cov)."""
     mvn = MVN(dim=dim, rank=rank)
     scale = 1.5
-    noise_mean = mvn.structured_to_mean(mvn.to_structured(mvn.param_from_conf(scale=scale)))
-    loc = jrnd.normal(jrnd.key(0), (dim,))
+    noise = mvn.structured_to_mean(mvn.to_structured(mvn.param_from_conf(scale=scale)))
+    z = jrnd.normal(jrnd.key(0), (dim,))
 
-    mp = mvn.predict_mean(loc[None, :], noise_mean)
+    expanded = mvn.predict_mean(z, noise)
+    mp = mvn.from_sufficient_stats(expanded)
     recovered_loc, recovered_cov = mvn.unpack(mp)
-    chex.assert_trees_all_close(recovered_loc, loc, atol=1e-5)
+    chex.assert_trees_all_close(recovered_loc, z, atol=1e-5)
     chex.assert_trees_all_close(mvn.full_cov(recovered_cov), jnp.eye(dim) * scale, atol=1e-4)
 
 
 @pytest.mark.parametrize("dim, rank", _ALL_RANKS)
-def test_predict_mean_captures_variance(dim, rank):
-    """Spread locs produce larger covariance than noise alone."""
+def test_predict_mean_average_captures_variance(dim, rank):
+    """Averaged expanded stats produce larger covariance than noise alone."""
     mvn = MVN(dim=dim, rank=rank)
     scale = 0.1
-    noise_mean = mvn.structured_to_mean(mvn.to_structured(mvn.param_from_conf(scale=scale)))
-    locs = jrnd.normal(jrnd.key(42), (200, dim)) * 3.0
+    noise = mvn.structured_to_mean(mvn.to_structured(mvn.param_from_conf(scale=scale)))
+    zs = jrnd.normal(jrnd.key(42), (200, dim)) * 3.0
 
-    _, cov = mvn.unpack(mvn.predict_mean(locs, noise_mean))
+    expanded = jax.vmap(lambda z: mvn.predict_mean(z, noise))(zs)
+    avg = jnp.mean(expanded, axis=0)
+    mp = mvn.from_sufficient_stats(avg)
+    _, cov = mvn.unpack(mp)
     assert jnp.all(jnp.diag(mvn.full_cov(cov)) > scale)
-
-
-@pytest.mark.parametrize("dim, rank", _ALL_RANKS)
-def test_predict_mean_all_nan(dim, rank):
-    """All-NaN locs → NaN output."""
-    mvn = MVN(dim=dim, rank=rank)
-    noise_mean = mvn.structured_to_mean(mvn.to_structured(mvn.param_from_conf(scale=1.0)))
-    mp = mvn.predict_mean(jnp.full((5, dim), jnp.nan), noise_mean)
-    assert not jnp.any(jnp.isfinite(mp))
 
 
 # ---------------------------------------------------------------------------

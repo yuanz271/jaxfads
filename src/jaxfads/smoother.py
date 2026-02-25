@@ -298,10 +298,10 @@ class XFADS(ConfModule):
         Array
             Canonical dispersion (e.g., covariance for Gaussian).
         """
-        noise_mean = self.approx.structured_to_mean(
+        noise = self.approx.structured_to_mean(
             self.approx.to_structured(self.noise_free)
         )
-        _, disp = self.approx.unpack(noise_mean)
+        _, disp = self.approx.unpack(noise)
         return disp
 
     def noise_loss(self) -> Array:

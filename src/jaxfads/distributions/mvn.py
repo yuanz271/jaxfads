@@ -9,7 +9,6 @@ subsuming diagonal and low-rank cases.
 
 from typing import NamedTuple
 
-import jax
 from jax import Array
 from jax import numpy as jnp
 from jax import random as jrnd
@@ -390,40 +389,33 @@ class MVN(Approx):
 
     # -- predict_mean --------------------------------------------------------
 
-    def predict_mean(self, locs: Array, noise_mean: Array) -> Array:
+    def predict_mean(self, z: Array, noise: Array | None = None) -> Array:
         """See base class.
 
-        Computes per-sample expanded mean parameters ``E[T(z)]``,
-        averages in expanded space (where linearity holds), then
-        converts back to the structured mean format.
+        Returns expanded sufficient statistics ``E[T(z)]`` for a single
+        state realization plus additive Gaussian noise:
 
-        Expanded mean parameter layout:
+        * rank 0: ``[z, z² + Q_diag]``
+        * rank > 0: ``[z, vec(z zᵀ + Σ_Q)]``
 
-        * rank 0: ``[loc, loc² + Q_diag]`` (2D per sample)
-        * rank > 0: ``[loc, (loc locᵀ + Σ)_flat]`` (D + D² per sample)
+        These are linear in the state, so safe to average across MC
+        samples before converting back via :meth:`from_sufficient_stats`.
         """
         if self._rank == 0:
-            _, cov_diag = jnp.split(noise_mean, 2)
-            expanded = jnp.concatenate(
-                (locs, locs ** 2 + cov_diag), axis=-1
-            )
-        else:
-            _, cov = self.unpack(noise_mean)
-            outers = jax.vmap(lambda x: jnp.outer(x, x))(locs)
-            seconds = (outers + cov).reshape(locs.shape[0], -1)
-            expanded = jnp.concatenate((locs, seconds), axis=-1)
+            _, noise_diag = jnp.split(noise, 2)
+            return jnp.concatenate((z, z ** 2 + noise_diag))
 
-        # Non-finite safe averaging; return NaN when all samples are invalid
-        valid = jnp.all(jnp.isfinite(expanded), axis=-1)  # (N,)
-        safe = jnp.where(valid[:, None], expanded, 0.0)
-        n_valid = jnp.sum(valid)
-        avg = jnp.where(
-            n_valid > 0,
-            jnp.sum(safe, axis=0) / n_valid,
-            jnp.full(expanded.shape[-1:], jnp.nan),
-        )
+        _, noise_cov = self.unpack(noise)
+        second = (jnp.outer(z, z) + noise_cov).ravel()
+        return jnp.concatenate((z, second))
 
-        return self._expanded_to_mean(avg)
+    def from_sufficient_stats(self, stats: Array) -> Array:
+        """See base class.
+
+        Converts ``[μ, E[zzᵀ]]`` to storage mean ``[μ, Σ_diag, Σ_factor]``
+        by subtracting ``μμᵀ`` from the second-moment block.
+        """
+        return self._expanded_to_mean(stats)
 
     def _expanded_to_mean(self, expanded: Array) -> Array:
         """Convert averaged expanded mean parameter to structured mean.

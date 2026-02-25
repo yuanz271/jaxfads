@@ -25,9 +25,9 @@ class Approx(SubclassRegistryMixin, ABC):
     used in variational inference, providing conversions between natural
     and mean parameterizations, sampling methods, and other utilities.
 
-    Concrete subclasses are instantiated with family-specific parameters
-    (e.g., ``MVN(dim=3, rank=0)``).  All methods are instance methods so
-    that the distribution configuration is carried by the instance.
+    Implementations are instantiated with family-specific parameters.
+    All methods are instance methods so that the distribution
+    configuration is carried by the instance.
     """
 
     @abstractmethod
@@ -151,8 +151,8 @@ class Approx(SubclassRegistryMixin, ABC):
         Returns
         -------
         pytree
-            Valid structured parameters (e.g., ``MVNParam`` with positive
-            covariance components for MVN).
+            Valid structured parameters with constraints satisfied
+            (e.g., positive covariance components).
         """
         ...
 
@@ -221,15 +221,14 @@ class Approx(SubclassRegistryMixin, ABC):
         """
         Create free-form parameters from a serializable spec.
 
-        Each subclass defines which keyword arguments it accepts.
+        Each implementation defines which keyword arguments it accepts.
         The returned pytree is in free-form (unconstrained), suitable
         for storage on ``XFADS`` and optimization by optax.
 
         Parameters
         ----------
         **kwargs
-            Family-specific keyword arguments (e.g. ``scale=1.0``
-            for MVN to create isotropic N(0, scale·I)).
+            Family-specific keyword arguments.
 
         Returns
         -------
@@ -239,33 +238,49 @@ class Approx(SubclassRegistryMixin, ABC):
         ...
 
     @abstractmethod
-    def predict_mean(self, locs: Array, noise_mean: Array) -> Array:
+    def predict_mean(self, z: Array, noise: Array | None = None) -> Array:
         """
-        Predict structured mean from a batch of dynamics locations.
+        Expanded sufficient statistics for a single state realization.
 
-        Computes the expected sufficient statistics ``E[T(z)]`` for each
-        location, averages in the appropriate mean-parameter space, and
-        returns the result in the structured mean format used by the rest
-        of the codebase.
-
-        Samples containing non-finite values are masked out.  If every
-        sample is non-finite the result may itself be non-finite; the
-        caller is responsible for fallback logic.
+        Computes ``E[T(z)]`` for one dynamics output and optional
+        transition noise parameters.  The output lives in the expanded
+        sufficient-statistic space where averaging across MC samples
+        is linear.  Use :meth:`from_sufficient_stats` to convert the average
+        back to standard mean parameters.
 
         Parameters
         ----------
-        locs : Array, shape (N, state_dim)
-            Dynamics output locations for N Monte Carlo samples.
-        noise_mean : Array
-            Noise parameters in the mean parameter format.  May be
-            empty (``jnp.array([])``) for families without a separate
-            dispersion parameter.
+        z : Array, shape (state_dim,)
+            Single state realization (dynamics output).
+        noise : Array or None, optional
+            Additional transition parameters (e.g. dispersion).
+            ``None`` for families without separate dispersion.
 
         Returns
         -------
         Array
-            Structured mean parameter vector of the predictive
-            distribution.
+            Expanded sufficient statistics (flat).
+        """
+        ...
+
+    @abstractmethod
+    def from_sufficient_stats(self, stats: Array) -> Array:
+        """
+        Convert (averaged) sufficient statistics to mean parameters.
+
+        Maps from the true expected sufficient statistics ``E[T(z)]``
+        (as returned by :meth:`predict_mean`) to the storage mean
+        parameter format used by the rest of the codebase.
+
+        Parameters
+        ----------
+        stats : Array
+            Sufficient statistics (expected value of ``T(z)``).
+
+        Returns
+        -------
+        Array
+            Flat mean parameter vector in storage format.
         """
         ...
 

@@ -9,7 +9,7 @@ from omegaconf import OmegaConf
 from jaxfads.base import Dynamics
 from jaxfads.dynamics import sample_expected_mean
 from jaxfads.nn import make_mlp
-from conftest import make_noise_mean
+from conftest import make_noise
 
 
 class Nonlinear(Dynamics):
@@ -54,20 +54,21 @@ def test_predict_mean(diag, spec):
     key = jrnd.key(0)
     state_dim = spec["state_dim"]
     f = _make_nonlinear(spec, key)
-    noise_mom = make_noise_mean(diag, state_dim)
+    noise = make_noise(diag, state_dim)
 
     z = jrnd.normal(key, (state_dim,))
     u = jrnd.normal(key, (spec["input_dim"],))
     loc = f(z, u, jnp.zeros((0,)))
 
-    # Single-sample batch: predict_mean should recover (loc, Q_diag)
-    mp = diag.predict_mean(loc[None, :], noise_mom)
+    # Single loc: predict_mean → from_sufficient_stats recovers (loc, Q_diag)
+    expanded = diag.predict_mean(loc, noise)
+    mp = diag.from_sufficient_stats(expanded)
     chex.assert_shape(mp, (diag.mean_size(state_dim),))
     chex.assert_tree_all_finite(mp)
 
     mean, cov = diag.unpack(mp)
     chex.assert_trees_all_close(mean, loc, atol=1e-6)
-    _, Q = diag.unpack(noise_mom)
+    _, Q = diag.unpack(noise)
     chex.assert_trees_all_close(cov, Q, atol=1e-5)
 
 
@@ -75,14 +76,14 @@ def test_sample_expected_mean(diag, spec):
     key = jrnd.key(0)
     state_dim = spec["state_dim"]
     f = _make_nonlinear(spec, key)
-    noise_mom = make_noise_mean(diag, state_dim)
+    noise = make_noise(diag, state_dim)
 
     mp = diag.pack(
         jrnd.normal(key, (state_dim,)), jnp.ones(state_dim)
     )
     u = jrnd.normal(key, (spec["input_dim"],))
 
-    result = sample_expected_mean(key, mp, u, jnp.zeros((0,)), f, noise_mom, diag, 10)
+    result = sample_expected_mean(key, mp, u, jnp.zeros((0,)), f, noise, diag, 10)
     chex.assert_shape(result, (diag.mean_size(state_dim),))
     chex.assert_tree_all_finite(result)
 
@@ -106,14 +107,14 @@ def test_sample_expected_mean_partial_invalid():
     key = jrnd.key(42)
     from jaxfads.distributions import MVN
     diag4 = MVN(dim=state_dim, rank=0)
-    noise_mom = make_noise_mean(diag4, state_dim)
+    noise = make_noise(diag4, state_dim)
 
     mp = diag4.pack(jnp.zeros(state_dim), jnp.full(state_dim, 25.0))
     f = fpartial(_threshold_dynamics, radius=3.0)
 
     result = jax.jit(
         lambda k: sample_expected_mean(
-            k, mp, jnp.zeros(0), jnp.zeros(0), f, noise_mom, diag4, mc_size
+            k, mp, jnp.zeros(0), jnp.zeros(0), f, noise, diag4, mc_size
         )
     )(key)
 
@@ -125,14 +126,14 @@ def test_sample_expected_mean_all_invalid(diag):
     """When all MC samples produce NaN, the result should be non-finite."""
     state_dim, mc_size = 2, 16
     key = jrnd.key(99)
-    noise_mom = make_noise_mean(diag, state_dim)
+    noise = make_noise(diag, state_dim)
 
     mp = diag.pack(jnp.zeros(state_dim), jnp.full(state_dim, 1.0))
     u, c = jnp.zeros(0), jnp.zeros(0)
     f = fpartial(_threshold_dynamics, radius=0.001)
 
     result = jax.jit(
-        lambda k: sample_expected_mean(k, mp, u, c, f, noise_mom, diag, mc_size)
+        lambda k: sample_expected_mean(k, mp, u, c, f, noise, diag, mc_size)
     )(key)
 
     chex.assert_shape(result, (diag.mean_size(state_dim),))

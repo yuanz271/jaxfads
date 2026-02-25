@@ -26,7 +26,7 @@ def sample_expected_mean(
     u: Array,
     c: Array,
     f: Callable[..., Array],
-    noise_mean: Array,
+    noise: Array | None,
     approx: Approx,
     mc_size: int,
 ) -> Array:
@@ -36,9 +36,9 @@ def sample_expected_mean(
     Implements Eq (12): ``μ̄_t = E_{π(z_{t-1})}[μ_θ(z_{t-1})]``
     where ``μ_θ`` is the mean parameter of ``p(z_t | f(z_{t-1}), θ)``.
 
-    Averaging is performed in mean-parameter space (where it is
-    valid by linearity), then converted back to the structured mean
-    format for downstream use.
+    Averaging is performed in expanded sufficient-statistic space
+    (where it is valid by linearity), then contracted back to the
+    structured mean format for downstream use.
 
     Parameters
     ----------
@@ -52,8 +52,10 @@ def sample_expected_mean(
         Covariate vector.
     f : Callable
         Dynamics function.
-    noise_mean : Array
-        Noise parameters in the mean parameter format.
+    noise : Array or None
+        Additional transition parameters (e.g. covariance for
+        additive Gaussian noise).  ``None`` for families without
+        separate dispersion.
     approx : Approx
         Exponential family approximation instance.
     mc_size : int
@@ -71,8 +73,8 @@ def sample_expected_mean(
     ``f`` (e.g. dropout) fixed within the expectation.
 
     Non-finite handling:
-    After computing per-sample mean parameters, any sample containing
-    NaN or Inf values is masked out inside ``approx.predict_mean``.
+    After computing per-sample expanded statistics, any sample containing
+    NaN or Inf values is masked out before averaging.
     If every sample is non-finite the result will itself be non-finite.
     """
     key, subkey = jrnd.split(key)
@@ -80,11 +82,24 @@ def sample_expected_mean(
     u_bc = jnp.broadcast_to(u, shape=(mc_size,) + u.shape)
     c_bc = jnp.broadcast_to(c, shape=(mc_size,) + c.shape)
 
-    # Dynamics locations for each MC sample
-    locs = jax.vmap(partial(f, key=key), in_axes=(0, 0, 0))(z, u_bc, c_bc)
+    # Dynamics outputs for each MC sample
+    zs = jax.vmap(partial(f, key=key), in_axes=(0, 0, 0))(z, u_bc, c_bc)
 
-    # Predict structured mean (averaging + non-finite masking inside approx)
-    return approx.predict_mean(locs, noise_mean)
+    # Per-sample expanded sufficient statistics
+    expanded = jax.vmap(partial(approx.predict_mean, noise=noise))(zs)
+
+    # Non-finite safe averaging
+    valid = jnp.all(jnp.isfinite(expanded), axis=-1)  # (S,)
+    safe = jnp.where(valid[:, None], expanded, 0.0)
+    n_valid = jnp.sum(valid)
+    avg = jnp.where(
+        n_valid > 0,
+        jnp.sum(safe, axis=0) / n_valid,
+        jnp.full(expanded.shape[-1:], jnp.nan),
+    )
+
+    # Convert averaged sufficient stats to storage mean parameters
+    return approx.from_sufficient_stats(avg)
 
 
 class Mode(StrEnum):
@@ -156,12 +171,12 @@ def filter(
         model.prior_natural()
     )  # TODO: where should prior belongs, approx or dynamics?
 
-    noise_mean = approx.structured_to_mean(approx.to_structured(model.noise_free))
+    noise = approx.structured_to_mean(approx.to_structured(model.noise_free))
 
     expected_mean_forward = partial(
         sample_expected_mean,
         f=model.forward,
-        noise_mean=noise_mean,
+        noise=noise,
         approx=approx,
         mc_size=model.conf.mc_size,
     )
@@ -260,20 +275,20 @@ def bismooth(
     approx = model.approx
     nature_prior = model.prior_natural()
 
-    noise_mean = approx.structured_to_mean(approx.to_structured(model.noise_free))
+    noise = approx.structured_to_mean(approx.to_structured(model.noise_free))
 
     natural_to_mean = jax.vmap(approx.natural_to_mean)
     expected_mean_forward = partial(
         sample_expected_mean,
         f=model.forward,
-        noise_mean=noise_mean,
+        noise=noise,
         approx=approx,
         mc_size=mc_size,
     )
     expected_mean_backward = partial(
         sample_expected_mean,
         f=model.backward,
-        noise_mean=noise_mean,
+        noise=noise,
         approx=approx,
         mc_size=mc_size,
     )
