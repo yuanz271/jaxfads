@@ -168,6 +168,11 @@ Docstrings that say "See base class" are allowed to omit summary/Parameters/Retu
 - If only documentation/comments change (e.g. `docs/*.md`), tests are optional
   and may be skipped.
 
+## Long-running Commands
+
+- Do not run long-running examples/benchmarks (e.g. `examples/vdp_example.py`)
+  unless the user explicitly asks.
+
 - Test files: `tests/test_<module>.py`
 - Fixtures: Use `spec` from `conftest.py` for shared params
 - Stochastic tests: Use `chex.assert_trees_all_close` with tolerances
