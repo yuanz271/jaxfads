@@ -210,8 +210,13 @@ def batch_loss(
         beta=beta,
     )
 
-    reg = noise_regularizer(model) if noise_regularizer is not None else 0.0
-    return jnp.mean(free_energy) + reg
+    mean_fe = jnp.mean(free_energy)
+    reg = (
+        noise_regularizer(model)
+        if noise_regularizer is not None
+        else jnp.asarray(0.0, dtype=mean_fe.dtype)
+    )
+    return mean_fe + reg
 
 
 def dataloader(arrays, batch_size, num_epochs, key, shuffle=True):
