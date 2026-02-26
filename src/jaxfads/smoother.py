@@ -185,6 +185,9 @@ class XFADS(ConfModule):
             {
                 "state_dim": self.conf.state_dim,
                 "observation_dim": self.conf.observation_dim,
+                # Fail-fast validation for observation models that rely on
+                # Approx-specific helpers.
+                "_approx_name": self.conf.approx,
             },
         )
 

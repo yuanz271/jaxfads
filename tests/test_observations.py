@@ -17,6 +17,7 @@ def _poisson_conf(state_dim: int, observation_dim: int, *, n_steps: int = 0):
             n_steps=n_steps,
             norm_readout=False,
             likelihood="Poisson",
+            _approx_name="MVN",
             # Default readout initializer is "fa".
         )
     )
@@ -32,6 +33,7 @@ def _gaussian_conf(state_dim: int, observation_dim: int, *, n_steps: int = 0):
             n_steps=n_steps,
             norm_readout=False,
             likelihood="Gaussian",
+            _approx_name="MVN",
             # Default readout initializer is "fa".
         )
     )

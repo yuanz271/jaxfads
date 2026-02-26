@@ -283,11 +283,20 @@ class Likelihood(Protocol):
 
 
 class GLM(Observation):
-    """
-    GLM observation model composed of a likelihood and readout.
+    """GLM observation model composed of a likelihood and readout.
 
     This wrapper owns the readout module and the likelihood, delegating
     expected log-likelihood computations and coordinating initialization.
+
+    Notes
+    -----
+    The current analytic implementations of :meth:`Poisson.eloglik` and
+    :meth:`Gaussian.eloglik` assume that the latent approximation can be
+    unpacked into a mean and covariance via ``approx.unpack(moment)``.
+
+    This is MVN-specific. The expected Approx name is injected by `XFADS` into
+    the observation config as `obs_conf._approx_name`, and validated in
+    `GLM.__init__` for fail-fast errors.
     """
 
     readout: StationaryLinear | VariantBiasLinear
@@ -295,6 +304,7 @@ class GLM(Observation):
 
     def __init__(self, conf, key: Array):
         self.conf = conf
+        self._validate_conf()
         key, readout_key = jrnd.split(key)
         self.readout = make_readout(conf, readout_key)
         key, likelihood_key = jrnd.split(key)
@@ -311,6 +321,24 @@ class GLM(Observation):
             )
         else:
             raise ValueError(f"Unsupported observation likelihood '{likelihood_name}'.")
+
+    def _validate_conf(self) -> None:
+        """Fail-fast validation of Approx compatibility from config.
+
+        GLM likelihood code currently relies on MVN-only helpers (notably
+        ``approx.unpack(moment)``), which are not part of the `Approx` ABC.
+        """
+        approx_name = self.conf.get("_approx_name", None)
+        if approx_name is None:
+            raise NotImplementedError(
+                "GLM requires `obs_conf._approx_name` to be injected by XFADS for "
+                "fail-fast Approx validation."
+            )
+        if str(approx_name) != "MVN":
+            raise NotImplementedError(
+                "GLM analytic eloglik currently supports only MVN approximations "
+                "(requires approx.unpack(moment) -> (mean, cov))."
+            )
 
     def eloglik(
         self,
