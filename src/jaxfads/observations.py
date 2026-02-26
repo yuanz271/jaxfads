@@ -270,7 +270,7 @@ class Likelihood(Protocol):
         self,
         key: Array,
         t: Array,
-        mean: Array,
+        moment: Array,
         y: Array,
         approx: Approx,
         mc_size: int,
@@ -344,7 +344,7 @@ class GLM(Observation):
         self,
         key: Array,
         t: Array,
-        mean: Array,
+        moment: Array,
         y: Array,
         approx: Approx,
         mc_size: int,
@@ -358,7 +358,7 @@ class GLM(Observation):
             JAX PRNG key for stochastic computation (if needed).
         t : Array
             Time index for time-varying parameters.
-        mean : Array
+        moment : Array
             Moment parameters of the latent state distribution q(z_t).
         y : Array
             Observed data at time t.
@@ -372,7 +372,7 @@ class GLM(Observation):
         Array
             Expected log-likelihood E_{q(z_t)}[log p(y_t | z_t)].
         """
-        return self.likelihood.eloglik(key, t, mean, y, approx, mc_size, self.readout)
+        return self.likelihood.eloglik(key, t, moment, y, approx, mc_size, self.readout)
 
     def set_readout(
         self, weight: Array | None = None, bias: Array | None = None
@@ -532,7 +532,7 @@ class Poisson(eqx.Module, strict=True):
         self,
         key: Array,
         t: Array,
-        mean: Array,
+        moment: Array,
         y: Array,
         approx,
         mc_size: int,
@@ -547,7 +547,7 @@ class Poisson(eqx.Module, strict=True):
             Random key (unused in this implementation).
         t : Array
             Time index for time-varying parameters.
-        mean : Array
+        moment : Array
             Moment parameters of latent state distribution q(z_t).
         y : Array, shape (observation_dim,)
             Observed count data.
@@ -571,7 +571,7 @@ class Poisson(eqx.Module, strict=True):
         where η_i = E[C_i z] and λ_i = E[exp(C_i z + b_i)] with uncertainty
         correction for the exponential nonlinearity.
         """
-        mean_z, cov_z = approx.unpack(mean)
+        mean_z, cov_z = approx.unpack(moment)
         eta = readout(t, mean_z)
         C = readout.weight
         cvc = _quadratic_diag(C, cov_z)
@@ -660,7 +660,7 @@ class Gaussian(eqx.Module, strict=True):
         self,
         key: Array,
         t: Array,
-        mean: Array,
+        moment: Array,
         y: Array,
         approx: Approx,
         mc_size: int,
@@ -675,7 +675,7 @@ class Gaussian(eqx.Module, strict=True):
             Random key (unused in this implementation).
         t : Array
             Time index for time-varying parameters.
-        mean : Array
+        moment : Array
             Moment parameters of latent state distribution q(z_t).
         y : Array, shape (observation_dim,)
             Observed continuous data.
@@ -701,7 +701,7 @@ class Gaussian(eqx.Module, strict=True):
         where the observation covariance includes both state uncertainty
         and observation noise.
         """
-        mean_z, cov_z = approx.unpack(mean)
+        mean_z, cov_z = approx.unpack(moment)
         mean_y = readout(t, mean_z)
         C = readout.weight  # left matrix
         cov_y = C @ cov_z @ C.T + jnp.diag(self.cov())

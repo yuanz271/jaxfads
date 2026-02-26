@@ -313,13 +313,18 @@ class Observation(SubclassRegistryMixin, ConfModule):
         self,
         key: Array,
         t: Array,
-        mean: Array,
+        moment: Array,
         y: Array,
         approx: Approx,
         mc_size: int,
     ) -> Array:
-        """
-        Compute expected log-likelihood for observations.
+        """Compute expected log-likelihood for observations.
+
+        Parameters
+        ----------
+        moment : Array
+            Exponential-family moment parameters of the latent state
+            approximation ``q(z_t)`` (i.e. a packed vector ``μ = E[T(z_t)]``).
         """
         ...
 
