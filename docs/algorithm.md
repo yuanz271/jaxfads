@@ -190,8 +190,8 @@ while not converged:
 
 | Paper Concept | Code Location | Notes |
 |---------------|---------------|-------|
-| Generative model `p(z_t \| z_{t-1})` | `Dynamics.forward()` in `dynamics.py` | Deterministic `m_θ(z)`; noise `Q` owned by `XFADS` |
-| State noise `Q_θ` | `XFADS.unconstrained_noise_mean` in `smoother.py` | Stored as free-form; constrained to mean via `to_canon` |
+| Generative model `p(z_t \| z_{t-1})` | `Dynamics.forward()` in `base.py` | Deterministic transition `m_θ(z, u, c)`; process noise owned by `XFADS` |
+| State noise `Q_θ` | `XFADS.noise_free` in `smoother.py` | Stored as free-form; constrained via `approx.free_to_canon → canon_to_moment` |
 | Observation model `p(y_t \| z_t)` | `Observation.eloglik()` in `observations.py` | Poisson and Gaussian implementations |
 | Pseudo-observation `λ̃_t` | `alpha + beta` computed in `XFADS.__call__()` | Added in natural parameter space |
 | Local encoder `α_t = NN(y_t)` | `AlphaEncoder` in `encoders.py` | MLP mapping observations → natural params |
@@ -202,7 +202,7 @@ while not converged:
 | KL(π ∥ π̄) | `approx.kl()` on `MVN` | Via TFP `MultivariateNormalFullCovariance` |
 | Exp-family natural params | `Approx.moment_to_natural()` | Flat array; layout defined by MVN |
 | Exp-family moment params | `Approx.natural_to_moment()` | Flat array `[E[z], E[-½ zzᵀ]_flat]` |
-| MVN implementation | `MVN(dim)` | Full covariance (no low-rank) |
+| MVN implementation | `MVN(dim, structure=...)` | Supports `structure="full"` and `structure="diag"` |
 | Causal inference (Eq 29) | Not yet implemented | `Mode.BIFILTER` exists but raises `NotImplementedError` |
 | Efficient structured ops (App B.5) | Not implemented | Current impl materializes full covariance |
 
@@ -242,15 +242,12 @@ while not converged:
    a different bidirectional scheme (forward + backward dynamics).
 
 3. **Noise ownership**: Paper has `Q_θ` as part of the dynamics. Codebase
-   separates: `Dynamics` is purely deterministic `m_θ(z, u, c)`, noise
-   is owned by `XFADS` as `unconstrained_noise_mean`. This is a design
-   choice for modularity.
+   separates: `Dynamics` is purely deterministic `m_θ(z, u, c)`; process noise
+   is owned by `XFADS` as `noise_free` (constrained via the `Approx`).
 
-4. **Low-rank encoder output**: The paper specifies `α_t = [a_t; A_t A_tᵀ]`
-   with explicit low-rank precision updates. The codebase outputs flat
-   natural parameter vectors and relies on `MVN`'s internal structure.
-   The low-rank structure of encoder outputs is implicit via the MVN
-   rank parameter, not explicitly enforced as outer products.
+4. **Low-rank encoder output**: The paper specifies low-rank precision updates
+   in the pseudo-observations. The current codebase outputs dense flat natural
+   parameter vectors (no explicit low-rank structure).
 
 5. **`predictive_moment` averaging**: The paper averages in mean (moment) parameter
    space (Eq 22). The code does this correctly via `predictive_moment` on `MVN`,

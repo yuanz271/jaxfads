@@ -10,7 +10,7 @@ approximations.
 
 | Term | Meaning | Typical type |
 |------|---------|--------------|
-| **free** | Unconstrained parameters optimized by SGD | pytree |
+| **free** | Unconstrained parameters optimized by SGD | flat array |
 | **canon** | Constrained, valid parameters | pytree |
 | **natural** (`η`) | Natural parameters of the exponential family | flat array |
 | **moment** (`μ`) | Moment parameters of the exponential family | flat array |

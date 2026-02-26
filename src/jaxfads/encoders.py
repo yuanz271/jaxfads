@@ -36,7 +36,6 @@ class AlphaEncoder(ConfModule):
     conf : DictConfig
         Configuration containing:
         - observation_dim: Dimensionality of input observations
-        - state_dim: Dimensionality of latent state
         - param_size: Length of the flat natural parameter vector
         - width: Hidden layer width
         - depth: Number of hidden layers
@@ -84,7 +83,6 @@ class BetaEncoder(ConfModule):
     ----------
     conf : DictConfig
         Configuration containing:
-        - state_dim: Dimensionality of latent state
         - param_size: Length of the flat natural parameter vector
         - width: Hidden state dimension for the GRU
         - dropout: Dropout probability (optional)

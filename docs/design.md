@@ -45,7 +45,7 @@ Every exponential-family distribution has four representations:
 
 | Form | Type | Reason | Example (MVN) |
 |------|------|--------|---------------|
-| **Free-form** | pytree | SGD via optax (handles pytrees natively) | `MVNParam(loc, chol_free)` |
+| **Free-form** | flat array | Optimized by optax; encoder outputs live in this space | MVN: flat `Array` |
 | **Canon** | pytree | Human-readable, constraints satisfied | `MVNParam(loc, chol)` with `diag(chol) > 0` |
 | **Natural** (η) | flat array | Additive updates in filtering: `η_f = η_p + α` | `[h, J_flat]` (precision-like block) |
 | **Moment** (μ) | flat array | Natural↔moment conversions, sampling, KL | `[E[z], E[-½ zzᵀ]_flat]` |
@@ -54,11 +54,15 @@ Every exponential-family distribution has four representations:
 - Natural: additive updates `η_p + α_t` require element-wise addition
 - Moment: averaging (Eq 12) and passing flat vectors to sampling/KL backends
 
-**Why canon and free-form are pytrees:**
-- JAX and optax handle pytrees natively — no manual flatten/unflatten
-- Each subclass defines its own pytree structure (e.g. `MVNParam` NamedTuple)
+**Why canon is a pytree:**
+- Each subclass defines its own constrained parameter structure (e.g. `MVNParam`)
 - Constraints (e.g. softplus) apply to individual leaves
 - Equinox stores pytree fields on modules directly
+
+**Why free-form is flat:**
+- Encoders output flat unconstrained vectors for additive filtering updates.
+- Flat free-form makes it easy to store and optimize parameters (including
+  encoder outputs) without manual flatten/unflatten.
 
 ## Conversion Flow
 
@@ -66,7 +70,7 @@ Every exponential-family distribution has four representations:
 free_from_kw(**kwargs)
         │
         ▼
-    free-form (pytree)  ◄──── stored on XFADS, optimized by optax
+    free-form (flat)   ◄──── stored on XFADS, optimized by optax
         │
    free_to_canon
         │
@@ -115,15 +119,15 @@ Quick reference (public API):
 
 | Method | Signature | Role |
 |--------|-----------|------|
-| `free_from_kw` | `(**kwargs) → pytree` | Create free-form pytree from serializable spec |
+| `free_from_kw` | `(**kwargs) → Array` | Create free-form flat params from serializable spec |
 | `param_size` | `() → int` | Natural parameter vector size |
 
-### Canon ↔ free-form (pytree ↔ pytree)
+### Canon ↔ free-form (flat ↔ pytree)
 
 | Method | Signature | Role |
 |--------|-----------|------|
-| `free_to_canon` | `(free_pytree) → canon_pytree` | Apply constraints (e.g. softplus) |
-| `canon_to_free` | `(canon_pytree) → free_pytree` | Inverse constraints |
+| `free_to_canon` | `(free_flat) → canon_pytree` | Apply constraints (e.g. softplus) |
+| `canon_to_free` | `(canon_pytree) → free_flat` | Inverse constraints |
 
 ### Canon ↔ moment (pytree ↔ flat)
 
@@ -150,7 +154,7 @@ Quick reference (public API):
 ### Usage in XFADS
 
 ```python
-# Construction — stored as free-form pytrees on the module
+# Construction — stored as free-form flat arrays on the module
 self.noise_free = self.approx.free_from_kw(scale=conf.state_noise)
 self.unconstrained_prior_natural = self.approx.free_from_kw(scale=1.0)
 
@@ -160,17 +164,15 @@ prior_natural = self.approx.moment_to_natural(
         self.approx.free_to_canon(self.unconstrained_prior_natural)
     )
 )
-noise = self.approx.canon_to_moment(
-    self.approx.free_to_canon(self.noise_free)
-)
+noise = self.approx.canon_to_moment(self.approx.free_to_canon(self.noise_free))
 
-# Encoder outputs are flat arrays → flat natural params
-# (encoders output flat for additive updates in filtering)
+# Encoder outputs are flat arrays → valid natural params
+# (encoders output flat unconstrained updates for additive filtering)
 def _free_to_natural(free_flat):
-    free_pytree = self.approx.moment_to_canon(free_flat)
-    return self.approx.moment_to_natural(
-        self.approx.canon_to_moment(self.approx.free_to_canon(free_pytree))
-    )
+    canon = self.approx.free_to_canon(free_flat)
+    moment = self.approx.canon_to_moment(canon)
+    return self.approx.moment_to_natural(moment)
+
 alpha = _free_to_natural(encoder(y))
 ```
 
