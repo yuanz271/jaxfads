@@ -97,7 +97,7 @@ uv run ruff format .
 uv run pytest
 ```
 
-## Commit checklist
+#### Pre-commit checklist (before any `git commit`)
 
 - Ensure git hooks are installed: `uv run prek install`
 - If hooks are not available (or for CI/debug), run manually: `uv run prek run --all-files`
