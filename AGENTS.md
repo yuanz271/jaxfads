@@ -1,195 +1,135 @@
 # JAXFADS - Project Knowledge Base
 
-**Generated:** 2026-01-20  
-**Commit:** 0597b52  
-**Branch:** main
-
-# Development Guide
+**Updated:** 2026-02-25  
+**Branch:** feature/unify-noise-approx
 
 ## Overview
 
-JAX library for variational Bayesian state-space modeling (XFADS). Exponential-family dynamical systems with neural parameterizations via Equinox.
+JAX library for variational Bayesian state-space modeling (XFADS). Implements
+variational inference for nonlinear state-space models with exponential-family
+approximate posteriors via Equinox/JAX.
 
 ## Structure
 
 ```
 jaxfads/
-├── src/jaxfads/      # Core library
-├── tests/            # Unit tests mirroring src/ structure
-└── pyproject.toml    # Build config, deps, ruff settings
+├── src/jaxfads/                 # Core library
+│   ├── base.py                  # ABCs + subclass registries (Approx/Dynamics/Observation)
+│   ├── smoother.py              # XFADS orchestrator
+│   ├── core.py                  # filtering/smoothing primitives
+│   ├── vi.py                    # ELBO
+│   ├── observations.py          # GLM observation model + Poisson/Gaussian likelihoods
+│   ├── encoders.py              # Alpha/Beta encoders
+│   ├── trainer.py               # training loop
+│   ├── distributions/           # Approx implementations (currently MVN)
+│   │   └── mvn.py
+│   ├── nn.py                    # neural blocks (MLPs, readouts, etc.)
+│   ├── constraints.py           # parameter constraints
+│   ├── util.py                  # helpers
+│   └── ilqr.py                  # iLQR utilities
+├── tests/                       # Unit tests mirroring src/ structure
+└── pyproject.toml               # Build config, deps, ruff settings
 ```
 
 ## Where to Look
 
 | Task | Location | Notes |
 |------|----------|-------|
-| Filtering/smoothing algorithms | `src/jaxfads/core.py` | `filter()`, `bismooth()` |
-| Main model class | `src/jaxfads/smoother.py` | `XFADS` orchestrator |
-| State transitions | `src/jaxfads/dynamics.py` | `Dynamics`, `DiagGaussian` |
-| Observation models | `src/jaxfads/observations.py` | `Poisson`, `Gaussian` |
-| Distribution math | `src/jaxfads/distributions.py` | `DiagMVN`, `FullMVN`, `Approx` |
-| Neural blocks | `src/jaxfads/nn.py`, `encoders.py` | MLP, RBF, encoders |
-| Training loop | `src/jaxfads/trainer.py` | `train()`, `batch_elbo()` |
-| Add tests | `tests/test_<module>.py` | Use `conftest.py` fixtures |
+| Main model class | `src/jaxfads/smoother.py` | `XFADS` |
+| Filtering primitives | `src/jaxfads/core.py` | `filter()`, `bismooth()`, `expected_predictive_moment()` |
+| Approx posterior families | `src/jaxfads/distributions/` | currently `MVN` |
+| Observation models | `src/jaxfads/observations.py` | `GLM`, `Poisson`, `Gaussian` |
+| Encoders | `src/jaxfads/encoders.py` | `AlphaEncoder`, `BetaEncoder` |
+| Training | `src/jaxfads/trainer.py` | `train()`, `batch_loss()`, `DEFAULT_TRAINER_CONFIG` |
+| Abstract interfaces | `src/jaxfads/base.py` | `Approx`, `Dynamics`, `Observation` |
 
-## Core Library Notes (`src/jaxfads`)
+## Core Design Notes
 
-### Module Map
+### Exponential-family parameter forms
 
-| Module | Purpose | Key Exports |
-|--------|---------|-------------|
-| `core.py` | Filtering primitives | `filter()`, `bismooth()`, `Mode` |
-| `smoother.py` | Main orchestrator | `XFADS` class |
-| `dynamics.py` | State transitions | `Noise`, `DiagGaussian`, `Dynamics`, `predict_moment()`, `sample_expected_moment()` |
-| `observations.py` | Likelihoods | `Poisson`, `Gaussian`, `Likelihood` |
-| `distributions.py` | Approx posteriors | `DiagMVN`, `FullMVN`, `LoRaMVN`, `Approx`, `damping_inv` |
-| `nn.py` | Neural blocks | `make_mlp()`, `gauss_rbf()`, `WeightNorm`, `StationaryLinear`, `VariantBiasLinear`, `RBFN`, `DataMasker` |
-| `encoders.py` | Sequence encoders | `AlphaEncoder`, `BetaEncoder` |
-| `trainer.py` | Training loop | `train()`, `batch_elbo()`, `batch_loss()`, `train_test_split()`, `dataloader()`, `compute_patience()`, `DEFAULT_TRAINER_CONFIG` |
-| `vi.py` | Variational inference | `elbo()` |
-| `util.py` | Helpers | `vmap_with_key()` |
-| `constraints.py` | Parameter constraints | `constrain_positive()`, `unconstrain_positive()`, `softplus_inverse()` |
-| `ilqr.py` | Iterative LQR | `rollout()`, `cost_function()`, `backward_pass()`, `line_search()`, `arg_first_less_than()`, `arg_smallest_less_than()`, `ilqr()` |
+- **Natural parameters** (η): flat vectors for additive filtering updates.
+- **Moment parameters** (μ): flat vectors of expected sufficient statistics
+  `E[T(z)]`.
 
-### Architecture
+### MVN approximation
 
-```
-XFADS (smoother.py)
-├── forward: Dynamics        # State transition model
-├── likelihood: Likelihood   # Observation model (Poisson/Gaussian)
-├── alpha_encoder            # Forward pass encoder
-├── beta_encoder             # Backward pass encoder (GRU-based)
-└── approx: Approx           # Posterior family (DiagMVN/FullMVN)
+`MVN(dim, structure=...)` supports two exponential-family layouts:
 
-Filtering (core.py)
-├── filter()     # Forward filtering with Mode.PSEUDO or Mode.BIFILTER
-└── bismooth()   # Bidirectional smoothing
-```
+- `structure="full"`:
+  - natural size `D + D²`
+  - moment size `D + D²` with `T₂(z) = -½ zzᵀ`
+- `structure="diag"`:
+  - natural size `2D`
+  - moment size `2D` with `T₂(z) = -½ (z ⊙ z)`
 
-### Class Hierarchy
+Invariant for callers:
+- `MVN.unpack(moment)` returns `(mean, cov)` where `cov` is **always** a full
+  `(D, D)` covariance matrix (diagonal-valued in diag mode).
 
-**Distributions** (`distributions.py`):
-```
-Approx (ABC)
-├── FullMVN      # Full covariance MVN
-├── LoRaMVN      # Low-rank + diagonal MVN
-└── DiagMVN      # Diagonal covariance MVN
-```
+### Config invariants (avoiding duplication)
 
-**Observations** (`observations.py`):
-```
-Likelihood (ABC)
-├── Poisson            # Poisson with neural readout
-└── Gaussian           # Gaussian with learned noise
-```
+- `conf.state_dim` and `conf.observation_dim` are the **single source of truth**.
+  `XFADS` injects these into `dyn_conf`/`obs_conf`/`enc_conf` at construction.
+- `enc_conf` does **not** contain `approx` / `approx_kwargs`.
+  Encoders are Approx-agnostic and only require:
+  - `param_size` (injected by `XFADS`)
+  - `observation_dim` (injected by `XFADS`)
+  - encoder hyperparameters (`width`, `depth`, `dropout`)
 
-**Dynamics** (`dynamics.py`):
-```
-Noise (ABC)
-└── DiagGaussian # Diagonal state noise
+### Training regularization
 
-Dynamics        # Transition model with forward()
-```
-
-### Conventions (Core Library)
-
-- All modules use Equinox for PyTree-compatible neural layers
-- Natural/moment parameterization pattern throughout distributions
-- `__call__` typically wraps forward computation
-- `set_static()` marks params non-trainable (e.g., readout freezing)
-
-### Critical Constants
-
-| Constant | Location | Purpose |
-|----------|----------|---------|
-| `_EPS` | `constraints.py:18` | Machine epsilon (float32) for numerical stability |
-| `_MAX_LOGRATE` | `observations.py:24` | Clip log-rate for numerical stability |
-
-### Adding New Components
-
-**New observation model**:
-1. Subclass `Likelihood` in `observations.py`
-2. Implement `eloglik()` for expected log-likelihood
-3. Register in `__init__.py` exports
-
-**New distribution family**:
-1. Subclass `Approx` in `distributions.py`
-2. Implement natural↔moment conversions, sampling, KL
-3. Add tests in `tests/test_distribution.py`
+- The trainer supports an optional user hook:
+  - `trainer_conf.noise_regularizer: Callable[[XFADS], Array] | None`
+- No built-in covariance-based noise regularization is applied by default.
 
 ## Commands
 
 ```bash
-# Environment
-uv sync                              # Install deps
+uv sync
 
-# Testing
-uv run pytest                        # Full suite
-uv run pytest tests/test_smoother.py -k "test_name"  # Specific
+# Lint
+uv run ruff check .
 
-# Linting
-uv run ruff check .                  # Check
-uv run ruff check . --fix            # Auto-fix
+# Format
+uv run ruff format .
 
-# Docstring linting
-uv run python -m numpydoc lint src/jaxfads/*.py
+# Tests
+uv run pytest
 ```
 
-Docstring linting enforces a minimal ruleset: GL01, SS02, PR01, PR10, RT01.
-Docstrings that say "See base class" are allowed to omit summary/Parameters/Returns checks.
+## Dependency / workflow notes
 
-## Conventions
+- `jaxtyping` is a runtime dependency used for type annotations (e.g. the
+  `PyTree` type in `src/jaxfads/base.py`).
+- `prek` (dev dependency) is used to run the pre-commit hooks defined in
+  `.pre-commit-config.yaml` (currently `ruff-format` and `ruff`).
+  Use:
+  - `uv run prek install` (one-time)
+  - `uv run prek run --all-files`
 
-- **Style**: PEP 8, 4-space indent, type annotations on public APIs
-- **Docstrings**: NumPy format (`Parameters`, `Returns`, `Notes`) with shapes/dtypes
-- **Imports**: stdlib → third-party → local
-- **Naming**: `snake_case` functions/vars, `PascalCase` classes
-- **Ruff ignores**: E501 (line length), F722 (forward refs)
+#### Pre-commit checklist (before any `git commit`)
 
-## Branching Practices
+- [ ] Review `git status` and `git diff`
+- [ ] Update docs per the documentation hard gates above
+- [ ] Ensure todos are updated (and closed if complete)
+- [ ] Ensure commit is run as an isolated command (no chained commands)
+- [ ] Ask for confirmation before running `git commit`
+- [ ] Run quick checks when applicable:
+  - `uv run prek install` (one-time)
+  - `uv run prek run --all-files`
+  - `uv run pytest` (when code changes under `src/`)
 
-- Branch from `main` for every change.
-- Keep branches focused and short-lived.
-- Open a pull request before merging.
-- Rebase or merge latest `main` before final review.
-- Squash or tidy commits before merge if requested.
+## Documentation conventions
 
-## Anti-Patterns
+- When preparing a commit that changes **behavior, APIs, configuration schemas, or examples**, update the relevant documentation in the same PR/commit series.
+- At minimum, consider whether updates are needed for:
+  - `README.md`
+  - `AGENTS.md`
+  - `docs/*.md`
+  - `examples/*` comments/config snippets
 
-- **NO** `as any`, `@ts-ignore` equivalents for type suppression
-- **NO** empty exception handlers
-- **NO** committing without running `uv run ruff check .`
-- **NO** committing without running formatters (e.g., `uv run ruff format .`) if applicable.
+## Testing conventions
 
-## Testing Conventions
-
-- Always run tests (`uv run pytest`) before committing.
-
-- Test files: `tests/test_<module>.py`
-- Fixtures: Use `spec` from `conftest.py` for shared params
-- Stochastic tests: Use `chex.assert_trees_all_close` with tolerances
-- Randomness: Always `jax.random.PRNGKey(seed)` for reproducibility
-- I/O tests: Use `tempfile.TemporaryDirectory`
-
-## Dependencies
-
-| Package | Purpose |
-|---------|---------|
-| `jax` | Autodiff, accelerators |
-| `equinox` | Neural modules (PyTree-based) |
-| `optax` | Optimizers |
-| `tensorflow-probability[jax]` | Probability distributions |
-| `omegaconf` | Config management |
-| `gearax` | GitHub dependency pinned in `pyproject.toml` |
-| `numpydoc` | NumPy-style docstring linting (dev) |
-| `ty` | Type checking (dev) |
-
-## Security Notes
-
-- Dependabot reports a minor advisory for `fonttools` **4.59.0**, pulled in via the dev dependency `matplotlib`.
-- This impacts development tooling only; no runtime dependency for the library.
-
-## Known Issues
-
-- TODO in `core.py:100`: Prior placement undecided (approx vs dynamics)
-- No CI/CD pipelines yet (manual `pytest`/`ruff`)
+- Run tests (`uv run pytest`) when code changes under `src/`.
+- Avoid long-running examples (e.g. `examples/vdp_example.py`) unless explicitly
+  requested.

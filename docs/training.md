@@ -105,16 +105,30 @@ Data is randomly split before training. You can control the split via:
 The per-batch loss is:
 
 ```
-loss = mean(-ELBO) + noise_penalty × dynamics.loss()
+loss = mean(-ELBO) + regularizer(model)
 ```
 
 where:
 - **ELBO** = E_q[log p(y|z)] − KL(q(z|y) ∥ p(z))
-- **dynamics.loss()** is an optional regularisation term (e.g., penalising
-  large process noise)
+- `regularizer(model)` is an *optional* user-provided callable set on the
+  **trainer configuration** as `noise_regularizer`.
 
-The `noise_penalty` is set on the model configuration, not the trainer
-configuration.
+By default no extra regularization term is added. This keeps the core library
+agnostic to the latent family (not every `Approx` has a covariance-like noise).
+
+### Example: L2 regularizer on process-noise free parameters
+
+```python
+import jax.numpy as jnp
+
+# Penalize the free-form process noise parameters stored on the model.
+# This is model/Approx-specific by design.
+def l2_noise_regularizer(model):
+    return 1e-4 * jnp.sum(model.noise_free**2)
+
+trainer_conf.noise_regularizer = l2_noise_regularizer
+```
+
 
 ## Logging
 

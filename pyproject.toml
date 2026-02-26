@@ -23,6 +23,7 @@ dependencies = [
     "tensorflow-probability[jax]>=0.24.0,<0.26.0",
     "jax>=0.4.38,<0.7.0",
     "gearax @ git+https://github.com/yuanz271/gearax.git@29d694e66adb11c5bf6dd43c52ff5f839cd86f10",
+    "jaxtyping>=0.3.2",
 ]
 
 [dependency-groups]
@@ -30,6 +31,7 @@ dev = [
     "chex>=0.1.90",
     "matplotlib>=3.10.1",
     "numpydoc>=1.7.0",
+    "prek>=0.3.3",
     "pytest>=8.3.4",
     "ruff>=0.9.4",
     "ty>=0.0.1",

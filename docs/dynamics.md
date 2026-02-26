@@ -1,31 +1,28 @@
 # Writing Custom Dynamics Modules
 
-This guide explains how to create custom state-transition models for XFADS.
+This guide explains how to create custom deterministic state-transition models
+for XFADS.
 
 ## Overview
 
-A dynamics module defines how the latent state evolves over time:
+A dynamics module defines the deterministic transition:
 
 ```
-z_{t+1} = f(z_t, u_t, c_t) + ε_t,   ε_t ~ N(0, Σ)
+z_{t+1} = f(z_t, u_t, c_t)
 ```
 
-where `f` is the deterministic transition, `u_t` is a control input, `c_t` is a
-covariate, and `Σ` is the process noise covariance.
+Process noise is owned by `XFADS` (configured via `dyn_conf.state_noise`) so
+that `Dynamics` stays a pure transition function.
 
 ## Minimal Example
 
 ```python
-import jax.numpy as jnp
-from jaxfads.base import Dynamics, Noise
-from jaxfads.dynamics import DiagGaussian
+from jaxfads.base import Dynamics
+
 
 class MyDynamics(Dynamics):
-    noise: Noise
-
     def __init__(self, conf, key):
         self.conf = conf
-        self.noise = DiagGaussian(jnp.array(conf.cov), conf.state_dim)
 
     def forward(self, z, u, c, *, key=None):
         # Your transition function here.
@@ -46,8 +43,7 @@ You must provide:
 
 | Member | Type | Purpose |
 |--------|------|---------|
-| `noise` | `Noise` | Process noise model (must implement `.cov() -> Array`) |
-| `conf` | `DictConfig` | Configuration (inherited from `ConfModule`, set in `__init__`) |
+| `conf` | `DictConfig` | Configuration (set in `__init__`) |
 | `forward(z, u, c, *, key=None)` | method | Deterministic state transition |
 
 The `__init__` signature must be `(self, conf, key)` where `conf` is an
@@ -65,136 +61,63 @@ def forward(self, z: Array, u: Array, c: Array, *, key=None) -> Array:
 - **`key`** — optional PRNG key for stochastic components (e.g., dropout)
 - **returns** — next state mean, shape `(state_dim,)`
 
-The noise is handled separately by the framework; `forward` returns only the
-deterministic part.
+## Process noise
 
-## Noise Model
+Process noise is configured on the XFADS model (not on `Dynamics`). In configs
+this is typically done via:
 
-Use the built-in `DiagGaussian` for diagonal process noise:
-
-```python
-from jaxfads.dynamics import DiagGaussian
-
-self.noise = DiagGaussian(jnp.array(conf.cov), conf.state_dim)
+```yaml
+dyn_conf:
+  state_noise: 1.0
 ```
 
-The covariance is parameterized in unconstrained space via softplus, so it is
-always positive and trainable by default.
+The exact parameterization of the process noise is determined by the chosen
+`Approx` family.
 
-To implement a custom noise model, satisfy the `Noise` protocol:
+## Built-in dynamics
 
-```python
-class MyNoise:
-    def cov(self) -> Array:
-        """Return diagonal covariance vector of shape (state_dim,)."""
-        ...
+### `OUDynamics`
+
+`OUDynamics` is a ready-to-use zero-mean Ornstein–Uhlenbeck drift model. It is a
+common choice as a smooth tracking prior.
+
+Drift (Euler discretization):
+
+```
+z_next = z + dt * (-theta * z)
 ```
 
-## Optional Overrides
+Example configuration:
 
-### `loss() -> Array | float`
+```yaml
+forward: OUDynamics
+state_dim: 2
+observation_dim: 10
+approx: MVN
+approx_kwargs: {structure: full}
 
-Return a scalar regularization term added to the training loss. Default is
-`0.0`. A common pattern penalizes large noise:
-
-```python
-def loss(self):
-    return jnp.mean(self.cov())
+# Model-owned process noise
+# (scale this with dt if you want an SDE-consistent interpretation)
+dyn_conf:
+  theta: 2.0  # trainable (constrained to be positive)
+  dt: 0.04
+  state_noise: 1.0
+  input_dim: 0
+  context_dim: 0
 ```
 
 ## Registration and Configuration
 
-Subclasses of `Dynamics` are automatically registered by class name. To use
-your dynamics in an XFADS model, set the `forward` config field to the class
-name:
+Subclasses of `Dynamics` are automatically registered by class name. Built-in
+models under `jaxfads.dynamics` are imported by `XFADS` for side-effect
+registration.
 
-```python
-conf = OmegaConf.create({
-    ...
-    "forward": "MyDynamics",
-    "dyn_conf": {
-        "state_dim": 2,
-        "cov": 0.01,
-        # any other fields your __init__ reads from conf
-    },
-    ...
-})
-```
-
-The framework calls `Dynamics.get_subclass("MyDynamics")(conf.dyn_conf, key=key)`
-internally. Your class must be importable at model-creation time (i.e., the
-module defining it must have been imported before `XFADS(conf, key)` is called).
-
-## Full Example: Neural Dynamics with Residual Connection
-
-```python
-import jax.numpy as jnp
-from jax import Array
-from jaxfads.base import Dynamics, Noise
-from jaxfads.dynamics import DiagGaussian
-from jaxfads.nn import make_mlp
-
-
-class Nonlinear(Dynamics):
-    noise: Noise
-    f: Callable[..., Array]
-
-    def __init__(self, conf, key):
-        self.conf = conf
-        self.noise = DiagGaussian(jnp.array(conf.cov), conf.state_dim)
-        self.f = make_mlp(
-            conf.state_dim + conf.input_dim,
-            conf.state_dim,
-            conf.width,
-            conf.depth,
-            key=key,
-            final_bias=False,
-            dropout=conf.dropout,
-        )
-
-    def forward(self, z: Array, u: Array, c: Array, *, key=None) -> Array:
-        x = jnp.concatenate((z, u), axis=-1)
-        return z + self.f(x, key=key)  # residual connection
-
-    def loss(self):
-        return jnp.mean(self.cov())
-```
-
-## Full Example: Known ODE via RK4
-
-When the dynamics are known analytically, wrap them directly:
-
-```python
-class VanDerPol(Dynamics):
-    noise: DiagGaussian
-    mu: float
-    dt: float
-
-    def __init__(self, conf, key):
-        self.conf = conf
-        self.noise = DiagGaussian(jnp.array(conf.cov), conf.state_dim)
-        self.mu = float(conf.mu)
-        self.dt = float(conf.dt)
-
-    def forward(self, z, u, c, *, key=None):
-        # RK4 integration of Van der Pol oscillator
-        def rhs(s):
-            return jnp.stack([s[1], self.mu * (1 - s[0]**2) * s[1] - s[0]])
-
-        k1 = rhs(z)
-        k2 = rhs(z + 0.5 * self.dt * k1)
-        k3 = rhs(z + 0.5 * self.dt * k2)
-        k4 = rhs(z + self.dt * k3)
-        return z + (self.dt / 6) * (k1 + 2*k2 + 2*k3 + k4)
-
-    def loss(self):
-        return jnp.mean(self.cov())
-```
+For custom dynamics, ensure the module defining the class is imported before
+constructing `XFADS(conf, key)`.
 
 ## Checklist
 
 - [ ] Subclass `Dynamics`
-- [ ] Declare `noise: Noise` (or a concrete type like `DiagGaussian`)
 - [ ] Set `self.conf = conf` in `__init__`
 - [ ] Implement `forward(z, u, c, *, key=None) -> Array`
 - [ ] All trainable parameters are stored as `eqx.Module` fields (arrays or sub-modules)

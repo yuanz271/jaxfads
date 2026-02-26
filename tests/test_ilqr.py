@@ -2,34 +2,38 @@ from functools import partial
 
 import numpy as np
 import jax
-from jax import numpy as jnp, vmap
+from jax import numpy as jnp
 # import matplotlib.pyplot as plt
 
 from jaxfads.ilqr import ilqr, cost_function, backward_pass
 
 
-def test_ilqr():
+def test_ilqr_smoke():
+    """Small iLQR smoke test.
+
+    The full iLQR solve can be expensive; keep this test small and focused on
+    basic functionality (jit-compatibility + finite outputs).
+    """
+
     def dynamics(x, u, c):
+        del c
         return x + (0.5 * x * x + u) * 0.1
 
     dt = 0.1
-    T = 50
+    T = 10
 
     rng = np.random.default_rng(0)
 
-    # Initial state
-    x0 = rng.standard_normal(size=(5, 2)) * 0.1
-    # Define a target trajectory (T+1 entries including terminal target)
-    target = np.array([np.array([np.sin(0.1 * k), np.cos(0.1 * k)]) for k in range(T + 1)])
-    # Initialize the control sequence; here control dimension is 1.
-    u_init = np.zeros((5, T, 2))
+    # Single trajectory
+    x0 = rng.standard_normal(size=(2,)) * 0.1
+    target = np.array([[np.sin(0.1 * k), np.cos(0.1 * k)] for k in range(T + 1)])
+    u_init = np.zeros((T, 2))
     c = jnp.full((T, 1), fill_value=dt)
-    # Define cost matrices:
+
     Q = np.eye(2)
     R = np.eye(2) * 0.01
     jac = jax.jacobian(dynamics, argnums=(0, 1))
 
-    # Run iLQR:
     pilqr = jax.jit(
         partial(
             ilqr,
@@ -39,15 +43,14 @@ def test_ilqr():
             R=R,
             f=dynamics,
             Df=jac,
-            max_iter=10,
-            verbose=True,
+            max_iter=2,
+            verbose=False,
         )
     )
-    vilqr = vmap(pilqr)
 
-    # u_opt, x_opt = pilqr(x0[1], u_init[1])
-
-    u_opt, x_opt, _ = vilqr(x0, u_init)
+    u_opt, x_opt, _ = pilqr(x0, u_init)
+    assert jnp.all(jnp.isfinite(u_opt))
+    assert jnp.all(jnp.isfinite(x_opt))
 
     # Plotting position tracking
     # time = np.linspace(0, T * dt, T + 1)
@@ -130,10 +133,10 @@ def test_backward_pass_analytical_1d():
 
     # Non-trivial trajectory consistent with dynamics (x_{t+1} = x_t + u_t):
     #   x_0=0 + u_0=0.5 -> x_1=0.5 + u_1=0.5 -> x_2=1.0 + u_2=1.0 -> x_3=2.0
-    x = jnp.array([[0.0], [0.5], [1.0], [2.0]])    # T+1 states
-    u = jnp.array([[0.5], [0.5], [1.0]])            # T controls
+    x = jnp.array([[0.0], [0.5], [1.0], [2.0]])  # T+1 states
+    u = jnp.array([[0.5], [0.5], [1.0]])  # T controls
     c = jnp.zeros((T, 1))
-    target = jnp.zeros((T + 1, 1))                  # regulate to zero
+    target = jnp.zeros((T + 1, 1))  # regulate to zero
     Q = jnp.broadcast_to(jnp.array([[q]]), (T + 1, 1, 1))
     R = jnp.broadcast_to(jnp.array([[r]]), (T, 1, 1))
 

@@ -15,24 +15,19 @@ from jax import Array
 from jax import numpy as jnp
 from jax import random as jrnd
 
-from .base import ObservationModel
+from .base import Observation
 from .constraints import _EPS, constrain_positive, unconstrain_positive
-from .distributions import Approx, DiagMVN
+from .base import Approx
 from .nn import StationaryLinear, VariantBiasLinear
 
 _MAX_LOGRATE = 7.0
 
 
-def _quadratic_diag(C: Array, cov_z: Array, approx: type[Approx]) -> Array:
-    """Compute diag(C @ Σ_z @ C.T) without materialising (D_obs, D_obs).
-
-    For :class:`DiagMVN` this is O(D_obs · D_z) via ``(C² @ v)``.
-    For other families it falls back to ``full_cov``.
-    """
-    if approx is DiagMVN:
-        return (C ** 2) @ cov_z
-    V = approx.full_cov(cov_z)
-    return jnp.sum((C @ V) * C, axis=-1)
+def _quadratic_diag(C: Array, cov_z: Array) -> Array:
+    """Compute diag(C @ Σ_z @ C.T) without materialising (D_obs, D_obs)."""
+    if cov_z.ndim == 1:
+        return (C**2) @ cov_z
+    return jnp.sum((C @ cov_z) * C, axis=-1)
 
 
 # ---------------------------------------------------------------------------
@@ -103,9 +98,7 @@ def _init_bias(y: Array, n_steps: int) -> Array:
     return jnp.mean(y.reshape(-1, y.shape[-1]), axis=0)  # (obs_dim,)
 
 
-def _fa_weight(
-    y_centered: Array, state_dim: int, obs_noise_var: float
-) -> Array:
+def _fa_weight(y_centered: Array, state_dim: int, obs_noise_var: float) -> Array:
     """Estimate Factor Analysis loading matrix from centred data.
 
     Parameters
@@ -279,7 +272,7 @@ class Likelihood(Protocol):
         t: Array,
         moment: Array,
         y: Array,
-        approx: type[Approx],
+        approx: Approx,
         mc_size: int,
         readout: Callable[..., Array],
     ) -> Array:
@@ -289,12 +282,21 @@ class Likelihood(Protocol):
         ...
 
 
-class GLM(ObservationModel):
-    """
-    GLM observation model composed of a likelihood and readout.
+class GLM(Observation):
+    """GLM observation model composed of a likelihood and readout.
 
     This wrapper owns the readout module and the likelihood, delegating
     expected log-likelihood computations and coordinating initialization.
+
+    Notes
+    -----
+    The current analytic implementations of :meth:`Poisson.eloglik` and
+    :meth:`Gaussian.eloglik` assume that the latent approximation can be
+    unpacked into a mean and covariance via ``approx.unpack(moment)``.
+
+    This is MVN-specific. The expected Approx name is injected by `XFADS` into
+    the observation config as `obs_conf._approx_name`, and validated in
+    `GLM.__init__` for fail-fast errors.
     """
 
     readout: StationaryLinear | VariantBiasLinear
@@ -302,6 +304,7 @@ class GLM(ObservationModel):
 
     def __init__(self, conf, key: Array):
         self.conf = conf
+        self._validate_conf()
         key, readout_key = jrnd.split(key)
         self.readout = make_readout(conf, readout_key)
         key, likelihood_key = jrnd.split(key)
@@ -319,13 +322,31 @@ class GLM(ObservationModel):
         else:
             raise ValueError(f"Unsupported observation likelihood '{likelihood_name}'.")
 
+    def _validate_conf(self) -> None:
+        """Fail-fast validation of Approx compatibility from config.
+
+        GLM likelihood code currently relies on MVN-only helpers (notably
+        ``approx.unpack(moment)``), which are not part of the `Approx` ABC.
+        """
+        approx_name = self.conf.get("_approx_name", None)
+        if approx_name is None:
+            raise NotImplementedError(
+                "GLM requires `obs_conf._approx_name` to be injected by XFADS for "
+                "fail-fast Approx validation."
+            )
+        if str(approx_name) != "MVN":
+            raise NotImplementedError(
+                "GLM analytic eloglik currently supports only MVN approximations "
+                "(requires approx.unpack(moment) -> (mean, cov))."
+            )
+
     def eloglik(
         self,
         key: Array,
         t: Array,
         moment: Array,
         y: Array,
-        approx: type[Approx],
+        approx: Approx,
         mc_size: int,
     ) -> Array:
         """
@@ -341,8 +362,8 @@ class GLM(ObservationModel):
             Moment parameters of the latent state distribution q(z_t).
         y : Array
             Observed data at time t.
-        approx : type[Approx]
-            Exponential family approximation class defining q(z).
+        approx : Approx
+            Exponential family approximation instance defining q(z).
         mc_size : int
             Number of Monte Carlo samples (for stochastic approximations).
 
@@ -445,7 +466,7 @@ class GLM(ObservationModel):
 
 __all__ = [
     "GLM",
-    "ObservationModel",
+    "Observation",
     "Poisson",
     "Gaussian",
     "make_readout",
@@ -530,8 +551,8 @@ class Poisson(eqx.Module, strict=True):
             Moment parameters of latent state distribution q(z_t).
         y : Array, shape (observation_dim,)
             Observed count data.
-        approx : type[Approx]
-            Exponential family approximation class.
+        approx : Approx
+            Exponential family approximation instance.
         mc_size : int
             Number of Monte Carlo samples (unused for analytic computation).
         readout : callable
@@ -550,10 +571,10 @@ class Poisson(eqx.Module, strict=True):
         where η_i = E[C_i z] and λ_i = E[exp(C_i z + b_i)] with uncertainty
         correction for the exponential nonlinearity.
         """
-        mean_z, cov_z = approx.moment_to_canon(moment)
+        mean_z, cov_z = approx.unpack(moment)
         eta = readout(t, mean_z)
         C = readout.weight
-        cvc = _quadratic_diag(C, cov_z, approx)
+        cvc = _quadratic_diag(C, cov_z)
         loglam = eta + 0.5 * cvc
         # loglam = jnp.where(loglam < _MAX_LOGRATE, loglam, jnp.log(loglam))
         loglam = jnp.minimum(loglam, _MAX_LOGRATE)
@@ -641,7 +662,7 @@ class Gaussian(eqx.Module, strict=True):
         t: Array,
         moment: Array,
         y: Array,
-        approx: type[Approx],
+        approx: Approx,
         mc_size: int,
         readout,
     ) -> Array:
@@ -658,8 +679,8 @@ class Gaussian(eqx.Module, strict=True):
             Moment parameters of latent state distribution q(z_t).
         y : Array, shape (observation_dim,)
             Observed continuous data.
-        approx : type[Approx]
-            Exponential family approximation class.
+        approx : Approx
+            Exponential family approximation instance.
         mc_size : int
             Number of Monte Carlo samples (unused for analytic computation).
         readout : callable
@@ -680,10 +701,10 @@ class Gaussian(eqx.Module, strict=True):
         where the observation covariance includes both state uncertainty
         and observation noise.
         """
-        mean_z, cov_z = approx.moment_to_canon(moment)
+        mean_z, cov_z = approx.unpack(moment)
         mean_y = readout(t, mean_z)
         C = readout.weight  # left matrix
-        cov_y = C @ approx.full_cov(cov_z) @ C.T + jnp.diag(self.cov())
+        cov_y = C @ cov_z @ C.T + jnp.diag(self.cov())
         ll = tfp.MultivariateNormalFullCovariance(mean_y, cov_y).log_prob(y)
         return ll
 
@@ -697,4 +718,3 @@ class Gaussian(eqx.Module, strict=True):
     #         Whether to make parameters static.
     #     """
     #     self.__dataclass_fields__["unconstrained_cov"].metadata = {"static": static}
-

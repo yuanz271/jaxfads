@@ -10,19 +10,21 @@ algorithms.
 from collections.abc import Callable
 from functools import partial
 from pathlib import Path
+from typing import Any
 
 import equinox as eqx
 from jax import Array, vmap
 from jax import numpy as jnp
 from jax import random as jrnd
 from gearax.modules import ConfModule, load_model, save_model
+from omegaconf import OmegaConf
 
-from . import core, encoders
+from . import core, distributions, dynamics, encoders  # noqa: F401 — side-effect registers subclasses
 from .core import Mode
-from .distributions import Approx
+from .base import Approx
 from .base import Dynamics
 from .nn import DataMasker
-from .base import ObservationModel
+from .base import Observation
 from .util import vmap_with_key
 from .logging import get_logger
 
@@ -46,7 +48,8 @@ class XFADS(ConfModule):
         - state_dim: Dimensionality of latent state
         - observation_dim: Dimensionality of observations
         - mc_size: Number of Monte Carlo samples
-        - approx: Exponential family approximation type
+        - approx: Exponential family approximation name (e.g. 'MVN')
+        - approx_kwargs: Keyword arguments for approx instantiation
         - forward: Forward dynamics model type
         - obs_conf: Observation model config
         - mode: Inference mode ('pseudo', 'bifilter' not tested)
@@ -64,7 +67,9 @@ class XFADS(ConfModule):
     masker : DataMasker
         Dropout masker for pseudo-observations during training.
     unconstrained_prior_natural : Array
-        Unconstrained prior natural parameters.
+        Free-form prior parameters (constrained to natural at inference).
+    noise_free : Array
+        Free-form noise parameters (constrained to canon/mean at inference).
 
     Notes
     -----
@@ -85,12 +90,11 @@ class XFADS(ConfModule):
     ...     'state_dim': 10,
     ...     'observation_dim': 50,
     ...     'mc_size': 100,
-    ...     'approx': 'DiagMVN',
+    ...     'approx': 'MVN',
+    ...     'approx_kwargs': {},
     ...     'forward': 'Linear',
     ...     'obs_conf': {
     ...         'model': 'GLM',
-    ...         'observation_dim': 50,
-    ...         'state_dim': 10,
     ...         'likelihood': 'Poisson',
     ...         'cov': [1.0] * 50,
     ...         'norm_readout': False,
@@ -106,18 +110,21 @@ class XFADS(ConfModule):
     >>> u = jnp.zeros((32, 100, 1))         # controls
     >>> c = jnp.zeros((32, 100, 1))         # covariates
     >>>
-    >>> natural, moment, prediction = model(t, y, u, c, key=key)
+    >>> natural, mean, prediction = model(t, y, u, c, key=key)
     """
 
     forward: Dynamics
     # backward: Dynamics | None
-    observation: ObservationModel
+    observation: Observation
     alpha_encoder: Callable
     beta_encoder: Callable
     masker: DataMasker
-    unconstrained_prior_natural: Array
+    unconstrained_prior_natural: Any
+    noise_free: Any
 
-    def __init__(self, conf, key=None):  # key unused; seed from conf for serializable reproducibility
+    def __init__(
+        self, conf, key=None
+    ):  # key unused; seed from conf for serializable reproducibility
         """
         Initialize XFADS model components.
 
@@ -136,7 +143,6 @@ class XFADS(ConfModule):
         """
         self.conf = conf
 
-        state_dim = self.conf.state_dim
         seed = self.conf.seed
         dropout = self.conf.dropout
         forward = self.conf.forward
@@ -144,9 +150,10 @@ class XFADS(ConfModule):
         key = jrnd.key(seed)
 
         logger.info(
-            "XFADS init: mode=%s approx=%s forward=%s observation_model=%s state_dim=%s obs_dim=%s mc_size=%s dropout=%s seed=%s",
+            "XFADS init: mode=%s approx=%s approx_kwargs=%s forward=%s observation_model=%s state_dim=%s obs_dim=%s mc_size=%s dropout=%s seed=%s",
             str(self.conf.mode),
             str(self.conf.approx),
+            str(dict(self.conf.approx_kwargs)),
             str(forward),
             str(self.conf.obs_conf.model),
             str(self.conf.state_dim),
@@ -158,35 +165,55 @@ class XFADS(ConfModule):
 
         self.masker = DataMasker(dropout)
 
-        key, ky = jrnd.split(key)
-        self.forward = Dynamics.get_subclass(forward)(
+        # Sub-configs may omit duplicated dimension fields; inject the global
+        # dimensions so submodules have a consistent view.
+        dyn_conf = OmegaConf.merge(
             self.conf.dyn_conf,
-            key=ky,
+            {
+                "state_dim": self.conf.state_dim,
+                "observation_dim": self.conf.observation_dim,
+            },
         )
 
         key, ky = jrnd.split(key)
-        observation_model_cls = ObservationModel.get_subclass(self.conf.obs_conf.model)
-        self.observation = observation_model_cls(self.conf.obs_conf, key=ky)
+        self.forward = Dynamics.get_subclass(forward)(dyn_conf, key=ky)
+
+        self.noise_free = self.approx.free_from_kw(scale=dyn_conf.state_noise)
+
+        obs_conf = OmegaConf.merge(
+            self.conf.obs_conf,
+            {
+                "state_dim": self.conf.state_dim,
+                "observation_dim": self.conf.observation_dim,
+                # Fail-fast validation for observation models that rely on
+                # Approx-specific helpers.
+                "_approx_name": self.conf.approx,
+            },
+        )
 
         key, ky = jrnd.split(key)
-        self.alpha_encoder = encoders.AlphaEncoder(
+        observation_model_cls = Observation.get_subclass(obs_conf.model)
+        self.observation = observation_model_cls(obs_conf, key=ky)
+
+        # Encoders are approx-agnostic; inject the flat parameter size derived
+        # from the configured approximation.
+        param_size = int(self.approx.param_size())
+        enc_conf = OmegaConf.merge(
             self.conf.enc_conf,
-            ky,
+            {"param_size": param_size, "observation_dim": self.conf.observation_dim},
         )
 
         key, ky = jrnd.split(key)
-        self.beta_encoder = encoders.BetaEncoder(
-            self.conf.enc_conf,
-            ky,
-        )
+        self.alpha_encoder = encoders.AlphaEncoder(enc_conf, ky)
+
+        key, ky = jrnd.split(key)
+        self.beta_encoder = encoders.BetaEncoder(enc_conf, ky)
 
         # TODO: add hooks to freeze observation parameters if needed.
         # if "s" in static_params:
         #     self.forward.set_static()
 
-        self.unconstrained_prior_natural = self.approx.unconstrain_natural(
-            self.approx.prior_natural(state_dim)
-        )
+        self.unconstrained_prior_natural = self.approx.free_from_kw(scale=1.0)
 
     def initialize(self, t, y, u, c):
         """
@@ -251,14 +278,16 @@ class XFADS(ConfModule):
     @property
     def approx(self):
         """
-        Exponential-family approximation class.
+        Exponential-family approximation instance.
 
         Returns
         -------
-        type[Approx]
-            The approximation type selected by configuration (e.g., `DiagMVN`).
+        Approx
+            An approximation instance configured from ``approx`` and
+            ``approx_kwargs``.
         """
-        return Approx.get_subclass(self.conf.approx)
+        cls = Approx.get_subclass(self.conf.approx)
+        return cls(dim=self.conf.state_dim, **self.conf.approx_kwargs)
 
     def prior_natural(self) -> Array:
         """
@@ -274,7 +303,11 @@ class XFADS(ConfModule):
         Applies constraints to ensure parameters are in valid range
         for the chosen exponential family approximation.
         """
-        return self.approx.constrain_natural(self.unconstrained_prior_natural)
+        return self.approx.moment_to_natural(
+            self.approx.canon_to_moment(
+                self.approx.free_to_canon(self.unconstrained_prior_natural)
+            )
+        )
 
     def __call__(self, t, y, u, c, *, key) -> tuple[Array, Array, Array]:
         """
@@ -344,7 +377,14 @@ class XFADS(ConfModule):
         >>>
         >>> natural, moment, pred = model(t, y_batch, u_batch, c_batch, key=key)
         """
-        batch_constrain_natural = vmap(vmap(self.approx.constrain_natural))
+        approx = self.approx
+
+        def _free_to_natural(free_flat):
+            canon = approx.free_to_canon(free_flat)
+            moment = approx.canon_to_moment(canon)
+            return approx.moment_to_natural(moment)
+
+        batch_free_to_natural = vmap(vmap(_free_to_natural))
         batch_alpha_encode = vmap_with_key(vmap_with_key(self.alpha_encoder))
         batch_beta_encode = vmap_with_key(self.beta_encoder)
 
@@ -363,7 +403,7 @@ class XFADS(ConfModule):
                     y = jnp.where(mask_y, y, 0)
 
                     key, alpha_key = jrnd.split(key)
-                    a = batch_constrain_natural(batch_alpha_encode(y, key=alpha_key))
+                    a = batch_free_to_natural(batch_alpha_encode(y, key=alpha_key))
                     a = jnp.where(mask_y, a, 0)  # miss_values have no updates to state
 
                     key, mask_key = jrnd.split(key)
@@ -371,7 +411,7 @@ class XFADS(ConfModule):
                     a = jnp.where(mask_a, a, 0)  # pseudo missing values
 
                     key, beta_key = jrnd.split(key)
-                    b = batch_constrain_natural(batch_beta_encode(a, key=beta_key))
+                    b = batch_free_to_natural(batch_beta_encode(a, key=beta_key))
 
                     key, mask_key = jrnd.split(key)
                     mask_b = self.masker(y, key=mask_key)

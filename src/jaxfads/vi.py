@@ -10,7 +10,7 @@ from collections.abc import Callable
 
 from jax import Array
 
-from .distributions import Approx
+from .base import Approx
 
 
 def elbo(
@@ -20,7 +20,7 @@ def elbo(
     moment_p: Array,
     y: Array,
     eloglik: Callable[..., Array],
-    approx: type[Approx],
+    approx: Approx,
     *,
     mc_size: int,
     beta: float = 1.0,
@@ -46,8 +46,8 @@ def elbo(
         Observed data at time t.
     eloglik : Callable
         Function computing expected log-likelihood E_q[log p(y_t | z_t)].
-    approx : type[Approx]
-        Exponential family approximation class for KL computation.
+    approx : Approx
+        Exponential family approximation instance for KL computation.
     mc_size : int
         Number of Monte Carlo samples for expectation approximation.
     beta : float, optional
@@ -80,22 +80,6 @@ def elbo(
 
     Maximizing the ELBO is equivalent to minimizing the negative ELBO, which
     is commonly used as the loss function during training.
-
-    Examples
-    --------
-    >>> # Compute ELBO for Poisson observations
-    >>> key = jrnd.key(42)
-    >>> t = 0
-    >>> moment_post = jnp.array([0.1, 0.2, 0.05])  # posterior moments
-    >>> moment_prior = jnp.array([0.0, 0.1, 0.02])  # prior moments
-    >>> y = jnp.array([5, 3, 1])  # count observations
-    >>>
-    >>> elbo_val = elbo(
-    ...     key, t, moment_post, moment_prior, y,
-    ...     eloglik=poisson_model.eloglik,
-    ...     approx=DiagMVN,
-    ...     mc_size=100
-    ... )
     """
     ell: Array = eloglik(key, t, moment, y, approx, mc_size)
     kl: Array = approx.kl(moment, moment_p)

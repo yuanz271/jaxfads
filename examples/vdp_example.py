@@ -23,7 +23,6 @@ from omegaconf import OmegaConf
 
 from jaxfads import XFADS, configure_logging
 from jaxfads.base import Dynamics
-from jaxfads.dynamics import DiagGaussian
 from jaxfads.nn import make_mlp
 from jaxfads.observations import GLM  # noqa: F401 — registers GLM
 from jaxfads.trainer import train
@@ -71,9 +70,7 @@ def simulate_vdp(
         z_next = rk4_step(z, dt, mu=mu)
         return z_next, z_next
 
-    _, zs = jax.vmap(
-        lambda z: jax.lax.scan(scan_fn, z, None, length=n_steps)
-    )(z0)
+    _, zs = jax.vmap(lambda z: jax.lax.scan(scan_fn, z, None, length=n_steps))(z0)
     return zs
 
 
@@ -83,15 +80,16 @@ def simulate_vdp(
 
 
 class VDPDynamics(Dynamics):
-    """Exact Van der Pol step (no model mismatch)."""
+    """Exact Van der Pol step (no model mismatch).
 
-    noise: DiagGaussian
+    Noise is auto-initialised by XFADS via ``state_noise`` in dyn_conf.
+    """
+
     mu: float
     dt: float
 
     def __init__(self, conf, key):
         self.conf = conf
-        self.noise = DiagGaussian(jnp.array(conf.cov), conf.state_dim)
         self.mu, self.dt = float(conf.mu), float(conf.dt)
 
     def rhs(self, z):
@@ -101,28 +99,27 @@ class VDPDynamics(Dynamics):
     def forward(self, z, u, c, *, key=None):
         return rk4_step(z, self.dt, mu=self.mu)
 
-    def loss(self):
-        return jnp.mean(self.cov())
-
 
 class MLPDynamics(Dynamics):
     """Trainable MLP dynamics with Euler integration.
 
     The MLP learns the continuous-time derivative ``f(z)``,
     and ``forward`` applies a single Euler step: ``z + dt · f(z)``.
+    Noise is auto-initialised by XFADS via ``state_noise`` in dyn_conf.
     """
 
-    noise: DiagGaussian
     net: enn.Sequential
     dt: float
 
     def __init__(self, conf, key):
         self.conf = conf
-        self.noise = DiagGaussian(jnp.array(conf.cov), conf.state_dim)
         self.dt = float(conf.dt)
         self.net = make_mlp(
-            conf.state_dim, conf.state_dim,
-            width=conf.width, depth=conf.depth, key=key,
+            conf.state_dim,
+            conf.state_dim,
+            width=conf.width,
+            depth=conf.depth,
+            key=key,
         )
 
     def rhs(self, z):
@@ -131,9 +128,6 @@ class MLPDynamics(Dynamics):
 
     def forward(self, z, u, c, *, key=None):
         return z + self.dt * self.rhs(z)
-
-    def loss(self):
-        return jnp.mean(self.cov())
 
 
 # ---------------------------------------------------------------------------
@@ -229,7 +223,9 @@ def flow_metrics(model, *, mu, xlim, vlim, data_pts, grid=25, alignment=None):
 
     # Density weights: Gaussian kernel on min distance to data points
     # bandwidth = median nearest-neighbour distance in data_pts
-    dists = jnp.linalg.norm(pts[:, None, :] - data_pts[None, :, :], axis=-1)  # (grid², M)
+    dists = jnp.linalg.norm(
+        pts[:, None, :] - data_pts[None, :, :], axis=-1
+    )  # (grid², M)
     min_dists = jnp.min(dists, axis=1)  # (grid²,)
     bandwidth = jnp.median(min_dists)
     weights = jnp.exp(-0.5 * (min_dists / (bandwidth + 1e-8)) ** 2)
@@ -237,14 +233,16 @@ def flow_metrics(model, *, mu, xlim, vlim, data_pts, grid=25, alignment=None):
 
     # Weighted NRMSE
     sq_err = jnp.sum((inf_rhs - true_rhs) ** 2, -1)
-    sq_true = jnp.sum(true_rhs ** 2, -1)
-    nrmse = float(jnp.sqrt(
-        jnp.sum(weights * sq_err) / (jnp.sum(weights * sq_true) + 1e-8)
-    ))
+    sq_true = jnp.sum(true_rhs**2, -1)
+    nrmse = float(
+        jnp.sqrt(jnp.sum(weights * sq_err) / (jnp.sum(weights * sq_true) + 1e-8))
+    )
 
     # Weighted mean angle
     dot = jnp.sum(inf_rhs * true_rhs, -1)
-    norms = jnp.linalg.norm(inf_rhs, axis=-1) * jnp.linalg.norm(true_rhs, axis=-1) + 1e-8
+    norms = (
+        jnp.linalg.norm(inf_rhs, axis=-1) * jnp.linalg.norm(true_rhs, axis=-1) + 1e-8
+    )
     angles = jnp.arccos(jnp.clip(dot / norms, -1, 1))
     angle = float(jnp.sum(weights * angles))
 
@@ -263,8 +261,20 @@ def _readout_bias(model):
 
 
 def evaluate(
-    name, trained, latent_states, observations, data,
-    C_true, b_true, *, key, approx, mu, xlim, vlim, grid,
+    name,
+    trained,
+    latent_states,
+    observations,
+    data,
+    C_true,
+    b_true,
+    *,
+    key,
+    approx,
+    mu,
+    xlim,
+    vlim,
+    grid,
     align_flow=True,
 ):
     """Infer, align, compute metrics, and print results.
@@ -283,8 +293,8 @@ def evaluate(
     D = latent_states.shape[-1]
 
     # Inference
-    _, moments, _ = trained(times, obs, inputs, covs, key=key)
-    means, post_covs = jax.vmap(jax.vmap(approx.moment_to_canon))(moments)
+    _, means, _ = trained(times, obs, inputs, covs, key=key)
+    means, post_covs = jax.vmap(jax.vmap(approx.unpack))(means)
 
     # Procrustes alignment
     aff = procrustes_affine(latent_states.reshape(-1, D), means.reshape(-1, D))
@@ -307,8 +317,13 @@ def evaluate(
     # Use true latent states as the data region for density weighting
     data_pts_flat = latent_states.reshape(-1, D)
     nrmse, angle = flow_metrics(
-        trained, mu=mu, xlim=xlim, vlim=vlim, data_pts=data_pts_flat,
-        grid=grid, alignment=flow_aff,
+        trained,
+        mu=mu,
+        xlim=xlim,
+        vlim=vlim,
+        data_pts=data_pts_flat,
+        grid=grid,
+        alignment=flow_aff,
     )
 
     print(f"\n--- {name} ---")
@@ -318,9 +333,15 @@ def evaluate(
     print(f"  flow NRMSE: {nrmse:.4f},  angle: {angle:.4f} rad")
 
     return dict(
-        post_rmse=post_rmse, C_rmse=C_rmse, b_rmse=b_rmse,
-        obs_rmse=obs_rmse, flow_nrmse=nrmse, flow_angle=angle,
-        aligned_means=aligned, covs=post_covs, alignment=aff,
+        post_rmse=post_rmse,
+        C_rmse=C_rmse,
+        b_rmse=b_rmse,
+        obs_rmse=obs_rmse,
+        flow_nrmse=nrmse,
+        flow_angle=angle,
+        aligned_means=aligned,
+        covs=post_covs,
+        alignment=aff,
     )
 
 
@@ -337,7 +358,11 @@ def plot_posterior(name, means, covs, truth, trial, T, out_dir):
     for i, label in enumerate(("x", "v")):
         ax[0].plot(t, truth[trial, :, i], label=f"true {label}", color=f"C{i}", lw=2)
         ax[0].plot(
-            t, means[trial, :, i], "--", label=f"inferred {label}", color=f"C{i}",
+            t,
+            means[trial, :, i],
+            "--",
+            label=f"inferred {label}",
+            color=f"C{i}",
         )
     ax[0].set_title(f"Posterior mean vs truth — {name}")
     ax[0].legend(ncol=2)
@@ -350,9 +375,12 @@ def plot_posterior(name, means, covs, truth, trial, T, out_dir):
     for i, label in enumerate(("x", "v")):
         ax[1].plot(t, means[trial, :, i], color=f"C{i}")
         ax[1].fill_between(
-            t, means[trial, :, i] - 2 * std[:, i],
+            t,
+            means[trial, :, i] - 2 * std[:, i],
             means[trial, :, i] + 2 * std[:, i],
-            color=f"C{i}", alpha=0.2, label=f"{label} ±2σ",
+            color=f"C{i}",
+            alpha=0.2,
+            label=f"{label} ±2σ",
         )
     ax[1].set_title(f"Posterior uncertainty — {name}")
     ax[1].legend(ncol=2)
@@ -363,8 +391,17 @@ def plot_posterior(name, means, covs, truth, trial, T, out_dir):
 
 
 def plot_flow_field(
-    name, model, true_traj, inferred_traj,
-    mu, xlim, vlim, grid, out_dir, *, alignment=None,
+    name,
+    model,
+    true_traj,
+    inferred_traj,
+    mu,
+    xlim,
+    vlim,
+    grid,
+    out_dir,
+    *,
+    alignment=None,
 ):
     """Side-by-side streamplots: true vs inferred flow field."""
     xs = jnp.linspace(*xlim, grid)
@@ -383,8 +420,13 @@ def plot_flow_field(
         dx = rhs[:, 0].reshape(grid, grid)
         dv = rhs[:, 1].reshape(grid, grid)
         a.streamplot(
-            np.asarray(X), np.asarray(V), np.asarray(dx), np.asarray(dv),
-            density=1.2, linewidth=0.8, color=color,
+            np.asarray(X),
+            np.asarray(V),
+            np.asarray(dx),
+            np.asarray(dv),
+            density=1.2,
+            linewidth=0.8,
+            color=color,
         )
         a.plot(np.asarray(traj[:, 0]), np.asarray(traj[:, 1]), color="k", lw=1.2)
         a.set(title=title, xlim=xlim, ylim=vlim, xlabel="x")
@@ -405,7 +447,7 @@ def main() -> None:
     print("JAX devices:", jax.devices())
 
     # ----- Synthesis -----
-    N, T, dt, mu = 128, 800, 0.02, 2.0
+    N, T, dt, mu = 128, 500, 0.04, 2.0
     obs_dim, state_dim = 10, 2
     sigma_obs = 0.3
 
@@ -416,8 +458,7 @@ def main() -> None:
     C_true = 0.7 * jr.normal(k_C, (obs_dim, state_dim))
     b_true = 0.1 * jr.normal(k_b, (obs_dim,))
     observations = (
-        latent_states @ C_true.T + b_true
-        + sigma_obs * jr.normal(k_y, (N, T, obs_dim))
+        latent_states @ C_true.T + b_true + sigma_obs * jr.normal(k_y, (N, T, obs_dim))
     )
 
     times = jnp.broadcast_to(jnp.arange(T), (N, T))
@@ -446,30 +487,54 @@ def main() -> None:
     xlim, vlim, grid = (-3.0, 3.0), (-3.0, 3.0), 25
 
     enc_conf = dict(
-        observation_dim=obs_dim, state_dim=state_dim,
-        approx="DiagMVN", width=32, depth=2, dropout=None,
+        width=32,
+        depth=2,
+        dropout=None,
     )
     obs_conf = dict(
-        model="GLM", likelihood="Gaussian",
-        observation_dim=obs_dim, state_dim=state_dim,
-        cov=[float(sigma_obs ** 2)] * obs_dim,
-        norm_readout=False, dropout=0.0,
-        readout_init_conf=dict(obs_noise_var=float(sigma_obs ** 2)),
+        model="GLM",
+        likelihood="Gaussian",
+        cov=[float(sigma_obs**2)] * obs_dim,
+        norm_readout=False,
+        dropout=0.0,
+        readout_init_conf=dict(obs_noise_var=float(sigma_obs**2)),
     )
     shared_conf = dict(
-        mode="pseudo", observation_dim=obs_dim, state_dim=state_dim,
-        approx="DiagMVN", seed=0, n_steps=T,
-        fb_penalty=0.0, noise_penalty=0.01, dropout=0.0,
-        enc_conf=enc_conf, obs_conf=obs_conf,
+        mode="pseudo",
+        observation_dim=obs_dim,
+        state_dim=state_dim,
+        approx="MVN",
+        # Explicit for tutorial purposes. Use {"structure": "diag"} for a
+        # diagonal exponential-family Gaussian approximation.
+        approx_kwargs={"structure": "full"},
+        seed=0,
+        n_steps=T,
+        fb_penalty=0.0,
+        noise_penalty=0.01,
+        dropout=0.0,
+        enc_conf=enc_conf,
+        obs_conf=obs_conf,
     )
 
     n_devices = len(jax.devices())
     batch_size = max(n_devices, (32 // n_devices) * n_devices)
-    trainer_conf = OmegaConf.create(dict(
-        seed=0, learning_rate=1e-3, clip_norm=5.0, weight_decay=1e-3,
-        noise_eta=0.0, noise_gamma=0.8, min_epoch=0, max_epoch=300,
-        batch_size=batch_size, validation_size=batch_size, valid_ratio=0.2,
-    ))
+
+    base_trainer_conf = dict(
+        seed=0,
+        learning_rate=1e-3,
+        clip_norm=5.0,
+        weight_decay=1e-3,
+        noise_eta=0.0,
+        noise_gamma=0.8,
+        min_epoch=0,
+        batch_size=batch_size,
+        validation_size=batch_size,
+        valid_ratio=0.2,
+    )
+
+    trainer_conf_vdp = OmegaConf.create({**base_trainer_conf, "max_epoch": 100})
+    trainer_conf_mlp = OmegaConf.create({**base_trainer_conf, "max_epoch": 500})
+    trainer_conf_ou = OmegaConf.create({**base_trainer_conf, "max_epoch": 100})
 
     # ===================================================================
     # Case 1: VDPDynamics (exact Van der Pol)
@@ -478,32 +543,59 @@ def main() -> None:
     print("Case 1: VDPDynamics (exact Van der Pol)")
     print("=" * 60)
 
-    conf1 = OmegaConf.create({
-        **shared_conf, "forward": "VDPDynamics", "mc_size": 1,
-        "dyn_conf": dict(
-            state_dim=state_dim, input_dim=0, context_dim=0,
-            mu=mu, dt=dt, cov=1.0,
-        ),
-    })
+    conf1 = OmegaConf.create(
+        {
+            **shared_conf,
+            "forward": "VDPDynamics",
+            "mc_size": 1,
+            "dyn_conf": dict(
+                input_dim=0,
+                context_dim=0,
+                mu=mu,
+                dt=dt,
+                state_noise=1.0,
+            ),
+        }
+    )
     model1 = XFADS(conf1, jr.key(123))
     model1 = model1.initialize(*data)
-    approx = model1.approx  # DiagMVN — shared by both cases
+    approx = model1.approx  # shared by both cases
 
-    trained1 = train(model1, data, conf=trainer_conf)
+    trained1 = train(model1, data, conf=trainer_conf_vdp)
 
     key, k = jr.split(key)
     eval_kw = dict(approx=approx, mu=mu, xlim=xlim, vlim=vlim, grid=grid)
     r1 = evaluate(
-        "VDPDynamics", trained1, latent_states, observations,
-        data, C_true, b_true, key=k, align_flow=False, **eval_kw,
+        "VDPDynamics",
+        trained1,
+        latent_states,
+        observations,
+        data,
+        C_true,
+        b_true,
+        key=k,
+        align_flow=False,
+        **eval_kw,
     )
     plot_posterior(
-        "vdp", r1["aligned_means"], r1["covs"],
-        latent_states, 0, T, out_dir,
+        "vdp",
+        r1["aligned_means"],
+        r1["covs"],
+        latent_states,
+        0,
+        T,
+        out_dir,
     )
     plot_flow_field(
-        "vdp", trained1, latent_states[0], r1["aligned_means"][0],
-        mu, xlim, vlim, grid, out_dir,
+        "vdp",
+        trained1,
+        latent_states[0],
+        r1["aligned_means"][0],
+        mu,
+        xlim,
+        vlim,
+        grid,
+        out_dir,
     )
 
     # Save / load roundtrip
@@ -511,7 +603,9 @@ def main() -> None:
         path = Path(tmp) / "model.zip"
         XFADS.save(trained1, path)
         reloaded = XFADS.load(path)
-        reloaded(times[:1], observations[:1], inputs[:1], covariates[:1], key=jr.key(99))
+        reloaded(
+            times[:1], observations[:1], inputs[:1], covariates[:1], key=jr.key(99)
+        )
         print("Save/load roundtrip: OK")
 
     # ===================================================================
@@ -521,30 +615,118 @@ def main() -> None:
     print("Case 2: MLPDynamics (learned dynamics)")
     print("=" * 60)
 
-    conf2 = OmegaConf.create({
-        **shared_conf, "forward": "MLPDynamics", "mc_size": 4,
-        "dyn_conf": dict(
-            state_dim=state_dim, input_dim=0, context_dim=0,
-            cov=1.0, width=32, depth=1, dt=dt,
-        ),
-    })
+    conf2 = OmegaConf.create(
+        {
+            **shared_conf,
+            "forward": "MLPDynamics",
+            "mc_size": 4,
+            "dyn_conf": dict(
+                input_dim=0,
+                context_dim=0,
+                state_noise=1.0,
+                width=32,
+                depth=1,
+                dt=dt,
+            ),
+        }
+    )
     model2 = XFADS(conf2, jr.key(456))
     model2 = model2.initialize(*data)
 
-    trained2 = train(model2, data, conf=trainer_conf)
+    trained2 = train(model2, data, conf=trainer_conf_mlp)
 
     key, k = jr.split(key)
     r2 = evaluate(
-        "MLPDynamics", trained2, latent_states, observations,
-        data, C_true, b_true, key=k, **eval_kw,
+        "MLPDynamics",
+        trained2,
+        latent_states,
+        observations,
+        data,
+        C_true,
+        b_true,
+        key=k,
+        **eval_kw,
     )
     plot_posterior(
-        "mlp", r2["aligned_means"], r2["covs"],
-        latent_states, 0, T, out_dir,
+        "mlp",
+        r2["aligned_means"],
+        r2["covs"],
+        latent_states,
+        0,
+        T,
+        out_dir,
     )
     plot_flow_field(
-        "mlp", trained2, latent_states[0], r2["aligned_means"][0],
-        mu, xlim, vlim, grid, out_dir, alignment=r2["alignment"],
+        "mlp",
+        trained2,
+        latent_states[0],
+        r2["aligned_means"][0],
+        mu,
+        xlim,
+        vlim,
+        grid,
+        out_dir,
+        alignment=r2["alignment"],
+    )
+
+    # ===================================================================
+    # Case 3: OUDynamics (diffusion-style tracking prior)
+    # ===================================================================
+    print("\n" + "=" * 60)
+    print("Case 3: OUDynamics (diffusion-style tracking prior)")
+    print("=" * 60)
+
+    conf3 = OmegaConf.create(
+        {
+            **shared_conf,
+            "forward": "OUDynamics",
+            "mc_size": 4,
+            "dyn_conf": dict(
+                input_dim=0,
+                context_dim=0,
+                theta=2.0,
+                dt=dt,
+                state_noise=1.0,
+            ),
+        }
+    )
+    model3 = XFADS(conf3, jr.key(789))
+    model3 = model3.initialize(*data)
+
+    trained3 = train(model3, data, conf=trainer_conf_ou)
+
+    key, k = jr.split(key)
+    r3 = evaluate(
+        "OUDynamics",
+        trained3,
+        latent_states,
+        observations,
+        data,
+        C_true,
+        b_true,
+        key=k,
+        **eval_kw,
+    )
+    plot_posterior(
+        "ou",
+        r3["aligned_means"],
+        r3["covs"],
+        latent_states,
+        0,
+        T,
+        out_dir,
+    )
+    plot_flow_field(
+        "ou",
+        trained3,
+        latent_states[0],
+        r3["aligned_means"][0],
+        mu,
+        xlim,
+        vlim,
+        grid,
+        out_dir,
+        alignment=r3["alignment"],
     )
 
     # ===================================================================
@@ -553,7 +735,9 @@ def main() -> None:
     print("\n" + "=" * 72)
     print(f"Summary  (Procrustes-aligned; obs noise σ = {sigma_obs})")
     print("=" * 72)
-    header = f"{'Metric':<30s} {'VDPDynamics':>14s} {'MLPDynamics':>14s}"
+    header = (
+        f"{'Metric':<30s} {'VDPDynamics':>14s} {'MLPDynamics':>14s} {'OUDynamics':>14s}"
+    )
     print(header)
     print("-" * len(header))
     for metric, label in [
@@ -564,7 +748,9 @@ def main() -> None:
         ("flow_nrmse", "Flow NRMSE"),
         ("flow_angle", "Flow angle (rad)"),
     ]:
-        print(f"{label:<30s} {r1[metric]:>14.4f} {r2[metric]:>14.4f}")
+        print(
+            f"{label:<30s} {r1[metric]:>14.4f} {r2[metric]:>14.4f} {r3[metric]:>14.4f}"
+        )
     print("=" * len(header))
 
 

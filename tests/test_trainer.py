@@ -5,30 +5,21 @@ from omegaconf import OmegaConf
 
 from jaxfads.trainer import train
 from jaxfads.smoother import XFADS
-from jaxfads.base import Dynamics, Noise
+from jaxfads.base import Dynamics
 import jaxfads.observations  # noqa: F401 — register GLM subclass
 
 
 class MockDynamics(Dynamics):
-    """Mock dynamics for testing."""
+    """Mock dynamics for testing — pure deterministic identity."""
 
-    noise: Noise
     layer: eqx.Module | None
 
     def __init__(self, conf, key):
-        from jaxfads.dynamics import DiagGaussian
-
         self.conf = conf
-        state_dim = self.conf.state_dim
-        state_noise = self.conf.state_noise
-        self.noise = DiagGaussian(jnp.array(state_noise), state_dim)
         self.layer = None
 
     def forward(self, z, u, c, *, key=None) -> Array:
         return z
-
-    def loss(self):
-        return 0.0
 
 
 @pytest.fixture
@@ -81,7 +72,8 @@ def model_conf():
             "observation_dim": 10,
             "state_dim": 2,
             "forward": "MockDynamics",
-            "approx": "DiagMVN",
+            "approx": "MVN",
+            "approx_kwargs": {},
             "mc_size": 1,
             "seed": 0,
             "n_steps": 10,
@@ -92,8 +84,6 @@ def model_conf():
                 {
                     "width": 8,
                     "depth": 1,
-                    "observation_dim": 10,
-                    "state_dim": 2,
                     "input_dim": 1,
                     "context_dim": 0,
                     "state_noise": 1.0,
@@ -104,16 +94,11 @@ def model_conf():
                     "width": 8,
                     "depth": 1,
                     "dropout": 0.0,
-                    "observation_dim": 10,
-                    "state_dim": 2,
-                    "approx": "DiagMVN",
                 }
             ),
             "obs_conf": OmegaConf.create(
                 {
                     "model": "GLM",
-                    "observation_dim": 10,
-                    "state_dim": 2,
                     "emission_noise": 1.0,
                     "norm_readout": False,
                     "dropout": 0.0,
