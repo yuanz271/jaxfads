@@ -99,9 +99,13 @@ uv run pytest
 
 #### Pre-commit checklist (before any `git commit`)
 
-- Ensure git hooks are installed: `uv run prek install`
-- If hooks are not available (or for CI/debug), run manually: `uv run prek run --all-files`
-- Run tests when code changes under `src/`: `uv run pytest` (per Testing conventions)
+- [ ] Review `git status` and `git diff`
+- [ ] Update docs per the documentation hard gates above
+- [ ] Ensure todos are updated (and closed if complete)
+- [ ] Run quick checks when applicable:
+  - `uv run prek install` (one-time)
+  - `uv run prek run --all-files`
+  - `uv run pytest` (when code changes under `src/`)
 
 ## Documentation conventions
 
