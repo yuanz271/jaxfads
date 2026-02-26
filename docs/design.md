@@ -15,6 +15,16 @@ The core algorithm (`core.py`, `vi.py`) interacts only with the `Approx`
 interface.  Distribution-specific callers (e.g. `observations.py`) access
 subclass methods directly through the concrete instance.
 
+**Observation-model note (GLM):** the built-in `GLM` observation model uses an
+analytic expected log-likelihood that currently relies on MVN-specific helpers
+(`approx.unpack(moment)`). As a result, it supports only the `MVN` latent
+approximation.
+
+For constructor-time fail-fast errors, `XFADS` injects `obs_conf._approx_name`
+into the observation config; `GLM.__init__` validates this field.
+If you construct `GLM` directly (outside `XFADS`), you must set
+`conf._approx_name="MVN"` to bypass the injection step.
+
 ### Subclass Registration
 
 Subclasses are discovered via `Approx.get_subclass("MVN")` using
