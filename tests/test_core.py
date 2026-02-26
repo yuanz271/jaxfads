@@ -40,7 +40,7 @@ def test_filter_shapes_and_finite(diag):
     state_dim, T = 2, 4
     model = DummyModel(diag, state_dim)
     key = jrnd.key(0)
-    param_dim = diag.param_size(state_dim)
+    param_dim = diag.param_size()
 
     alpha = jnp.zeros((T, param_dim))
     u = jnp.zeros((T, 0))
@@ -57,7 +57,7 @@ def test_bismooth_shapes_and_finite(diag):
     state_dim, T = 2, 5
     model = DummyModel(diag, state_dim)
     key = jrnd.key(1)
-    param_dim = diag.param_size(state_dim)
+    param_dim = diag.param_size()
 
     alpha = jnp.zeros((T, param_dim))
     u = jnp.zeros((T, 0))

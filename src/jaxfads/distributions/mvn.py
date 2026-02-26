@@ -17,7 +17,7 @@ sufficient statistics:
 - ``T₂(z) = -½ (z ⊙ z)``
 
 This yields a 2D moment/natural representation while keeping the same public
-`Approx` interface. Callers stay agnostic by using `param_size(...)` and the
+`Approx` interface. Callers stay agnostic by using `param_size()` and the
 (flat) moment/natural conversions.
 
 Notes
@@ -36,6 +36,57 @@ from tensorflow_probability.substrates.jax import distributions as tfd
 
 from ..base import Approx
 from ..constraints import _EPS, constrain_positive, unconstrain_positive
+
+
+class _Layout(NamedTuple):
+    """Internal MVN layout helper.
+
+    Centralizes the structure-dependent parsing/sizing logic for the flat
+    natural/moment/free vectors.
+    """
+
+    dim: int
+    structure: Literal["full", "diag"]
+
+    @property
+    def is_full(self) -> bool:
+        return self.structure == "full"
+
+    @property
+    def is_diag(self) -> bool:
+        return self.structure == "diag"
+
+    def param_size(self) -> int:
+        d = self.dim
+        return (d + d * d) if self.is_full else (2 * d)
+
+    def split_moment(self, moment: Array) -> tuple[Array, Array]:
+        d = self.dim
+        m = moment[:d]
+        if self.is_full:
+            t2 = jnp.reshape(moment[d:], (d, d))
+        else:
+            t2 = moment[d:]
+        return m, t2
+
+    def split_natural(self, natural: Array) -> tuple[Array, Array]:
+        d = self.dim
+        h = natural[:d]
+        if self.is_full:
+            J = jnp.reshape(natural[d:], (d, d))
+            J = 0.5 * (J + J.T)
+            return h, J
+        j = natural[d:]
+        return h, j
+
+    def split_free(self, free: Array) -> tuple[Array, Array]:
+        d = self.dim
+        loc = free[:d]
+        if self.is_full:
+            chol_free = jnp.reshape(free[d:], (d, d))
+        else:
+            chol_free = free[d:]
+        return loc, chol_free
 
 
 class MVNParam(NamedTuple):
@@ -142,54 +193,33 @@ class MVN(Approx):
     """
 
     def __init__(self, dim: int, *, structure: Literal["full", "diag"] = "full"):
-        self._dim = int(dim)
+        dim = int(dim)
         if structure not in ("full", "diag"):
             raise ValueError("structure must be one of {'full', 'diag'}")
-        self._structure: Literal["full", "diag"] = structure
+
+        self._layout = _Layout(dim=dim, structure=structure)
 
     # ---------------------------------------------------------------------
     # sizes
     # ---------------------------------------------------------------------
 
-    def param_size(self, state_dim: int) -> int:
+    def param_size(self) -> int:
         """See base class."""
-        d = self._dim
-        if self._structure == "full":
-            return d + d * d
-        return 2 * d
+        return self._layout.param_size()
 
     # ---------------------------------------------------------------------
     # helpers
     # ---------------------------------------------------------------------
 
-    def _split_moment(self, moment: Array) -> tuple[Array, Array]:
-        d = self._dim
-        m = moment[:d]
-        if self._structure == "full":
-            t2 = jnp.reshape(moment[d:], (d, d))
-        else:
-            t2 = moment[d:]
-        return m, t2
-
-    def _split_natural(self, natural: Array) -> tuple[Array, Array]:
-        d = self._dim
-        h = natural[:d]
-        if self._structure == "full":
-            J = jnp.reshape(natural[d:], (d, d))
-            J = 0.5 * (J + J.T)
-            return h, J
-        j = natural[d:]
-        return h, j
-
     def unpack(self, moment: Array) -> tuple[Array, Array]:
         """Extract (mean, covariance) from moment parameters."""
-        m, t2 = self._split_moment(moment)
+        m, t2 = self._layout.split_moment(moment)
 
-        if self._structure == "full":
+        if self._layout.is_full:
             second = -2.0 * t2  # E[zz^T]
             cov = second - jnp.outer(m, m)
             cov = 0.5 * (cov + cov.T)
-            cov = cov + _EPS * jnp.eye(self._dim, dtype=cov.dtype)
+            cov = cov + _EPS * jnp.eye(self._layout.dim, dtype=cov.dtype)
             return m, cov
 
         # diag structure: t2 = E[-1/2 z^2]
@@ -200,7 +230,7 @@ class MVN(Approx):
 
     def pack(self, mean: Array, cov: Array) -> Array:
         """Pack (mean, covariance) into moment parameters."""
-        if self._structure == "full":
+        if self._layout.is_full:
             cov = 0.5 * (cov + cov.T)
             second = cov + jnp.outer(mean, mean)
             t2 = -0.5 * second
@@ -221,9 +251,9 @@ class MVN(Approx):
 
     def natural_to_moment(self, natural: Array) -> Array:
         """See base class."""
-        h, J_or_j = self._split_natural(natural)
+        h, J_or_j = self._layout.split_natural(natural)
 
-        if self._structure == "full":
+        if self._layout.is_full:
             J = J_or_j
             mean = jnp.linalg.solve(J, h)
             cov = _damping_inv(J)
@@ -239,8 +269,8 @@ class MVN(Approx):
         """See base class."""
         mean, cov = self.unpack(moment)
 
-        if self._structure == "full":
-            cov = cov + _EPS * jnp.eye(self._dim, dtype=cov.dtype)
+        if self._layout.is_full:
+            cov = cov + _EPS * jnp.eye(self._layout.dim, dtype=cov.dtype)
             J = _damping_inv(cov)
             h = J @ mean
             return jnp.concatenate((h, J.ravel()))
@@ -255,47 +285,28 @@ class MVN(Approx):
     # sampling / KL
     # ---------------------------------------------------------------------
 
-    def sample_by_moment(self, key: Array, moment: Array, mc_size: int) -> Array:
-        """See base class."""
+    def _tfd_dist_from_moment(self, moment: Array):
         mean, cov = self.unpack(moment)
 
-        if self._structure == "diag":
-            var = jnp.diag(cov)
-            scale = jnp.sqrt(var)
-            dist = tfd.MultivariateNormalDiag(mean, scale_diag=scale)
-        else:
-            dist = tfd.MultivariateNormalFullCovariance(mean, cov)
+        if self._layout.is_diag:
+            scale = jnp.sqrt(jnp.diag(cov))
+            return tfd.MultivariateNormalDiag(mean, scale_diag=scale)
 
-        return dist.sample(mc_size, seed=key)
+        return tfd.MultivariateNormalFullCovariance(mean, cov)
+
+    def sample_by_moment(self, key: Array, moment: Array, mc_size: int) -> Array:
+        """See base class."""
+        return self._tfd_dist_from_moment(moment).sample(mc_size, seed=key)
 
     def kl(self, moment1: Array, moment2: Array) -> Array:
         """See base class."""
-        m1, cov1 = self.unpack(moment1)
-        m2, cov2 = self.unpack(moment2)
-
-        if self._structure == "diag":
-            s1 = jnp.sqrt(jnp.diag(cov1))
-            s2 = jnp.sqrt(jnp.diag(cov2))
-            p = tfd.MultivariateNormalDiag(m1, scale_diag=s1)
-            q = tfd.MultivariateNormalDiag(m2, scale_diag=s2)
-        else:
-            p = tfd.MultivariateNormalFullCovariance(m1, cov1)
-            q = tfd.MultivariateNormalFullCovariance(m2, cov2)
-
+        p = self._tfd_dist_from_moment(moment1)
+        q = self._tfd_dist_from_moment(moment2)
         return tfd.kl_divergence(p, q, allow_nan_stats=False)
 
     # ---------------------------------------------------------------------
     # free ↔ canon
     # ---------------------------------------------------------------------
-
-    def _split_free(self, free: Array) -> tuple[Array, Array]:
-        d = self._dim
-        loc = free[:d]
-        if self._structure == "full":
-            chol_free = jnp.reshape(free[d:], (d, d))
-        else:
-            chol_free = free[d:]
-        return loc, chol_free
 
     def free_to_canon(self, free: Array) -> MVNParam:
         """See base class.
@@ -310,9 +321,9 @@ class MVN(Approx):
             - ``structure='diag'``: ``[loc, chol_diag_free]`` with
               ``chol_diag_free`` shape ``(D,)``.
         """
-        loc, chol_free = self._split_free(free)
+        loc, chol_free = self._layout.split_free(free)
 
-        if self._structure == "full":
+        if self._layout.is_full:
             chol = _constrain_chol_full(chol_free)
         else:
             chol = _constrain_chol_diag(chol_free)
@@ -321,7 +332,7 @@ class MVN(Approx):
 
     def canon_to_free(self, canon: MVNParam) -> Array:
         """See base class."""
-        if self._structure == "full":
+        if self._layout.is_full:
             chol_free = _unconstrain_chol_full(canon.chol)
             return jnp.concatenate((canon.loc, chol_free.ravel()))
 
@@ -341,8 +352,8 @@ class MVN(Approx):
         """See base class."""
         mean, cov = self.unpack(moment)
 
-        if self._structure == "full":
-            cov = cov + _EPS * jnp.eye(self._dim, dtype=cov.dtype)
+        if self._layout.is_full:
+            cov = cov + _EPS * jnp.eye(self._layout.dim, dtype=cov.dtype)
             chol = jnp.linalg.cholesky(cov)
             return MVNParam(loc=mean, chol=chol)
 
@@ -362,12 +373,12 @@ class MVN(Approx):
 
         Creates free-form parameters for ``N(loc, diag(scale))``.
         """
-        d = self._dim
+        d = self._layout.dim
         loc_arr = jnp.broadcast_to(jnp.asarray(loc, dtype=jnp.float32), (d,))
         diag = jnp.broadcast_to(jnp.asarray(scale, dtype=jnp.float32), (d,))
         diag = jnp.maximum(diag, _EPS)
 
-        if self._structure == "full":
+        if self._layout.is_full:
             cov = jnp.diag(diag)
             chol = jnp.linalg.cholesky(cov + _EPS * jnp.eye(d, dtype=cov.dtype))
             canon = MVNParam(loc=loc_arr, chol=chol)

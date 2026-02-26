@@ -103,20 +103,8 @@ class Approx(SubclassRegistryMixin, ABC):
         ...
 
     @abstractmethod
-    def param_size(self, state_dim: int) -> int:
-        """
-        Get the natural parameter size for given state dimension.
-
-        Parameters
-        ----------
-        state_dim : int
-            Dimensionality of the state space.
-
-        Returns
-        -------
-        int
-            Total number of natural parameters.
-        """
+    def param_size(self) -> int:
+        """Return the flat natural-parameter size for this instance."""
         ...
 
     @abstractmethod

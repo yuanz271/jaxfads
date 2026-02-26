@@ -10,7 +10,7 @@ from conftest import make_approx
 def _enc_conf(spec, *, dropout=None):
     # Encoders are Approx-agnostic; they only need the flat parameter length.
     approx = make_approx(spec["state_dim"], spec["approx"], **spec["approx_kwargs"])
-    param_size = approx.param_size(spec["state_dim"])
+    param_size = approx.param_size()
 
     return OmegaConf.create(
         dict(

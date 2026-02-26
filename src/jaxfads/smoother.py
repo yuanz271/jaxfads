@@ -194,7 +194,7 @@ class XFADS(ConfModule):
 
         # Encoders are approx-agnostic; inject the flat parameter size derived
         # from the configured approximation.
-        param_size = int(self.approx.param_size(self.conf.state_dim))
+        param_size = int(self.approx.param_size())
         enc_conf = OmegaConf.merge(
             self.conf.enc_conf,
             {"param_size": param_size, "observation_dim": self.conf.observation_dim},

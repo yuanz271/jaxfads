@@ -116,7 +116,7 @@ Quick reference (public API):
 | Method | Signature | Role |
 |--------|-----------|------|
 | `free_from_kw` | `(**kwargs) → pytree` | Create free-form pytree from serializable spec |
-| `param_size` | `(dim) → int` | Natural parameter vector size |
+| `param_size` | `() → int` | Natural parameter vector size |
 
 ### Canon ↔ free-form (pytree ↔ pytree)
 

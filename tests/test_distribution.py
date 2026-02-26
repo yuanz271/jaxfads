@@ -22,7 +22,7 @@ def _random_diag_pd(key, dim: int, jitter: float = 1e-1) -> jnp.ndarray:
 def test_param_size(structure, dim):
     mvn = MVN(dim=dim, structure=structure)
     expected = (dim + dim * dim) if structure == "full" else (2 * dim)
-    assert mvn.param_size(dim) == expected
+    assert mvn.param_size() == expected
 
 
 @pytest.mark.parametrize("structure", ["full", "diag"])
