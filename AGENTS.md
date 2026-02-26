@@ -97,6 +97,16 @@ uv run ruff format .
 uv run pytest
 ```
 
+## Dependency / workflow notes
+
+- `jaxtyping` is a runtime dependency used for type annotations (e.g. the
+  `PyTree` type in `src/jaxfads/base.py`).
+- `prek` (dev dependency) is used to run the pre-commit hooks defined in
+  `.pre-commit-config.yaml` (currently `ruff-format` and `ruff`).
+  Use:
+  - `uv run prek install` (one-time)
+  - `uv run prek run --all-files`
+
 #### Pre-commit checklist (before any `git commit`)
 
 - [ ] Review `git status` and `git diff`
