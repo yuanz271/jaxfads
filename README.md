@@ -24,17 +24,8 @@ All dependencies—including `gearax` (pinned to a specific commit)—are resolv
 
 ## Documentation
 
-The `docs/` folder mirrors the `src/` structure.
-
-- [Core notation](docs/meta/notation.md)
-- [Algorithm overview](docs/meta/algorithm.md)
-- [Design notes](docs/meta/design.md)
-
-Module docs:
-- [`jaxfads.smoother`](docs/jaxfads/smoother.md)
-- [`jaxfads.trainer`](docs/jaxfads/trainer.md)
-- [`jaxfads.base`](docs/jaxfads/base.md)
-- [`jaxfads.dynamics.ou`](docs/jaxfads/dynamics/ou.md)
+- [Writing Custom Dynamics Modules](docs/dynamics.md)
+- [Training Configuration](docs/training.md)
 
 ## Examples
 
