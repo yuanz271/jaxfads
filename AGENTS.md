@@ -102,6 +102,8 @@ uv run pytest
 - [ ] Review `git status` and `git diff`
 - [ ] Update docs per the documentation hard gates above
 - [ ] Ensure todos are updated (and closed if complete)
+- [ ] Ensure commit is run as an isolated command (no chained commands)
+- [ ] Ask for confirmation before running `git commit`
 - [ ] Run quick checks when applicable:
   - `uv run prek install` (one-time)
   - `uv run prek run --all-files`
