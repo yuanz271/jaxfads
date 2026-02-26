@@ -1,0 +1,270 @@
+"""Algorithm-level tests.
+
+Focus:
+- Consistency with the XFADS paper (Eq. 4 / Eq. 12 semantics)
+- Mathematical correctness of exp-family conversions
+- Numerical stability (nonfinite-safe MC aggregation)
+- Basic functionality of filtering/smoothing primitives
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from functools import partial as fpartial
+from types import SimpleNamespace
+
+import chex
+import jax
+from jax import Array
+from jax import numpy as jnp
+from jax import random as jr
+
+from jaxfads import core
+from jaxfads.base import Dynamics
+from jaxfads.core import expected_predictive_moment
+from jaxfads.vi import elbo
+
+
+# -----------------------------------------------------------------------------
+# Filtering / smoothing shape + finiteness
+# -----------------------------------------------------------------------------
+
+
+class _IdentityDynamics(Dynamics):
+    def __init__(self, state_dim: int):
+        self.conf = SimpleNamespace(state_dim=state_dim)
+
+    def forward(self, z, u, c, *, key=None):
+        del u, c, key
+        return z
+
+
+class _DummyModel:
+    """Minimal model duck-typing XFADS for core.filter / core.bismooth."""
+
+    def __init__(self, approx, state_dim: int, mc_size: int = 1, cov: float = 1.0):
+        self.approx = approx
+        self.conf = SimpleNamespace(mc_size=mc_size)
+        self.forward = _IdentityDynamics(state_dim)
+        self.backward = _IdentityDynamics(state_dim)
+        self.noise_free = approx.free_from_kw(scale=cov)
+
+    def prior_natural(self):
+        return self.approx.moment_to_natural(
+            self.approx.canon_to_moment(
+                self.approx.free_to_canon(self.approx.free_from_kw(scale=1.0))
+            )
+        )
+
+
+def test_filter_shapes_and_finite(diag):
+    state_dim, T = 2, 4
+    model = _DummyModel(diag, state_dim)
+    key = jr.key(0)
+    param_dim = diag.param_size()
+
+    alpha = jnp.zeros((T, param_dim))
+    u = jnp.zeros((T, 0))
+    c = jnp.zeros((T, 0))
+
+    nature_f, moment_f, moment_p = core.filter(model, key, jnp.arange(T), alpha, u, c)
+
+    for arr in (nature_f, moment_f, moment_p):
+        chex.assert_shape(arr, (T, param_dim))
+        chex.assert_tree_all_finite(arr)
+
+
+def test_bismooth_shapes_and_finite(diag):
+    state_dim, T = 2, 5
+    model = _DummyModel(diag, state_dim)
+    key = jr.key(1)
+    param_dim = diag.param_size()
+
+    alpha = jnp.zeros((T, param_dim))
+    u = jnp.zeros((T, 0))
+    c = jnp.zeros((T, 0))
+
+    nature_s, moment_s, moment_p = core.bismooth(model, key, jnp.arange(T), alpha, u, c)
+
+    for arr in (nature_s, moment_s, moment_p):
+        chex.assert_shape(arr, (T, param_dim))
+        chex.assert_tree_all_finite(arr)
+
+
+# -----------------------------------------------------------------------------
+# Paper semantics: Eq (4) predictive moment and Eq (12) expected predictive moment
+# -----------------------------------------------------------------------------
+
+
+class _Nonlinear(Dynamics):
+    """Small nonlinear dynamics used only for algorithm tests."""
+
+    f: Callable[..., Array]
+
+    def __init__(self, conf, key):
+        import jaxfads.nn as nn
+
+        self.conf = conf
+        self.f = nn.make_mlp(
+            conf.state_dim + conf.input_dim,
+            conf.state_dim,
+            conf.width,
+            conf.depth,
+            key=key,
+            final_bias=False,
+            dropout=conf.dropout,
+        )
+
+    def forward(self, z: Array, u: Array, c: Array, *, key=None) -> Array:
+        x = jnp.concatenate((z, u), axis=-1)
+        return z + self.f(x, key=key)
+
+
+def _make_nonlinear(spec, key):
+    return Dynamics.get_subclass(_Nonlinear.__name__)(
+        SimpleNamespace(
+            state_dim=spec["state_dim"],
+            input_dim=spec["input_dim"],
+            width=spec["width"],
+            depth=spec["depth"],
+            dropout=None,
+        ),
+        key=key,
+    )
+
+
+def test_predictive_moment_is_conditional_moment(diag, spec):
+    """Eq (4): predictive_moment(mu, noise) encodes E[T(z_t) | z_{t-1}]."""
+    key = jr.key(0)
+    state_dim = spec["state_dim"]
+
+    f = _make_nonlinear(spec, key)
+
+    # Transition noise in moment form
+    noise = diag.canon_to_moment(diag.free_to_canon(diag.free_from_kw(scale=1.0)))
+
+    z = jr.normal(key, (state_dim,))
+    u = jr.normal(key, (spec["input_dim"],))
+    mu = f(z, u, jnp.zeros((0,)))
+
+    stats = diag.predictive_moment(mu, noise)
+    chex.assert_shape(stats, (diag.param_size(),))
+    chex.assert_tree_all_finite(stats)
+
+    mean, cov = diag.unpack(stats)
+    chex.assert_trees_all_close(mean, mu, atol=1e-6)
+    _, Q = diag.unpack(noise)
+    chex.assert_trees_all_close(cov, Q, atol=1e-5)
+
+
+def test_expected_predictive_moment_is_finite(diag, spec):
+    """Eq (12): expected predictive moment is finite for a well-behaved model."""
+    key = jr.key(0)
+    state_dim = spec["state_dim"]
+
+    f = _make_nonlinear(spec, key)
+    noise = diag.canon_to_moment(diag.free_to_canon(diag.free_from_kw(scale=1.0)))
+
+    mp = diag.pack(jr.normal(key, (state_dim,)), jnp.eye(state_dim))
+    u = jr.normal(key, (spec["input_dim"],))
+
+    result = expected_predictive_moment(
+        key,
+        mp,
+        u,
+        jnp.zeros((0,)),
+        f,
+        noise,
+        diag,
+        mc_size=10,
+    )
+    chex.assert_shape(result, (diag.param_size(),))
+    chex.assert_tree_all_finite(result)
+
+
+# -----------------------------------------------------------------------------
+# Numerical stability: nonfinite-safe MC aggregation
+# -----------------------------------------------------------------------------
+
+
+def _threshold_dynamics(
+    z: Array, u: Array, c: Array, *, key: Array | None = None, radius: float = 3.0
+) -> Array:
+    """Dynamics that return NaN when any |z_i| > radius."""
+    del u, c, key
+    safe = jnp.all(jnp.abs(z) <= radius)
+    return jnp.where(safe, z * 0.9, jnp.full_like(z, jnp.nan))
+
+
+def test_expected_predictive_moment_partial_invalid():
+    """When some MC samples produce NaN, the output should still be finite."""
+    from jaxfads.distributions import MVN
+
+    state_dim, mc_size = 4, 64
+    key = jr.key(42)
+
+    approx = MVN(dim=state_dim)
+    noise = approx.canon_to_moment(approx.free_to_canon(approx.free_from_kw(scale=1.0)))
+
+    mp = approx.pack(jnp.zeros(state_dim), 25.0 * jnp.eye(state_dim))
+    f = fpartial(_threshold_dynamics, radius=3.0)
+
+    result = jax.jit(
+        lambda k: expected_predictive_moment(
+            k, mp, jnp.zeros(0), jnp.zeros(0), f, noise, approx, mc_size
+        )
+    )(key)
+
+    assert jnp.all(jnp.isfinite(result))
+    chex.assert_shape(result, (approx.param_size(),))
+
+
+def test_expected_predictive_moment_all_invalid(diag):
+    """When all MC samples produce NaN, the result should be non-finite."""
+    state_dim, mc_size = 2, 16
+    key = jr.key(99)
+
+    noise = diag.canon_to_moment(diag.free_to_canon(diag.free_from_kw(scale=1.0)))
+
+    mp = diag.pack(jnp.zeros(state_dim), jnp.eye(state_dim))
+    u, c = jnp.zeros(0), jnp.zeros(0)
+    f = fpartial(_threshold_dynamics, radius=0.001)
+
+    result = jax.jit(
+        lambda k: expected_predictive_moment(k, mp, u, c, f, noise, diag, mc_size)
+    )(key)
+
+    chex.assert_shape(result, (diag.param_size(),))
+    assert not jnp.all(jnp.isfinite(result))
+
+
+# -----------------------------------------------------------------------------
+# ELBO correctness
+# -----------------------------------------------------------------------------
+
+
+def _eloglik_stub(key, t, mp, y, approx, mc_size):
+    del key, t, mp, approx, mc_size
+    return jnp.sum(y)
+
+
+def test_elbo_matches_manual(diag):
+    mean = jnp.array([0.2, -0.1])
+    cov = jnp.diag(jnp.array([1.0, 2.0]))
+    mp = diag.pack(mean, cov)
+    mp_p = diag.pack(jnp.zeros(2), jnp.eye(2))
+    y = jnp.array([1.0, 2.0])
+
+    expected = _eloglik_stub(None, None, None, y, None, None) - diag.kl(mp, mp_p)
+    value = elbo(
+        jr.key(0),
+        jnp.array(0),
+        mp,
+        mp_p,
+        y,
+        _eloglik_stub,
+        diag,
+        mc_size=1,
+    )
+
+    chex.assert_trees_all_close(value, expected)
