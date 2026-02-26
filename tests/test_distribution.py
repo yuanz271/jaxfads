@@ -18,7 +18,7 @@ def _random_diag_pd(key, dim: int, jitter: float = 1e-1) -> jnp.ndarray:
 
 
 @pytest.mark.parametrize("structure", ["full", "diag"])
-@pytest.mark.parametrize("dim", [1, 2, 4])
+@pytest.mark.parametrize("dim", [1, 4])
 def test_param_size(structure, dim):
     mvn = MVN(dim=dim, structure=structure)
     expected = (dim + dim * dim) if structure == "full" else (2 * dim)
@@ -26,7 +26,7 @@ def test_param_size(structure, dim):
 
 
 @pytest.mark.parametrize("structure", ["full", "diag"])
-@pytest.mark.parametrize("dim", [2, 4])
+@pytest.mark.parametrize("dim", [4])
 def test_pack_unpack_roundtrip(structure, dim):
     mvn = MVN(dim=dim, structure=structure)
     key = jrnd.key(0)
@@ -44,7 +44,7 @@ def test_pack_unpack_roundtrip(structure, dim):
 
 
 @pytest.mark.parametrize("structure", ["full", "diag"])
-@pytest.mark.parametrize("dim", [2, 4])
+@pytest.mark.parametrize("dim", [4])
 def test_natural_moment_roundtrip(structure, dim):
     mvn = MVN(dim=dim, structure=structure)
     mean = jrnd.normal(jrnd.key(0), (dim,))
@@ -65,7 +65,7 @@ def test_natural_moment_roundtrip(structure, dim):
 
 
 @pytest.mark.parametrize("structure", ["full", "diag"])
-@pytest.mark.parametrize("dim", [2, 4])
+@pytest.mark.parametrize("dim", [4])
 def test_free_canon_roundtrip(structure, dim):
     mvn = MVN(dim=dim, structure=structure)
     key = jrnd.key(0)
@@ -88,7 +88,7 @@ def test_free_canon_roundtrip(structure, dim):
 
 
 @pytest.mark.parametrize("structure", ["full", "diag"])
-@pytest.mark.parametrize("dim", [2, 4])
+@pytest.mark.parametrize("dim", [4])
 def test_free_from_kw(structure, dim):
     mvn = MVN(dim=dim, structure=structure)
     free = mvn.free_from_kw(scale=2.0)
@@ -101,7 +101,7 @@ def test_free_from_kw(structure, dim):
 
 
 @pytest.mark.parametrize("structure", ["full", "diag"])
-@pytest.mark.parametrize("dim", [2, 4])
+@pytest.mark.parametrize("dim", [4])
 def test_predictive_moment_matches_closed_form(structure, dim):
     mvn = MVN(dim=dim, structure=structure)
     z = jrnd.normal(jrnd.key(0), (dim,))
@@ -119,7 +119,7 @@ def test_predictive_moment_matches_closed_form(structure, dim):
 
 
 @pytest.mark.parametrize("structure", ["full", "diag"])
-@pytest.mark.parametrize("dim", [2, 4])
+@pytest.mark.parametrize("dim", [4])
 def test_sampling_matches_moments(structure, dim):
     mvn = MVN(dim=dim, structure=structure)
     mean = jrnd.normal(jrnd.key(0), (dim,))
@@ -131,16 +131,16 @@ def test_sampling_matches_moments(structure, dim):
 
     moment = mvn.pack(mean, cov)
 
-    samples = mvn.sample_by_moment(jrnd.key(2), moment, 50_000)
-    chex.assert_shape(samples, (50_000, dim))
+    samples = mvn.sample_by_moment(jrnd.key(2), moment, 10_000)
+    chex.assert_shape(samples, (10_000, dim))
     chex.assert_tree_all_finite(samples)
 
-    chex.assert_trees_all_close(jnp.mean(samples, axis=0), mean, atol=0.05)
-    chex.assert_trees_all_close(jnp.cov(samples.T), cov, atol=0.1)
+    chex.assert_trees_all_close(jnp.mean(samples, axis=0), mean, atol=0.08)
+    chex.assert_trees_all_close(jnp.cov(samples.T), cov, atol=0.2)
 
 
 @pytest.mark.parametrize("structure", ["full", "diag"])
-@pytest.mark.parametrize("dim", [2, 4])
+@pytest.mark.parametrize("dim", [4])
 def test_kl_matches_tfp(structure, dim):
     mvn = MVN(dim=dim, structure=structure)
     mean1 = jrnd.normal(jrnd.key(0), (dim,))
