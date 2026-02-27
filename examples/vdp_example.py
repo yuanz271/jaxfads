@@ -682,7 +682,7 @@ def main() -> None:
                 context_dim=0,
                 mu=mu,
                 dt=dt,
-                state_noise=1.0,
+                state_noise=0.1,
             ),
         }
     )
