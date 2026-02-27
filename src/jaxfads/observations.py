@@ -334,10 +334,10 @@ class GLM(Observation):
                 "GLM requires `obs_conf._approx_name` to be injected by XFADS for "
                 "fail-fast Approx validation."
             )
-        if str(approx_name) != "MVN":
+        if str(approx_name) not in {"MVN", "LoRaMVN"}:
             raise NotImplementedError(
-                "GLM analytic eloglik currently supports only MVN approximations "
-                "(requires approx.unpack(moment) -> (mean, cov))."
+                "GLM analytic eloglik currently supports only MVN-family approximations "
+                "(MVN/LoRaMVN; requires approx.unpack(moment) -> (mean, cov))."
             )
 
     def eloglik(

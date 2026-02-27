@@ -121,6 +121,8 @@ Quick reference (public API):
 | `moment_to_canon(moment)` | `moment → canon` | Moment → canon conversion. |
 | `natural_to_moment(natural)` | `natural → moment` | Natural → moment conversion. |
 | `moment_to_natural(moment)` | `moment → natural` | Moment → natural conversion. |
+| `encoder_free_size()` | `() → int` | Size of encoder free-form output vector (defaults to `param_size()`). |
+| `encoder_free_to_natural(free)` | `free → natural` | Convert encoder free-form output into an additive natural update. |
 | `sample_by_moment(key, moment, n)` | `moment → samples` | Sampling from the distribution parameterized by `moment`. |
 | `kl(moment1, moment2)` | `moment × moment → scalar` | KL between two distributions. |
 | `predictive_moment(z, noise)` | `(z, noise) → moment` | Conditional moment parameters `E[T(z_t) | z_{t-1}]`. |
@@ -130,7 +132,8 @@ Quick reference (public API):
 | Method | Signature | Role |
 |--------|-----------|------|
 | `free_from_kw` | `(**kwargs) → Array` | Create free-form flat params from serializable spec |
-| `param_size` | `() → int` | Natural parameter vector size |
+| `param_size` | `() → int` | Natural/moment parameter vector size |
+| `encoder_free_size` | `() → int` | Encoder free-form output size (defaults to `param_size`) |
 
 ### Canon ↔ free-form (flat ↔ pytree)
 
@@ -176,12 +179,10 @@ prior_natural = self.approx.moment_to_natural(
 )
 noise = self.approx.canon_to_moment(self.approx.free_to_canon(self.noise_free))
 
-# Encoder outputs are flat arrays → valid natural params
+# Encoder outputs are flat arrays → additive natural updates
 # (encoders output flat unconstrained updates for additive filtering)
 def _free_to_natural(free_flat):
-    canon = self.approx.free_to_canon(free_flat)
-    moment = self.approx.canon_to_moment(canon)
-    return self.approx.moment_to_natural(moment)
+    return self.approx.encoder_free_to_natural(free_flat)
 
 alpha = _free_to_natural(encoder(y))
 ```

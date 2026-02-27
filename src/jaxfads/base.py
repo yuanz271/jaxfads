@@ -104,8 +104,38 @@ class Approx(SubclassRegistryMixin, ABC):
 
     @abstractmethod
     def param_size(self) -> int:
-        """Return the flat natural-parameter size for this instance."""
+        """Return the flat natural/moment parameter size for this instance."""
         ...
+
+    # ------------------------------------------------------------------
+    # Encoder-facing hooks
+    # ------------------------------------------------------------------
+
+    def encoder_free_size(self) -> int:
+        """Return the size of the encoder free-form output vector.
+
+        By default, encoders emit free-form vectors in the same flat layout as
+        the distribution's natural parameters (so this returns
+        :meth:`param_size`).
+
+        Approximations may override this to support compact encoder outputs
+        (e.g. low-rank updates) while still producing full-size natural
+        parameter updates for filtering.
+        """
+
+        return self.param_size()
+
+    def encoder_free_to_natural(self, free: Array) -> Array:
+        """Convert an encoder free-form vector into an additive natural update.
+
+        Default implementation follows the standard conversion chain:
+
+        ``free → canon → moment → natural``.
+        """
+
+        canon = self.free_to_canon(free)
+        moment = self.canon_to_moment(canon)
+        return self.moment_to_natural(moment)
 
     @abstractmethod
     def kl(self, moment1: Array, moment2: Array) -> Array:

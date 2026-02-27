@@ -1,12 +1,14 @@
 """Van der Pol example: XFADS with synthetic data.
 
-Two cases:
+Three cases:
 
-1. **VDPDynamics** — exact RK4 step (no model mismatch).
-2. **MLPDynamics** — trainable MLP learns continuous-time dynamics, integrated with RK4.
+1. **MLPDynamics** — trainable MLP learns continuous-time dynamics, integrated with RK4.
+2. **OUDynamics** — built-in tracking prior drift.
+3. **LoRaMVN** — low-rank pseudo-observation encoder updates (paper Eq. 19–21),
+   using the ground-truth VDPDynamics transition.
 
-Both use Factor Analysis readout initialisation.  Evaluation uses
-Procrustes alignment to compare inferred latents against ground truth.
+All use Factor Analysis readout initialisation. Evaluation uses Procrustes
+alignment to compare inferred latents against ground truth.
 """
 
 from dataclasses import dataclass
@@ -532,90 +534,20 @@ def main() -> None:
         valid_ratio=0.2,
     )
 
-    trainer_conf_vdp = OmegaConf.create({**base_trainer_conf, "max_epoch": 100})
     trainer_conf_mlp = OmegaConf.create({**base_trainer_conf, "max_epoch": 500})
     trainer_conf_ou = OmegaConf.create({**base_trainer_conf, "max_epoch": 100})
+    trainer_conf_lora = OmegaConf.create({**base_trainer_conf, "max_epoch": 100})
+
+    eval_kw = dict(mu=mu, xlim=xlim, vlim=vlim, grid=grid)
 
     # ===================================================================
-    # Case 1: VDPDynamics (exact Van der Pol)
+    # Case 1: MLPDynamics (learned dynamics)
     # ===================================================================
     print("\n" + "=" * 60)
-    print("Case 1: VDPDynamics (exact Van der Pol)")
+    print("Case 1: MLPDynamics (learned dynamics)")
     print("=" * 60)
 
     conf1 = OmegaConf.create(
-        {
-            **shared_conf,
-            "forward": "VDPDynamics",
-            "mc_size": 1,
-            "dyn_conf": dict(
-                input_dim=0,
-                context_dim=0,
-                mu=mu,
-                dt=dt,
-                state_noise=1.0,
-            ),
-        }
-    )
-    model1 = XFADS(conf1, jr.key(123))
-    model1 = model1.initialize(*data)
-    approx = model1.approx  # shared by both cases
-
-    trained1 = train(model1, data, conf=trainer_conf_vdp)
-
-    key, k = jr.split(key)
-    eval_kw = dict(approx=approx, mu=mu, xlim=xlim, vlim=vlim, grid=grid)
-    r1 = evaluate(
-        "VDPDynamics",
-        trained1,
-        latent_states,
-        observations,
-        data,
-        C_true,
-        b_true,
-        key=k,
-        align_flow=False,
-        **eval_kw,
-    )
-    plot_posterior(
-        "vdp",
-        r1["aligned_means"],
-        r1["covs"],
-        latent_states,
-        0,
-        T,
-        out_dir,
-    )
-    plot_flow_field(
-        "vdp",
-        trained1,
-        latent_states[0],
-        r1["aligned_means"][0],
-        mu,
-        xlim,
-        vlim,
-        grid,
-        out_dir,
-    )
-
-    # Save / load roundtrip
-    with TemporaryDirectory() as tmp:
-        path = Path(tmp) / "model.zip"
-        XFADS.save(trained1, path)
-        reloaded = XFADS.load(path)
-        reloaded(
-            times[:1], observations[:1], inputs[:1], covariates[:1], key=jr.key(99)
-        )
-        print("Save/load roundtrip: OK")
-
-    # ===================================================================
-    # Case 2: MLPDynamics (learned dynamics)
-    # ===================================================================
-    print("\n" + "=" * 60)
-    print("Case 2: MLPDynamics (learned dynamics)")
-    print("=" * 60)
-
-    conf2 = OmegaConf.create(
         {
             **shared_conf,
             "forward": "MLPDynamics",
@@ -630,27 +562,28 @@ def main() -> None:
             ),
         }
     )
-    model2 = XFADS(conf2, jr.key(456))
-    model2 = model2.initialize(*data)
+    model1 = XFADS(conf1, jr.key(456))
+    model1 = model1.initialize(*data)
 
-    trained2 = train(model2, data, conf=trainer_conf_mlp)
+    trained1 = train(model1, data, conf=trainer_conf_mlp)
 
     key, k = jr.split(key)
-    r2 = evaluate(
+    r1 = evaluate(
         "MLPDynamics",
-        trained2,
+        trained1,
         latent_states,
         observations,
         data,
         C_true,
         b_true,
         key=k,
+        approx=trained1.approx,
         **eval_kw,
     )
     plot_posterior(
         "mlp",
-        r2["aligned_means"],
-        r2["covs"],
+        r1["aligned_means"],
+        r1["covs"],
         latent_states,
         0,
         T,
@@ -658,25 +591,25 @@ def main() -> None:
     )
     plot_flow_field(
         "mlp",
-        trained2,
+        trained1,
         latent_states[0],
-        r2["aligned_means"][0],
+        r1["aligned_means"][0],
         mu,
         xlim,
         vlim,
         grid,
         out_dir,
-        alignment=r2["alignment"],
+        alignment=r1["alignment"],
     )
 
     # ===================================================================
-    # Case 3: OUDynamics (diffusion-style tracking prior)
+    # Case 2: OUDynamics (diffusion-style tracking prior)
     # ===================================================================
     print("\n" + "=" * 60)
-    print("Case 3: OUDynamics (diffusion-style tracking prior)")
+    print("Case 2: OUDynamics (diffusion-style tracking prior)")
     print("=" * 60)
 
-    conf3 = OmegaConf.create(
+    conf2 = OmegaConf.create(
         {
             **shared_conf,
             "forward": "OUDynamics",
@@ -690,14 +623,77 @@ def main() -> None:
             ),
         }
     )
-    model3 = XFADS(conf3, jr.key(789))
+    model2 = XFADS(conf2, jr.key(789))
+    model2 = model2.initialize(*data)
+
+    trained2 = train(model2, data, conf=trainer_conf_ou)
+
+    key, k = jr.split(key)
+    r2 = evaluate(
+        "OUDynamics",
+        trained2,
+        latent_states,
+        observations,
+        data,
+        C_true,
+        b_true,
+        key=k,
+        approx=trained2.approx,
+        **eval_kw,
+    )
+    plot_posterior(
+        "ou",
+        r2["aligned_means"],
+        r2["covs"],
+        latent_states,
+        0,
+        T,
+        out_dir,
+    )
+    plot_flow_field(
+        "ou",
+        trained2,
+        latent_states[0],
+        r2["aligned_means"][0],
+        mu,
+        xlim,
+        vlim,
+        grid,
+        out_dir,
+        alignment=r2["alignment"],
+    )
+
+    # ===================================================================
+    # Case 3: LoRaMVN encoder updates (paper Eq. 19–21)
+    # ===================================================================
+    print("\n" + "=" * 60)
+    print("Case 3: LoRaMVN encoder updates")
+    print("=" * 60)
+
+    conf3 = OmegaConf.create(
+        {
+            **shared_conf,
+            "approx": "LoRaMVN",
+            "approx_kwargs": {"rank": 1},
+            "forward": "VDPDynamics",
+            "mc_size": 1,
+            "dyn_conf": dict(
+                input_dim=0,
+                context_dim=0,
+                mu=mu,
+                dt=dt,
+                state_noise=1.0,
+            ),
+        }
+    )
+    model3 = XFADS(conf3, jr.key(321))
     model3 = model3.initialize(*data)
 
-    trained3 = train(model3, data, conf=trainer_conf_ou)
+    trained3 = train(model3, data, conf=trainer_conf_lora)
 
     key, k = jr.split(key)
     r3 = evaluate(
-        "OUDynamics",
+        "LoRaMVN",
         trained3,
         latent_states,
         observations,
@@ -705,10 +701,12 @@ def main() -> None:
         C_true,
         b_true,
         key=k,
+        align_flow=False,
+        approx=trained3.approx,
         **eval_kw,
     )
     plot_posterior(
-        "ou",
+        "lora",
         r3["aligned_means"],
         r3["covs"],
         latent_states,
@@ -717,7 +715,7 @@ def main() -> None:
         out_dir,
     )
     plot_flow_field(
-        "ou",
+        "lora",
         trained3,
         latent_states[0],
         r3["aligned_means"][0],
@@ -726,17 +724,26 @@ def main() -> None:
         vlim,
         grid,
         out_dir,
-        alignment=r3["alignment"],
     )
+
+    # Save / load roundtrip (covers LoRaMVN + injected encoder free size)
+    with TemporaryDirectory() as tmp:
+        path = Path(tmp) / "model.zip"
+        XFADS.save(trained3, path)
+        reloaded = XFADS.load(path)
+        reloaded(
+            times[:1], observations[:1], inputs[:1], covariates[:1], key=jr.key(99)
+        )
+        print("Save/load roundtrip: OK")
 
     # ===================================================================
     # Summary
     # ===================================================================
-    print("\n" + "=" * 72)
+    print("\n" + "=" * 74)
     print(f"Summary  (Procrustes-aligned; obs noise σ = {sigma_obs})")
-    print("=" * 72)
+    print("=" * 74)
     header = (
-        f"{'Metric':<30s} {'VDPDynamics':>14s} {'MLPDynamics':>14s} {'OUDynamics':>14s}"
+        f"{'Metric':<30s} {'MLPDynamics':>14s} {'OUDynamics':>14s} {'LoRaMVN':>14s}"
     )
     print(header)
     print("-" * len(header))
