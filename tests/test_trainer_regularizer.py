@@ -88,3 +88,34 @@ def test_noise_regularizer_is_added(model_conf, sample_data):
     reg = batch_loss(model, sample_data, key, step, noise_regularizer=l2_reg)
 
     chex.assert_trees_all_close(reg - base, l2_reg(model), atol=1e-6)
+
+
+def test_freeze_state_noise_by_stopping_gradient(model_conf, sample_data):
+    """Stopping gradients through noise_free should yield zero grad updates."""
+    import equinox as eqx
+
+    model = XFADS(model_conf, jax.random.key(0))
+    model = model.initialize(*sample_data)
+
+    key = jax.random.key(1)
+    step = jnp.array(0, dtype=jnp.int32)
+
+    def loss(m):
+        return batch_loss(m, sample_data, key, step, noise_regularizer=None)
+
+    grads = eqx.filter_grad(loss)(model)
+    assert jnp.any(grads.noise_free != 0)
+
+    def frozen_loss(m):
+        m = eqx.tree_at(
+            lambda mm: mm.noise_free,
+            m,
+            jax.lax.stop_gradient(m.noise_free),
+        )
+        return batch_loss(m, sample_data, key, step, noise_regularizer=None)
+
+    frozen_grads = eqx.filter_grad(frozen_loss)(model)
+
+    chex.assert_trees_all_close(
+        frozen_grads.noise_free, jnp.zeros_like(frozen_grads.noise_free), atol=0.0
+    )

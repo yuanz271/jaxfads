@@ -13,6 +13,7 @@ import time
 import jax
 import numpy as np
 import optax
+import equinox as eqx
 from jax import Array
 from jax import numpy as jnp
 from jax import random as jr
@@ -50,6 +51,8 @@ DEFAULT_TRAINER_CONFIG = DictConfig(
         "kl_warmup_steps": 0,
         # Optional user-provided regularizer: Callable[[XFADS], Array]
         "noise_regularizer": None,
+        # Optional toggle to freeze process-noise parameters stored on the model.
+        "freeze_state_noise": False,
     }
 )
 
@@ -423,11 +426,25 @@ def train(model, data, *, conf):
         optax.scale_by_learning_rate(conf.learning_rate),
     )
 
-    loss_fn = partial(
-        batch_loss,
-        kl_warmup_steps=conf.kl_warmup_steps,
-        noise_regularizer=conf.noise_regularizer,
-    )
+    def loss_fn(model, batch, key, step):
+        # Optional: freeze process noise parameters stored on the model.
+        # This keeps the dynamics noise fixed at its initial value (from
+        # `dyn_conf.state_noise`) while still training all other parameters.
+        if conf.freeze_state_noise:
+            model = eqx.tree_at(
+                lambda m: m.noise_free,
+                model,
+                jax.lax.stop_gradient(model.noise_free),
+            )
+
+        return batch_loss(
+            model,
+            batch,
+            key,
+            step,
+            kl_warmup_steps=conf.kl_warmup_steps,
+            noise_regularizer=conf.noise_regularizer,
+        )
 
     model = gt.train(
         model,
