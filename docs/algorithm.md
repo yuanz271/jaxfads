@@ -130,8 +130,8 @@ Code indexing convention:
 - **Beta (backward encoder)**: `β_t = S2S(β_{t+1}, α_t)` — GRU running
   backward in time over alpha outputs, captures future information
 
-**Low-rank structure** (Eq 19): Both encoders output low-rank natural
-parameter updates:
+**Low-rank structure** (Eq 19, optional in this codebase): Under
+`LoRaMVN`, encoders can emit compact low-rank updates:
 
 ```
 α_t = [a_t; A_t A_tᵀ]     where A_t ∈ ℝ^{L×r_α}
@@ -139,6 +139,8 @@ parameter updates:
 ```
 
 Combined: `K_t = [A_t, B_t] ∈ ℝ^{L×r}` with `r = r_α + r_β`.
+
+With default `MVN`, encoder outputs are dense full-parameter updates.
 
 **Missing data**: Setting `α_t = 0` when `y_t` is missing means the prior
 is not updated — a principled handling without special logic.
@@ -155,6 +157,9 @@ of `O(L³)`:
 - **Sampling**: Uses Cong et al. trick (Eq 49) to sample without
   materializing `P_t`
 - **KL**: Log-determinant and trace computed via low-rank factors (App C.1)
+
+In this repository, those structured linear algebra optimizations are not yet
+the default compute path; see parity notes below.
 
 ## Causal Inference Network (Eq 29)
 
@@ -177,6 +182,20 @@ In this codebase, inference-mode semantics are:
 - `mode="causal"`: alpha-only filtering plus reconstructed smoothing natural
   parameters via `λ_t = λ̆_t + b_t` (code indexing)
 
+### Practical Mode API
+
+All modes return the same tuple from `XFADS.__call__`:
+
+`(natural_params, moment_params, predictions)`
+
+with shapes `(N, T, param_dim)`, `(N, T, param_dim)`, `(N, T, param_dim)`.
+
+| Mode | Encoder sites used | `natural_params` meaning |
+|------|--------------------|--------------------------|
+| `filter` | `alpha` | filtering natural parameters (`λ̆_t`) |
+| `smooth` | `alpha + beta` | smoothing-side natural parameters (`λ_t`) |
+| `causal` | `alpha`, `beta` | reconstructed smoothing natural parameters (`λ_t = λ̆_t + b_t`) |
+
 ## End-to-End Learning (Algorithm 1)
 
 ```
@@ -197,88 +216,9 @@ while not converged:
     (ϕ, θ, ψ) ← (ϕ, θ, ψ) - ∇L̂
 ```
 
----
+## Implementation Parity
 
-# Implementation Review
+For implementation parity, consistency notes, and known deviations from
+arXiv:2403.01371, see:
 
-## Mapping: Paper → Codebase
-
-| Paper Concept | Code Location | Notes |
-|---------------|---------------|-------|
-| Generative model `p(z_t \| z_{t-1})` | `StateMap.eval()` + `Stepper.step()` in `base.py` | State transition is composed from a map and a stepper; process noise owned by `XFADS` |
-| State noise `Q_θ` | `XFADS.noise_free` in `smoother.py` | Stored as free-form; constrained via `approx.free_to_canon → canon_to_moment` |
-| Observation model `p(y_t \| z_t)` | `Observation.eloglik()` in `observations.py` | Poisson and Gaussian implementations |
-| Pseudo-observation `λ̃_t` | `alpha + beta` computed in `XFADS.__call__()` | Added in natural parameter space; code `b_t` corresponds to paper `β_{t+1}` |
-| Local encoder `α_t = NN(y_t)` | `AlphaEncoder` in `encoders.py` | MLP mapping observations → natural params |
-| Backward encoder `β_t = S2S(β_{t+1}, α_t)` | `BetaEncoder` in `encoders.py` | GRU running backward over alpha outputs |
-| Variational predict (Eq 12) | `expected_predictive_moment()` in `core.py` | MC approximation of `E[μ_θ(z_{t-1})]` |
-| Variational update (Eq 13) | `nature_t = nature_p_t + site_t` in `core.filter()/core.smooth()` | Additive natural parameter update from the passed natural-parameter site term |
-| Approximate ELBO (Eq 17) | `elbo()` in `vi.py` | `E[log p(y\|z)] - β·KL(π \|\| π̄)` |
-| KL(π ∥ π̄) | `approx.kl()` on `MVN` | Via TFP `MultivariateNormalFullCovariance` |
-| Exp-family natural params | `Approx.moment_to_natural()` | Flat array; layout defined by MVN |
-| Exp-family moment params | `Approx.natural_to_moment()` | Flat array `[E[z], E[-½ zzᵀ]_flat]` |
-| MVN implementation | `MVN(dim, structure=...)` | Supports `structure="full"` and `structure="diag"` |
-| Causal/streaming inference (Eq 29) | Implemented via `mode="causal"` | Uses alpha-only filtering for `λ̆_t` and reconstructs `λ_t = λ̆_t + b_t` (code indexing) |
-| Efficient structured ops (App B.5) | Not implemented | Current impl materializes full covariance |
-
-## Faithful Implementations
-
-1. **Variational filtering recursion** (`core.filter`): Correctly implements
-   the predict-update loop. Predict via MC sampling of dynamics
-   (`expected_predictive_moment` → Eq 12), update via additive natural params
-   (Eq 13).
-
-2. **Encoder architecture** (`encoders.py`): Alpha encoder is feedforward
-   MLP mapping `y_t → α_t` (Eq 21). Beta encoder is GRU running backward
-   over alpha outputs `α_{T:1} → β_{1:T}` (Eq 21). Additive decomposition
-   `λ̃_t = α_t + β_{t+1}` in smoother's `__call__`.
-
-3. **Missing data handling** (`smoother.py`): Sets `α_t = 0` for non-finite
-   observations (Eq 18 discussion). Additional dropout masking via
-   `DataMasker` for pseudo-missing data.
-
-4. **ELBO** (`vi.py`): `E[log p(y|z)] - β·KL(π || π̄)` matches Eq 17.
-   KL warm-up via `beta` parameter.
-
-5. **Exponential family design** (`Approx` ABC, `MVN`): Natural/mean
-   parameterization, conversions, sampling — matches the paper's
-   exponential family framework (Eqs 2-4).
-
-## Simplifications / Deviations
-
-1. **No structured linear algebra**: The paper's key efficiency contribution
-   (App B.5, O(L(Sr + S² + r²)) per step) is not implemented. The current
-   code materializes full covariance matrices via TFP, giving O(L³) cost.
-   This limits scalability to large `L`.
-
-2. **Causal indexing caveat**: For Eq 29, paper notation uses `β_{t+1}` while
-   code uses `b_t` at the same implementation step. Parity should be checked by
-   recurrence equivalence, not by raw index labels alone.
-
-3. **Noise ownership**: Paper has `Q_θ` as part of the dynamics. Codebase
-   separates deterministic transition composition (`StateMap` + `Stepper`) from
-   process noise, which is owned by `XFADS` as `noise_free` (constrained via the `Approx`).
-
-4. **Low-rank encoder output is optional**: The paper specifies low-rank
-   precision updates in pseudo-observations. The codebase now supports this via
-   `LoRaMVN` compact encoder outputs, but the default `MVN` path remains dense.
-   See `docs/paper_parity_2403_01371.md` for a full parity matrix.
-
-5. **`predictive_moment` averaging**: The paper averages in mean (moment) parameter
-   space (Eq 22). The code does this correctly via `predictive_moment` on `MVN`,
-   which computes moment parameters (expected sufficient statistics) `E[T(z)]`
-   per sample, averages, then converts back.
-
-6. **KL computation**: Paper derives efficient O(LSr + LS² + Lr²) KL
-   evaluation (App C.1) using structured factors. Code uses TFP's
-   generic `MultivariateNormalFullCovariance` KL, which is O(L³).
-
-## Summary
-
-The codebase is a faithful implementation of the XFADS algorithm's
-mathematical framework: variational filtering with pseudo-observations,
-exponential family parameterization, additive natural parameter updates,
-and the encoder architecture. The main gap is the paper's structured
-linear algebra optimizations for large `L` — the current implementation
-materializes full covariance matrices, making it correct but O(L³) rather
-than the paper's O(L(Sr + S² + r²)).
+- [`paper_parity_2403_01371.md`](paper_parity_2403_01371.md)
