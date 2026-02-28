@@ -81,6 +81,9 @@ Invariant for callers:
 
 - The trainer supports an optional user hook:
   - `trainer_conf.noise_regularizer: Callable[[XFADS], Array] | None`
+- Parameter freezing is configured declaratively via:
+  - `trainer_conf.freeze_paths: list[str]` (dot-separated model attribute paths,
+    e.g. `["noise_free"]`)
 - No built-in covariance-based noise regularization is applied by default.
 
 ## Commands

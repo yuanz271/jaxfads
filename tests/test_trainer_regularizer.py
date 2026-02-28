@@ -90,8 +90,8 @@ def test_noise_regularizer_is_added(model_conf, sample_data):
     chex.assert_trees_all_close(reg - base, l2_reg(model), atol=1e-6)
 
 
-def test_freeze_state_noise_by_stopping_gradient(model_conf, sample_data):
-    """Stopping gradients through noise_free should yield zero grad updates."""
+def test_stop_gradient_on_noise_free_zeroes_its_grad_component(model_conf, sample_data):
+    """Sanity check: explicit stop_gradient removes noise_free gradient."""
     import equinox as eqx
 
     model = XFADS(model_conf, jax.random.key(0))

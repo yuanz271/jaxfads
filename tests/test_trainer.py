@@ -1,6 +1,8 @@
 import pytest
+import jax
 from jax import Array, numpy as jnp, random as jrnd
 import equinox as eqx
+import chex
 from omegaconf import OmegaConf
 
 from jaxfads.trainer import train
@@ -189,3 +191,47 @@ def test_train_lora_rank1_end_to_end(trainer_config, sample_data):
     assert jnp.isfinite(free_energy).all()
     assert jnp.isfinite(post_mom).all()
     assert jnp.isfinite(prior_mom).all()
+
+
+def test_train_freeze_paths_keeps_state_noise_fixed(
+    model_conf, trainer_config, sample_data
+):
+    """freeze_paths can freeze model.noise_free updates."""
+    model = XFADS(model_conf, jrnd.key(0))
+    noise0 = jax.device_get(model.noise_free)
+
+    trainer_config.max_epoch = 3
+    trainer_config.batch_size = 64
+    trainer_config.validation_size = 32
+    trainer_config.freeze_paths = ["noise_free"]
+    trained_model = train(model, sample_data, conf=trainer_config)
+    noise_trained = jax.device_get(trained_model.noise_free)
+    chex.assert_trees_all_close(noise_trained, noise0, atol=0.0)
+
+
+def test_train_freeze_paths_can_freeze_arbitrary_leaves(
+    model_conf, trainer_config, sample_data
+):
+    """freeze_paths should freeze user-selected parameter leaves."""
+    model = XFADS(model_conf, jrnd.key(0))
+    prior0 = jax.device_get(model.unconstrained_prior_natural)
+
+    trainer_config.max_epoch = 3
+    trainer_config.batch_size = 64
+    trainer_config.validation_size = 32
+    trainer_config.freeze_paths = ["unconstrained_prior_natural"]
+
+    trained_model = train(model, sample_data, conf=trainer_config)
+    prior_trained = jax.device_get(trained_model.unconstrained_prior_natural)
+    chex.assert_trees_all_close(prior_trained, prior0, atol=0.0)
+
+
+def test_train_freeze_paths_invalid_path_raises(model_conf, trainer_config, sample_data):
+    model = XFADS(model_conf, jrnd.key(0))
+    trainer_config.max_epoch = 1
+    trainer_config.batch_size = 64
+    trainer_config.validation_size = 32
+    trainer_config.freeze_paths = ["does.not.exist"]
+
+    with pytest.raises(ValueError, match="Invalid freeze path"):
+        train(model, sample_data, conf=trainer_config)

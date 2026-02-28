@@ -27,6 +27,9 @@ All dependencies—including `gearax` (pinned to a specific commit)—are resolv
 - [Writing Custom Dynamics Modules](docs/dynamics.md)
 - [Training Configuration](docs/training.md)
 
+Training note: parameter freezing is configured declaratively via
+`trainer_conf.freeze_paths` (for example `["noise_free"]`).
+
 ## Examples
 
 - [`examples/vdp_example.py`](examples/vdp_example.py) — End-to-end Van der Pol oscillator demo covering model configuration, training, and inference with both exact and learned dynamics, Factor Analysis readout initialisation, Procrustes evaluation, and flow-field visualisation. **Start here** to see the full workflow.
