@@ -7,11 +7,11 @@ from omegaconf import OmegaConf
 
 from jaxfads.trainer import train
 from jaxfads.smoother import XFADS
-from jaxfads.base import Dynamics
+from jaxfads.base import StateMap
 import jaxfads.observations  # noqa: F401 — register GLM subclass
 
 
-class MockDynamics(Dynamics):
+class MockStateMap(StateMap):
     """Mock dynamics for testing — pure deterministic identity."""
 
     layer: eqx.Module | None
@@ -20,7 +20,7 @@ class MockDynamics(Dynamics):
         self.conf = conf
         self.layer = None
 
-    def forward(self, z, u, c, *, key=None) -> Array:
+    def eval(self, z, u, c, *, key=None) -> Array:
         return z
 
 
@@ -73,7 +73,7 @@ def model_conf():
             "mode": "smooth",
             "observation_dim": 10,
             "state_dim": 2,
-            "forward": "MockDynamics",
+            "state_map": "MockStateMap", "stepper": "DiscreteStepper",
             "approx": "MVN",
             "approx_kwargs": {},
             "mc_size": 1,
@@ -88,7 +88,7 @@ def model_conf():
                     "depth": 1,
                     "input_dim": 1,
                     "context_dim": 0,
-                    "state_noise": 1.0,
+                    "state_noise": 1.0, "system_type": "discrete",
                 }
             ),
             "enc_conf": OmegaConf.create(
@@ -125,7 +125,8 @@ def test_train(model_conf, trainer_config, sample_data):
     # Basic checks that we got a model back
     assert trained_model is not None
     assert hasattr(trained_model, "conf")
-    assert hasattr(trained_model, "forward")
+    assert hasattr(trained_model, "state_map")
+    assert hasattr(trained_model, "stepper")
 
 
 def test_train_lora_rank1_end_to_end(trainer_config, sample_data):
@@ -135,7 +136,7 @@ def test_train_lora_rank1_end_to_end(trainer_config, sample_data):
             "mode": "smooth",
             "observation_dim": 10,
             "state_dim": 2,
-            "forward": "MockDynamics",
+            "state_map": "MockStateMap", "stepper": "DiscreteStepper",
             "approx": "LoRaMVN",
             "approx_kwargs": {"rank": 1},
             "mc_size": 2,
@@ -151,6 +152,7 @@ def test_train_lora_rank1_end_to_end(trainer_config, sample_data):
                     "input_dim": 1,
                     "context_dim": 0,
                     "state_noise": 0.1,
+                    "system_type": "discrete",
                 }
             ),
             "enc_conf": OmegaConf.create(

@@ -59,7 +59,7 @@ def expected_predictive_moment(
     c : Array, shape (covariate_dim,)
         Covariate vector.
     f : Callable
-        Dynamics function.
+        One-step transition callable.
     noise : Array
         Transition noise parameters passed through to ``approx``.
     approx : Approx
@@ -89,7 +89,7 @@ def expected_predictive_moment(
     u_bc = jnp.broadcast_to(u, shape=(mc_size,) + u.shape)
     c_bc = jnp.broadcast_to(c, shape=(mc_size,) + c.shape)
 
-    # Dynamics outputs for each MC sample
+    # Transition outputs for each MC sample
     zs = jax.vmap(partial(f, key=key), in_axes=(0, 0, 0))(z, u_bc, c_bc)
 
     # Per-sample predictive moment
@@ -184,7 +184,7 @@ def _site_filter(
 
     expected_moment_forward = partial(
         expected_predictive_moment,
-        f=model.forward,
+        f=model.transition,
         noise=noise,
         approx=approx,
         mc_size=model.conf.mc_size,
@@ -279,7 +279,7 @@ def causal(
     return nature, moment, moment_p
 
 
-# NOTE: _bismooth() requires model.backward (a Dynamics instance) which is
+# NOTE: _bismooth() requires model.backward (a callable reverse state map) which is
 # not yet implemented on XFADS.  Do not call until backward dynamics are added.
 def _bismooth(
     model,
@@ -347,7 +347,7 @@ def _bismooth(
     natural_to_moment = jax.vmap(approx.natural_to_moment)
     expected_moment_forward = partial(
         expected_predictive_moment,
-        f=model.forward,
+        f=model.transition,
         noise=noise,
         approx=approx,
         mc_size=mc_size,

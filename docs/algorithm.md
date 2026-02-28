@@ -205,7 +205,7 @@ while not converged:
 
 | Paper Concept | Code Location | Notes |
 |---------------|---------------|-------|
-| Generative model `p(z_t \| z_{t-1})` | `Dynamics.forward()` in `base.py` | Deterministic transition `m_θ(z, u, c)`; process noise owned by `XFADS` |
+| Generative model `p(z_t \| z_{t-1})` | `StateMap.eval()` + `Stepper.step()` in `base.py` | State transition is composed from a map and a stepper; process noise owned by `XFADS` |
 | State noise `Q_θ` | `XFADS.noise_free` in `smoother.py` | Stored as free-form; constrained via `approx.free_to_canon → canon_to_moment` |
 | Observation model `p(y_t \| z_t)` | `Observation.eloglik()` in `observations.py` | Poisson and Gaussian implementations |
 | Pseudo-observation `λ̃_t` | `alpha + beta` computed in `XFADS.__call__()` | Added in natural parameter space; code `b_t` corresponds to paper `β_{t+1}` |
@@ -256,8 +256,8 @@ while not converged:
    recurrence equivalence, not by raw index labels alone.
 
 3. **Noise ownership**: Paper has `Q_θ` as part of the dynamics. Codebase
-   separates: `Dynamics` is purely deterministic `m_θ(z, u, c)`; process noise
-   is owned by `XFADS` as `noise_free` (constrained via the `Approx`).
+   separates deterministic transition composition (`StateMap` + `Stepper`) from
+   process noise, which is owned by `XFADS` as `noise_free` (constrained via the `Approx`).
 
 4. **Low-rank encoder output is optional**: The paper specifies low-rank
    precision updates in pseudo-observations. The codebase now supports this via

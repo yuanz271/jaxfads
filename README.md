@@ -24,7 +24,7 @@ All dependencies—including `gearax` (pinned to a specific commit)—are resolv
 
 ## Documentation
 
-- [Writing Custom Dynamics Modules](docs/dynamics.md)
+- [Writing Custom State Maps and Steppers](docs/dynamics.md)
 - [Training Configuration](docs/training.md)
 
 Training note: parameter freezing is configured declaratively via

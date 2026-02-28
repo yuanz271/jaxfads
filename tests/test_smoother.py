@@ -7,11 +7,11 @@ from jax import numpy as jnp
 from omegaconf import OmegaConf, DictConfig
 import equinox as eqx
 import pytest
-from jaxfads.base import Dynamics
+from jaxfads.base import StateMap
 from jaxfads.smoother import XFADS
 
 
-class Mock(Dynamics):
+class Mock(StateMap):
     """Mock dynamics — pure deterministic transition."""
 
     layer: eqx.Module | None
@@ -21,7 +21,7 @@ class Mock(Dynamics):
         self.layer = None
 
     @override
-    def forward(
+    def eval(
         self, z: Array, u: Array, c: Array, *, key: Array | None = None
     ) -> Array:
         return z
@@ -47,7 +47,8 @@ def test_constructor():
             mode="smooth",
             observation_dim=y_size,
             state_dim=z_size,
-            forward="Mock",
+            state_map="Mock",
+            stepper="DiscreteStepper",
             approx="MVN",
             approx_kwargs={},
             mc_size=mc_size,
@@ -65,6 +66,7 @@ def test_constructor():
                     input_dim=u_size,
                     context_dim=0,
                     state_noise=state_noise,
+                    system_type="discrete",
                 )
             ),
             enc_conf=OmegaConf.create(
@@ -88,9 +90,9 @@ def test_constructor():
 
     model = XFADS(model_conf, jr.key(seed))
 
-    # Verify noise is on the model, not on forward dynamics
+    # Verify noise is on the model, not on state-map module
     assert model.noise_free is not None
-    assert not hasattr(model.forward, "noise_free")
+    assert not hasattr(model.state_map, "noise_free")
 
     with TemporaryDirectory() as tmp_dir:
         path = Path(tmp_dir) / "model.zip"
@@ -116,7 +118,8 @@ def test_top_level_dims_override_subconfig_dims():
             mode="smooth",
             observation_dim=y_size,
             state_dim=z_size,
-            forward="Mock",
+            state_map="Mock",
+            stepper="DiscreteStepper",
             approx="MVN",
             approx_kwargs={},
             mc_size=2,
@@ -132,6 +135,7 @@ def test_top_level_dims_override_subconfig_dims():
                     input_dim=u_size,
                     context_dim=0,
                     state_noise=1.0,
+                    system_type="discrete",
                 )
             ),
             enc_conf=OmegaConf.create(
@@ -160,8 +164,8 @@ def test_top_level_dims_override_subconfig_dims():
     model = XFADS(model_conf, jr.key(seed))
 
     # Ensure merged sub-configs reflect the top-level dims.
-    assert int(model.forward.conf.state_dim) == z_size
-    assert int(model.forward.conf.observation_dim) == y_size
+    assert int(model.state_map.conf.state_dim) == z_size
+    assert int(model.state_map.conf.observation_dim) == y_size
     assert int(model.observation.conf.state_dim) == z_size
     assert int(model.observation.conf.observation_dim) == y_size
 
@@ -195,7 +199,8 @@ def test_lora_mvn_smoke_constructor_and_forward_pass():
             mode="smooth",
             observation_dim=y_size,
             state_dim=z_size,
-            forward="Mock",
+            state_map="Mock",
+            stepper="DiscreteStepper",
             approx="LoRaMVN",
             approx_kwargs={"rank": 2},
             mc_size=2,
@@ -209,6 +214,7 @@ def test_lora_mvn_smoke_constructor_and_forward_pass():
                     input_dim=0,
                     context_dim=0,
                     state_noise=1.0,
+                    system_type="discrete",
                 )
             ),
             enc_conf=OmegaConf.create(
@@ -256,7 +262,8 @@ def test_causal_mode_smoke_constructor_and_forward_pass():
             mode="causal",
             observation_dim=y_size,
             state_dim=z_size,
-            forward="Mock",
+            state_map="Mock",
+            stepper="DiscreteStepper",
             approx="MVN",
             approx_kwargs={},
             mc_size=2,
@@ -270,6 +277,7 @@ def test_causal_mode_smoke_constructor_and_forward_pass():
                     input_dim=0,
                     context_dim=0,
                     state_noise=1.0,
+                    system_type="discrete",
                 )
             ),
             enc_conf=OmegaConf.create(
@@ -317,7 +325,8 @@ def test_filter_mode_smoke_constructor_and_forward_pass():
             mode="filter",
             observation_dim=y_size,
             state_dim=z_size,
-            forward="Mock",
+            state_map="Mock",
+            stepper="DiscreteStepper",
             approx="MVN",
             approx_kwargs={},
             mc_size=2,
@@ -331,6 +340,7 @@ def test_filter_mode_smoke_constructor_and_forward_pass():
                     input_dim=0,
                     context_dim=0,
                     state_noise=1.0,
+                    system_type="discrete",
                 )
             ),
             enc_conf=OmegaConf.create(
@@ -377,7 +387,8 @@ def test_invalid_mode_error_lists_filter_smooth_causal():
             mode="unknown",
             observation_dim=y_size,
             state_dim=z_size,
-            forward="Mock",
+            state_map="Mock",
+            stepper="DiscreteStepper",
             approx="MVN",
             approx_kwargs={},
             mc_size=2,
@@ -387,7 +398,12 @@ def test_invalid_mode_error_lists_filter_smooth_causal():
             noise_penalty=0,
             dropout=0.0,
             dyn_conf=OmegaConf.create(
-                dict(input_dim=0, context_dim=0, state_noise=1.0)
+                dict(
+                    input_dim=0,
+                    context_dim=0,
+                    state_noise=1.0,
+                    system_type="discrete",
+                )
             ),
             enc_conf=OmegaConf.create(dict(width=8, depth=1, dropout=0.0)),
             obs_conf=OmegaConf.create(
@@ -424,7 +440,8 @@ def test_filter_mode_skips_beta_encoder():
             mode="filter",
             observation_dim=y_size,
             state_dim=z_size,
-            forward="Mock",
+            state_map="Mock",
+            stepper="DiscreteStepper",
             approx="MVN",
             approx_kwargs={},
             mc_size=2,
@@ -434,7 +451,12 @@ def test_filter_mode_skips_beta_encoder():
             noise_penalty=0,
             dropout=0.0,
             dyn_conf=OmegaConf.create(
-                dict(input_dim=0, context_dim=0, state_noise=1.0)
+                dict(
+                    input_dim=0,
+                    context_dim=0,
+                    state_noise=1.0,
+                    system_type="discrete",
+                )
             ),
             enc_conf=OmegaConf.create(dict(width=8, depth=1, dropout=0.0)),
             obs_conf=OmegaConf.create(

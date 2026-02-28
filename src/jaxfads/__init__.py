@@ -26,12 +26,21 @@ Examples
 ...     'mc_size': 100,
 ...     'approx': 'MVN',
 ...     'approx_kwargs': {},
-...     'forward': 'Linear',
+...     'state_map': 'OUStateMap',
+...     'stepper': 'EulerStepper',
 ...     'obs_conf': {
 ...         'model': 'GLM',
 ...         'likelihood': 'Poisson',
 ...         'cov': [1.0] * 50,
 ...         'norm_readout': False,
+...     },
+...     'dyn_conf': {
+...         'system_type': 'continuous',
+...         'dt': 0.04,
+...         'theta': 2.0,
+...         'state_noise': 1.0,
+...         'input_dim': 1,
+...         'context_dim': 1,
 ...     },
 ... })
 >>>

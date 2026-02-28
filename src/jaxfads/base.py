@@ -282,23 +282,21 @@ class Approx(SubclassRegistryMixin, ABC):
         ...
 
 
-class Dynamics(SubclassRegistryMixin, ConfModule):  # pyright: ignore[reportImplicitAbstractClass]
+class StateMap(SubclassRegistryMixin, ConfModule):  # pyright: ignore[reportImplicitAbstractClass]
     """
-    Abstract base class for dynamics models in XFADS.
+    Abstract base class for latent-state map modules in XFADS.
 
-    Defines the interface for state transition models that describe how
-    the latent state evolves over time.  Concrete subclasses implement
-    the deterministic transition ``forward(z, u, c)``.
+    Concrete subclasses implement ``eval(z, u, c)``.
+    Interpretation is controlled by ``dyn_conf.system_type``:
 
-    Process noise is **not** stored here — it is owned by the
-    orchestrating model (``XFADS``) so that ``Dynamics`` stays a pure
-    transition function.
+    - ``continuous``: returns ``dz/dt`` (a vector field).
+    - ``discrete``: returns ``z_{t+1}`` directly (a transition map).
     """
 
     @abstractmethod
-    def forward(self, z: Array, u: Array, c: Array, *, key=None) -> Array:
+    def eval(self, z: Array, u: Array, c: Array, *, key=None) -> Array:
         """
-        Compute the deterministic part of state transition.
+        Evaluate the latent-state map.
 
         Parameters
         ----------
@@ -309,25 +307,43 @@ class Dynamics(SubclassRegistryMixin, ConfModule):  # pyright: ignore[reportImpl
         c : Array, shape (covariate_dim,)
             Covariate vector.
         key : PRNGKeyArray, optional
-            Random key for stochastic dynamics (e.g., dropout).
+            Random key for stochastic map components (e.g., dropout).
 
         Returns
         -------
         Array, shape (state_dim,)
-            Predicted next state mean (before adding noise).
+            Map output. For continuous systems this is ``dz/dt``; for
+            discrete systems this is ``z_{t+1}``.
         """
         ...
 
     def __call__(self, *args, **kwargs) -> Array:
         """
-        Convenience method to call forward().
+        Convenience method to call eval().
 
         Returns
         -------
         Array
-            Result of forward(*args, **kwargs).
+            Result of eval(*args, **kwargs).
         """
-        return self.forward(*args, **kwargs)
+        return self.eval(*args, **kwargs)
+
+
+class Stepper(SubclassRegistryMixin, ConfModule):  # pyright: ignore[reportImplicitAbstractClass]
+    """Abstract base class for state-evolution steppers in XFADS."""
+
+    @abstractmethod
+    def step(
+        self,
+        z: Array,
+        u: Array,
+        c: Array,
+        state_map: StateMap,
+        *,
+        key=None,
+    ) -> Array:
+        """Advance state by one step using ``state_map``."""
+        ...
 
 
 class Observation(SubclassRegistryMixin, ConfModule):
@@ -366,4 +382,4 @@ class Observation(SubclassRegistryMixin, ConfModule):
         ...
 
 
-__all__ = ["Approx", "Dynamics", "Observation"]
+__all__ = ["Approx", "StateMap", "Stepper", "Observation"]

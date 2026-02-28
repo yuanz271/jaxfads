@@ -2,10 +2,10 @@
 
 Three cases:
 
-1. **MLPDynamics** — trainable MLP learns continuous-time dynamics, integrated with RK4.
-2. **OUDynamics** — built-in tracking prior drift.
+1. **MLPStateMap** — trainable MLP learns continuous-time dynamics, stepped with RK4.
+2. **OUStateMap** — built-in tracking prior drift.
 3. **LoRaMVN** — low-rank pseudo-observation encoder updates (paper Eq. 19–21),
-   using the ground-truth VDPDynamics transition.
+   using the ground-truth VDPStateMap transition.
 
 All use Factor Analysis readout initialisation. Evaluation uses Procrustes
 alignment to compare inferred latents against ground truth.
@@ -24,7 +24,7 @@ from equinox import nn as enn
 from omegaconf import OmegaConf
 
 from jaxfads import XFADS, configure_logging
-from jaxfads.base import Dynamics
+from jaxfads.base import StateMap
 from jaxfads.nn import make_mlp
 from jaxfads.observations import GLM  # noqa: F401 — registers GLM
 from jaxfads.trainer import train
@@ -81,7 +81,7 @@ def simulate_vdp(
 # ---------------------------------------------------------------------------
 
 
-class VDPDynamics(Dynamics):
+class VDPStateMap(StateMap):
     """Exact Van der Pol step (no model mismatch).
 
     Noise is auto-initialised by XFADS via ``state_noise`` in dyn_conf.
@@ -98,24 +98,22 @@ class VDPDynamics(Dynamics):
         """Continuous-time derivative: Van der Pol RHS."""
         return vdp_rhs(z, self.mu)
 
-    def forward(self, z, u, c, *, key=None):
-        return rk4_step(z, self.dt, mu=self.mu)
+    def eval(self, z, u, c, *, key=None):
+        del u, c, key
+        return self.rhs(z)
 
 
-class MLPDynamics(Dynamics):
+class MLPStateMap(StateMap):
     """Trainable MLP dynamics with Euler integration.
 
     The MLP learns the continuous-time derivative ``f(z)``,
-    and ``forward`` applies a single Euler step: ``z + dt · f(z)``.
+    and ``eval`` returns that derivative ``f(z)``.
     Noise is auto-initialised by XFADS via ``state_noise`` in dyn_conf.
     """
 
     net: enn.Sequential
-    dt: float
-
     def __init__(self, conf, key):
         self.conf = conf
-        self.dt = float(conf.dt)
         self.net = make_mlp(
             conf.state_dim,
             conf.state_dim,
@@ -128,8 +126,9 @@ class MLPDynamics(Dynamics):
         """Continuous-time derivative f(z)."""
         return self.net(z)
 
-    def forward(self, z, u, c, *, key=None):
-        return z + self.dt * self.rhs(z)
+    def eval(self, z, u, c, *, key=None):
+        del u, c, key
+        return self.rhs(z)
 
 
 # ---------------------------------------------------------------------------
@@ -176,7 +175,7 @@ def _model_rhs(model, grid_pts, alignment=None):
         If provided, grid points are mapped into latent space before
         evaluation, and the resulting derivatives are mapped back.
     """
-    rhs_fn = model.forward.rhs
+    rhs_fn = model.state_map.rhs
 
     if alignment is not None:
         A_inv = jnp.linalg.inv(alignment.A)
@@ -286,7 +285,7 @@ def evaluate(
     align_flow : bool, default=True
         Whether to pass the Procrustes alignment to flow-field
         evaluation.  Set ``False`` when the dynamics operate in the
-        true coordinate system (e.g. VDPDynamics).
+        true coordinate system (e.g. VDPStateMap).
 
     Returns dict with metric values, aligned means, covariances, and
     the Procrustes alignment.
@@ -548,16 +547,17 @@ def main() -> None:
     eval_kw = dict(mu=mu, xlim=xlim, vlim=vlim, grid=grid)
 
     # ===================================================================
-    # Case 1: MLPDynamics (learned dynamics)
+    # Case 1: MLPStateMap (learned dynamics)
     # ===================================================================
     print("\n" + "=" * 60)
-    print("Case 1: MLPDynamics (learned dynamics)")
+    print("Case 1: MLPStateMap (learned dynamics)")
     print("=" * 60)
 
     conf1 = OmegaConf.create(
         {
             **shared_conf,
-            "forward": "MLPDynamics",
+            "state_map": "MLPStateMap",
+            "stepper": "RK4Stepper",
             "mc_size": 4,
             "dyn_conf": dict(
                 input_dim=0,
@@ -566,6 +566,7 @@ def main() -> None:
                 width=32,
                 depth=1,
                 dt=dt,
+                system_type="continuous",
             ),
         }
     )
@@ -576,7 +577,7 @@ def main() -> None:
 
     key, k = jr.split(key)
     r1 = evaluate(
-        "MLPDynamics",
+        "MLPStateMap",
         trained1,
         latent_states,
         observations,
@@ -610,22 +611,24 @@ def main() -> None:
     )
 
     # ===================================================================
-    # Case 2: OUDynamics (diffusion-style tracking prior)
+    # Case 2: OUStateMap (diffusion-style tracking prior)
     # ===================================================================
     print("\n" + "=" * 60)
-    print("Case 2: OUDynamics (diffusion-style tracking prior)")
+    print("Case 2: OUStateMap (diffusion-style tracking prior)")
     print("=" * 60)
 
     conf2 = OmegaConf.create(
         {
             **shared_conf,
-            "forward": "OUDynamics",
+            "state_map": "OUStateMap",
+            "stepper": "EulerStepper",
             "mc_size": 4,
             "dyn_conf": dict(
                 input_dim=0,
                 context_dim=0,
                 theta=2.0,
                 dt=dt,
+                system_type="continuous",
                 state_noise=1.0,
             ),
         }
@@ -637,7 +640,7 @@ def main() -> None:
 
     key, k = jr.split(key)
     r2 = evaluate(
-        "OUDynamics",
+        "OUStateMap",
         trained2,
         latent_states,
         observations,
@@ -682,13 +685,15 @@ def main() -> None:
             **shared_conf,
             "approx": "LoRaMVN",
             "approx_kwargs": {"rank": 1},
-            "forward": "VDPDynamics",
+            "state_map": "VDPStateMap",
+            "stepper": "RK4Stepper",
             "mc_size": 4,
             "dyn_conf": dict(
                 input_dim=0,
                 context_dim=0,
                 mu=mu,
                 dt=dt,
+                system_type="continuous",
                 state_noise=1.0,
             ),
         }
@@ -750,7 +755,7 @@ def main() -> None:
     print(f"Summary  (Procrustes-aligned; obs noise σ = {sigma_obs})")
     print("=" * 74)
     header = (
-        f"{'Metric':<30s} {'MLPDynamics':>14s} {'OUDynamics':>14s} {'LoRaMVN':>14s}"
+        f"{'Metric':<30s} {'MLPStateMap':>14s} {'OUStateMap':>14s} {'LoRaMVN':>14s}"
     )
     print(header)
     print("-" * len(header))
