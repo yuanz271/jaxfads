@@ -40,7 +40,7 @@ class _IdentityDynamics(Dynamics):
 
 
 class _DummyModel:
-    """Minimal model duck-typing XFADS for core.filter / core._bismooth."""
+    """Minimal model duck-typing XFADS for core.site_filter / core._bismooth."""
 
     def __init__(self, approx, state_dim: int, mc_size: int = 1, cov: float = 1.0):
         self.approx = approx
@@ -91,7 +91,7 @@ def test_bismooth_shapes_and_finite(diag):
         chex.assert_tree_all_finite(arr)
 
 
-def test_causal_filter_reindexed_identity(diag):
+def test_causal_reindexed_identity(diag):
     """Causal mode uses code indexing: lambda_t = check_lambda_t + beta_t."""
     state_dim, T = 2, 6
     model = _DummyModel(diag, state_dim)
@@ -104,7 +104,7 @@ def test_causal_filter_reindexed_identity(diag):
     c = jnp.zeros((T, 0))
 
     check_nature, _, _ = core.filter(model, key, jnp.arange(T), alpha, u, c)
-    nature, moment, moment_p = core.causal_filter(
+    nature, moment, moment_p = core.causal(
         model, key, jnp.arange(T), alpha, beta, u, c
     )
 
@@ -115,8 +115,8 @@ def test_causal_filter_reindexed_identity(diag):
     chex.assert_tree_all_finite(moment_p)
 
 
-def test_causal_filter_zero_beta_reduces_to_alpha_filter(diag):
-    """If beta is zero, causal_filter matches alpha-only filtering."""
+def test_causal_zero_beta_reduces_to_alpha_filter(diag):
+    """If beta is zero, causal matches alpha-only filtering."""
     state_dim, T = 2, 5
     model = _DummyModel(diag, state_dim)
     key = jr.key(20)
@@ -130,7 +130,7 @@ def test_causal_filter_zero_beta_reduces_to_alpha_filter(diag):
     check_nature, check_moment, check_moment_p = core.filter(
         model, key, jnp.arange(T), alpha, u, c
     )
-    nature, moment, moment_p = core.causal_filter(
+    nature, moment, moment_p = core.causal(
         model, key, jnp.arange(T), alpha, beta, u, c
     )
 

@@ -20,7 +20,7 @@ Legend:
 | Missing-observation handling via zero update | `MATCH` | `src/jaxfads/smoother.py:401`, `src/jaxfads/smoother.py:410` | Non-finite observations are masked and produce zero local update. |
 | Low-rank pseudo-observation parameter output from encoders | `PARTIAL` | `src/jaxfads/distributions/mvn.py:408`, `src/jaxfads/distributions/mvn.py:442`, `src/jaxfads/distributions/mvn.py:446`; smoke test in `tests/test_smoother.py:186` | Implemented through `LoRaMVN` compact free-form output. Not the default path (`MVN` still emits dense free vectors). |
 | Low-rank structured linear algebra complexity claims (Woodbury/Cholesky pipeline) | `MISMATCH` | `src/jaxfads/distributions/mvn.py:295`, `src/jaxfads/distributions/mvn.py:305`, `src/jaxfads/distributions/mvn.py:258`, `src/jaxfads/distributions/mvn.py:274` | Current inference/kl/sample paths materialize full covariance/precision operations (TFP full-cov + dense solves), so paper's scalable structured complexity is not realized end-to-end. |
-| Streaming/causal inference recursion (paper Eq. 29 family) | `MATCH` | `src/jaxfads/core.py` (`causal_filter`), `src/jaxfads/smoother.py` (`mode="causal"` branch) | Implemented as alpha-only filtering for `λ̆_t` followed by reconstruction `λ_t = λ̆_t + b_t` (code indexing, where `b_t` corresponds to paper `β_{t+1}`). |
+| Streaming/causal inference recursion (paper Eq. 29 family) | `MATCH` | `src/jaxfads/core.py` (`causal`), `src/jaxfads/smoother.py` (`mode="causal"` branch) | Implemented as alpha-only filtering for `λ̆_t` followed by reconstruction `λ_t = λ̆_t + b_t` (code indexing, where `b_t` corresponds to paper `β_{t+1}`). The API also exposes `mode="filter"` for alpha-only filtering output directly. |
 
 ## Consistency Details
 

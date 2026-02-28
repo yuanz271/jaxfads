@@ -6,6 +6,7 @@ from jax import Array, random as jr
 from jax import numpy as jnp
 from omegaconf import OmegaConf, DictConfig
 import equinox as eqx
+import pytest
 from jaxfads.base import Dynamics
 from jaxfads.smoother import XFADS
 
@@ -303,3 +304,110 @@ def test_causal_mode_smoke_constructor_and_forward_pass():
 
     assert jnp.isfinite(post_mom).all()
     assert jnp.isfinite(prior_mom).all()
+
+
+def test_filter_mode_smoke_constructor_and_forward_pass():
+    """XFADS should run end-to-end with mode='filter'."""
+    T = 5
+    y_size = 4
+    z_size = 3
+
+    model_conf = OmegaConf.create(
+        dict(
+            mode="filter",
+            observation_dim=y_size,
+            state_dim=z_size,
+            forward="Mock",
+            approx="MVN",
+            approx_kwargs={},
+            mc_size=2,
+            seed=0,
+            n_steps=T,
+            fb_penalty=0,
+            noise_penalty=0,
+            dropout=0.0,
+            dyn_conf=OmegaConf.create(
+                dict(
+                    input_dim=0,
+                    context_dim=0,
+                    state_noise=1.0,
+                )
+            ),
+            enc_conf=OmegaConf.create(
+                dict(
+                    width=8,
+                    depth=1,
+                    dropout=0.0,
+                )
+            ),
+            obs_conf=OmegaConf.create(
+                dict(
+                    model="GLM",
+                    emission_noise=1.0,
+                    norm_readout=False,
+                    dropout=0.0,
+                    likelihood="Poisson",
+                )
+            ),
+        )
+    )
+
+    key = jr.key(0)
+    model = XFADS(model_conf, key)
+
+    times = jnp.broadcast_to(jnp.arange(T), (1, T))
+    y = jr.poisson(jr.key(1), jnp.ones((1, T, y_size)))
+    u = jnp.zeros((1, T, 0))
+    c = jnp.zeros((1, T, 0))
+
+    model = model.initialize(times, y, u, c)
+    _, post_mom, prior_mom = model(times, y, u, c, key=jr.key(2))
+
+    assert jnp.isfinite(post_mom).all()
+    assert jnp.isfinite(prior_mom).all()
+
+
+def test_invalid_mode_error_lists_filter_smooth_causal():
+    T = 3
+    y_size = 2
+    z_size = 2
+
+    model_conf = OmegaConf.create(
+        dict(
+            mode="unknown",
+            observation_dim=y_size,
+            state_dim=z_size,
+            forward="Mock",
+            approx="MVN",
+            approx_kwargs={},
+            mc_size=2,
+            seed=0,
+            n_steps=T,
+            fb_penalty=0,
+            noise_penalty=0,
+            dropout=0.0,
+            dyn_conf=OmegaConf.create(
+                dict(input_dim=0, context_dim=0, state_noise=1.0)
+            ),
+            enc_conf=OmegaConf.create(dict(width=8, depth=1, dropout=0.0)),
+            obs_conf=OmegaConf.create(
+                dict(
+                    model="GLM",
+                    emission_noise=1.0,
+                    norm_readout=False,
+                    dropout=0.0,
+                    likelihood="Poisson",
+                )
+            ),
+        )
+    )
+
+    model = XFADS(model_conf, jr.key(0))
+    times = jnp.broadcast_to(jnp.arange(T), (1, T))
+    y = jr.poisson(jr.key(1), jnp.ones((1, T, y_size)))
+    u = jnp.zeros((1, T, 0))
+    c = jnp.zeros((1, T, 0))
+
+    model = model.initialize(times, y, u, c)
+    with pytest.raises(ValueError, match="filter, smooth, causal"):
+        model(times, y, u, c, key=jr.key(2))

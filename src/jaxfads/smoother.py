@@ -52,7 +52,7 @@ class XFADS(ConfModule):
         - approx_kwargs: Keyword arguments for approx instantiation
         - forward: Forward dynamics model type
         - obs_conf: Observation model config
-        - mode: Inference mode ('smooth', 'causal')
+        - mode: Inference mode ('filter', 'smooth', 'causal')
 
     Attributes
     ----------
@@ -360,6 +360,7 @@ class XFADS(ConfModule):
            to create pseudo-missing observations for regularization.
 
         4. **Inference Mode**:
+           - `FILTER`: forward filtering on alpha-only sites (`alpha`)
            - `SMOOTH`: forward filtering on additive sites (`alpha + beta`)
            - `CAUSAL`: alpha-only filtering then beta reconstruction
 
@@ -421,14 +422,17 @@ class XFADS(ConfModule):
         keys = jrnd.split(key, jnp.size(t, 0))
 
         match self.conf.mode:
+            case Mode.FILTER:
+                smooth_batch = vmap(partial(core.filter, self))
+                return smooth_batch(keys, t, a, u, c)
             case Mode.CAUSAL:
-                smooth_batch = vmap(partial(core.causal_filter, self))
+                smooth_batch = vmap(partial(core.causal, self))
                 return smooth_batch(keys, t, a, b, u, c)
             case Mode.SMOOTH:
-                smooth_batch = vmap(partial(core.filter, self))
-                return smooth_batch(keys, t, a + b, u, c)
+                smooth_batch = vmap(partial(core.smooth, self))
+                return smooth_batch(keys, t, a, b, u, c)
             case _:
                 raise ValueError(
                     f"Unsupported mode: {self.conf.mode}. Expected one of "
-                    f"{Mode.SMOOTH!s}, {Mode.CAUSAL!s}."
+                    f"{Mode.FILTER!s}, {Mode.SMOOTH!s}, {Mode.CAUSAL!s}."
                 )

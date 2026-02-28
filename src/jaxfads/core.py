@@ -22,8 +22,10 @@ from .base import Approx
 __all__ = [
     "expected_predictive_moment",
     "Mode",
+    "site_filter",
     "filter",
-    "causal_filter",
+    "smooth",
+    "causal",
 ]
 
 
@@ -115,26 +117,29 @@ class Mode(StrEnum):
 
     Attributes
     ----------
+    FILTER : str
+        Filtering mode using alpha-only updates.
     SMOOTH : str
         Smoothing mode using additive pseudo-observation updates.
     CAUSAL : str
         Causal Eq. 29 mode using alpha-only filtering plus beta reconstruction.
     """
 
+    FILTER = auto()
     SMOOTH = auto()
     CAUSAL = auto()
 
 
-def filter(
+def site_filter(
     model,
     key: Array,
     _t: Array,
-    alpha: Array,
+    site_natural: Array,
     u: Array,
     c: Array,
 ) -> tuple[Array, Array, Array]:
     """
-    Forward filtering for state estimation in XFADS.
+    Generic forward recursion over natural-parameter site updates in XFADS.
 
     Performs sequential Bayesian filtering to estimate latent states given
     observations. Uses variational inference with exponential family
@@ -148,8 +153,8 @@ def filter(
         JAX random number generator key for stochastic operations.
     _t : Array, shape (T,)
         Time steps for the sequence (unused in current implementation).
-    alpha : Array, shape (T, param_dim)
-        Information updates from observations in natural parameter form.
+    site_natural : Array, shape (T, param_dim)
+        Natural-parameter site updates used in the recursion.
     u : Array, shape (T, input_dim)
         External control/input signals.
     c : Array, shape (T, covariate_dim)
@@ -166,7 +171,7 @@ def filter(
 
     Notes
     -----
-    The filtering recursion follows:
+    The recursion follows:
 
     1. Prediction: p(z_t | y_{1:t-1}) from dynamics
     2. Update: p(z_t | y_{1:t}) ∝ p(z_t | y_{1:t-1}) p(y_t | z_t)
@@ -186,16 +191,16 @@ def filter(
         mc_size=model.conf.mc_size,
     )
 
-    nature_f_1 = nature_p_1 + alpha[0]
+    nature_f_1 = nature_p_1 + site_natural[0]
 
     def ff(carry, obs, expected_moment):
         key, nature_tm1 = carry
         key, ky = jrnd.split(key)
-        a_t, u_tm1, c_tm1 = obs
+        site_t, u_tm1, c_tm1 = obs
         moment_tm1 = approx.natural_to_moment(nature_tm1)
         moment_p_t = expected_moment(ky, moment_tm1, u_tm1, c_tm1)
         nature_p_t = approx.moment_to_natural(moment_p_t)
-        nature_t = nature_p_t + a_t
+        nature_t = nature_p_t + site_t
         return (key, nature_t), (moment_p_t, nature_p_t, nature_t)
 
     key, ky = jrnd.split(key)
@@ -205,7 +210,7 @@ def filter(
     _, (moment_p, _, nature_f) = scan(
         scan_body,
         init=(ky, nature_f_1),
-        xs=(alpha[1:], u[:-1], c[:-1]),  # t = 2 ... T+1
+        xs=(site_natural[1:], u[:-1], c[:-1]),  # t = 2 ... T+1
     )
     nature_f = jnp.vstack((nature_f_1, nature_f))  # 1...T
 
@@ -217,7 +222,38 @@ def filter(
     return nature_f, moment_f, moment_p
 
 
-def causal_filter(
+def filter(
+    model,
+    key: Array,
+    _t: Array,
+    alpha: Array,
+    u: Array,
+    c: Array,
+) -> tuple[Array, Array, Array]:
+    """
+    Alpha-only filtering posterior recursion.
+
+    This returns filtering natural/moment parameters and predictive moments.
+    """
+    return site_filter(model, key, _t, alpha, u, c)
+
+
+def smooth(
+    model,
+    key: Array,
+    _t: Array,
+    alpha: Array,
+    beta: Array,
+    u: Array,
+    c: Array,
+) -> tuple[Array, Array, Array]:
+    """
+    Smoothing-side recursion using additive natural sites ``alpha + beta``.
+    """
+    return site_filter(model, key, _t, alpha + beta, u, c)
+
+
+def causal(
     model,
     key: Array,
     _t: Array,
