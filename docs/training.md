@@ -46,7 +46,7 @@ Pass a `DictConfig` (or plain dict) as `conf`. Missing keys are filled from
 | `valid_ratio` | `0.2` | Fraction of data used for validation |
 | `validation_size` | `80` | Fixed validation set size (overrides `valid_ratio` when > 0) |
 | `patience` | auto | Early-stopping patience in epochs; auto-computed from training budget when not provided |
-| `freeze_state_noise` | `False` | If `True`, freeze `model.noise_free` (process noise) at its initial value |
+| `freeze_paths` | `[]` | Optional list of dot-separated model attribute paths to freeze (e.g. `["noise_free"]`) |
 
 ### Example
 
@@ -63,6 +63,17 @@ trainer_conf = OmegaConf.create(dict(
     noise_eta=0.0,         # disable gradient noise
     validation_size=64,
 ))
+```
+
+### Freezing Parameters
+
+Use `freeze_paths` to freeze arbitrary leaves declaratively in serialized
+configs:
+
+```python
+trainer_conf = {
+    "freeze_paths": ["noise_free"],  # freeze process noise
+}
 ```
 
 ## Optimizer Chain

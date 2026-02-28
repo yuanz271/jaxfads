@@ -536,7 +536,14 @@ def main() -> None:
 
     trainer_conf_mlp = OmegaConf.create({**base_trainer_conf, "max_epoch": 500})
     trainer_conf_ou = OmegaConf.create({**base_trainer_conf, "max_epoch": 100})
-    trainer_conf_lora = OmegaConf.create({**base_trainer_conf, "max_epoch": 100})
+    trainer_conf_lora = OmegaConf.create(
+        {
+            **base_trainer_conf,
+            "max_epoch": 100,
+            # Keep transition noise fixed for this low-rank encoder demo.
+            "freeze_paths": ["noise_free"],
+        }
+    )
 
     eval_kw = dict(mu=mu, xlim=xlim, vlim=vlim, grid=grid)
 

@@ -51,10 +51,20 @@ DEFAULT_TRAINER_CONFIG = DictConfig(
         "kl_warmup_steps": 0,
         # Optional user-provided regularizer: Callable[[XFADS], Array]
         "noise_regularizer": None,
-        # Optional toggle to freeze process-noise parameters stored on the model.
-        "freeze_state_noise": False,
+        # Optional list of dot-separated attribute paths to freeze.
+        # Example: ["noise_free", "unconstrained_prior_natural"]
+        "freeze_paths": [],
     }
 )
+
+
+def _resolve_attr_path(obj, parts: tuple[str, ...]):
+    cur = obj
+    for name in parts:
+        if not hasattr(cur, name):
+            raise ValueError(f"Invalid freeze path: {'.'.join(parts)}")
+        cur = getattr(cur, name)
+    return cur
 
 
 def train_test_split(arrays, *, rng, test_ratio=None, test_size=None, train_size=None):
@@ -426,17 +436,24 @@ def train(model, data, *, conf):
         optax.scale_by_learning_rate(conf.learning_rate),
     )
 
-    def loss_fn(model, batch, key, step):
-        # Optional: freeze process noise parameters stored on the model.
-        # This keeps the dynamics noise fixed at its initial value (from
-        # `dyn_conf.state_noise`) while still training all other parameters.
-        if conf.freeze_state_noise:
-            model = eqx.tree_at(
-                lambda m: m.noise_free,
-                model,
-                jax.lax.stop_gradient(model.noise_free),
-            )
+    freeze_mask = jax.tree.map(lambda _: False, model)
+    freeze_paths = [str(p) for p in conf.freeze_paths]
+    for path in freeze_paths:
+        parts = tuple(path.split("."))
+        _ = _resolve_attr_path(model, parts)  # fail fast if path is invalid
 
+        def getter(m, _parts=parts):
+            return _resolve_attr_path(m, _parts)
+
+        freeze_mask = eqx.tree_at(getter, freeze_mask, True)
+
+    if len(freeze_paths) > 0:
+        optimizer = optax.chain(
+            optimizer,
+            optax.masked(optax.set_to_zero(), freeze_mask),
+        )
+
+    def loss_fn(model, batch, key, step):
         return batch_loss(
             model,
             batch,
