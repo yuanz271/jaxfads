@@ -1,7 +1,7 @@
 # JAXFADS - Project Knowledge Base
 
-**Updated:** 2026-02-25  
-**Branch:** feature/unify-noise-approx
+**Updated:** 2026-02-28  
+**Branch:** feature/statemap-stepper
 
 ## Overview
 

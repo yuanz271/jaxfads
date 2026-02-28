@@ -48,13 +48,15 @@ class MyStateMap(StateMap):
 - `FunctionStateMap`: wraps a non-trainable callable
 
 `FunctionStateMap` only accepts:
-- plain Python functions/lambdas
+- plain Python functions (including lambdas bound to module-level names)
 - bound methods
 - `functools.partial` of the above
 
 It intentionally rejects arbitrary callable objects.
 Set callable import path under `dyn_conf.fn_path` (`module:function`) and
 optional kwargs under `dyn_conf.fn_kwargs`.
+When running an example/script directly, use `__main__:symbol_name` for
+`fn_path` (for example `__main__:vdp_state_map`).
 
 Example:
 
