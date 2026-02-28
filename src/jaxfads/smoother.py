@@ -19,7 +19,7 @@ from jax import random as jrnd
 from gearax.modules import ConfModule, load_model, save_model
 from omegaconf import OmegaConf
 
-from . import core, distributions, dynamics, encoders  # noqa: F401 — side-effect registers subclasses
+from . import core, distributions, dynamics, encoders, observations  # noqa: F401 — side-effect registers subclasses
 from .core import Mode
 from .base import Approx
 from .base import Dynamics
@@ -52,7 +52,7 @@ class XFADS(ConfModule):
         - approx_kwargs: Keyword arguments for approx instantiation
         - forward: Forward dynamics model type
         - obs_conf: Observation model config
-        - mode: Inference mode ('pseudo', 'bifilter' not tested)
+        - mode: Inference mode ('smooth', 'causal')
 
     Attributes
     ----------
@@ -359,8 +359,9 @@ class XFADS(ConfModule):
         3. **Pseudo-Observations**: During training, the masker applies dropout
            to create pseudo-missing observations for regularization.
 
-        4. **Filtering/Smoothing**: Applies either forward filtering (PSEUDO mode)
-           or bidirectional smoothing (BIFILTER mode) to estimate posterior states.
+        4. **Inference Mode**:
+           - `SMOOTH`: forward filtering on additive sites (`alpha + beta`)
+           - `CAUSAL`: alpha-only filtering then beta reconstruction
 
         The method handles batched sequences efficiently using JAX transformations
         and supports both training and inference modes.
@@ -390,39 +391,44 @@ class XFADS(ConfModule):
         batch_alpha_encode = vmap_with_key(vmap_with_key(self.alpha_encoder))
         batch_beta_encode = vmap_with_key(self.beta_encoder)
 
-        match self.conf.mode:
-            case Mode.BIFILTER:
-                raise NotImplementedError("BIFILTER mode is not implemented.")
-            case _:
-                smooth_batch = vmap(partial(core.filter, self))
+        def batch_encode(y: Array, key) -> tuple[Array, Array]:
+            # handling missing values
+            mask_y = jnp.all(
+                jnp.isfinite(y), axis=2, keepdims=True
+            )  # nonfinite are missing values
+            y = jnp.where(mask_y, y, 0)
 
-                def batch_encode(y: Array, key) -> Array:
-                    # handling missing values
-                    mask_y = jnp.all(
-                        jnp.isfinite(y), axis=2, keepdims=True
-                    )  # nonfinite are missing values
-                    # chex.assert_equal_shape((y, mask_y), dims=(0, 1))
-                    y = jnp.where(mask_y, y, 0)
+            key, alpha_key = jrnd.split(key)
+            a_free = batch_alpha_encode(y, key=alpha_key)
+            a = batch_free_to_natural(a_free)
+            a = jnp.where(mask_y, a, 0)  # missing values: no update
 
-                    key, alpha_key = jrnd.split(key)
-                    a_free = batch_alpha_encode(y, key=alpha_key)
-                    a = batch_free_to_natural(a_free)
-                    a = jnp.where(mask_y, a, 0)  # missing values: no update
+            key, mask_key = jrnd.split(key)
+            mask_a = self.masker(y, key=mask_key)
+            a = jnp.where(mask_a, a, 0)  # pseudo missing values
 
-                    key, mask_key = jrnd.split(key)
-                    mask_a = self.masker(y, key=mask_key)
-                    a = jnp.where(mask_a, a, 0)  # pseudo missing values
+            key, beta_key = jrnd.split(key)
+            b_free = batch_beta_encode(a, key=beta_key)
+            b = batch_free_to_natural(b_free)
 
-                    key, beta_key = jrnd.split(key)
-                    b_free = batch_beta_encode(a, key=beta_key)
-                    b = batch_free_to_natural(b_free)
-
-                    key, mask_key = jrnd.split(key)
-                    mask_b = self.masker(y, key=mask_key)
-                    b = jnp.where(mask_b, b, 0)  # filter only steps
-                    return a + b
+            key, mask_key = jrnd.split(key)
+            mask_b = self.masker(y, key=mask_key)
+            b = jnp.where(mask_b, b, 0)
+            return a, b
 
         key, encode_key = jrnd.split(key)
-        alpha = batch_encode(y, encode_key)
+        a, b = batch_encode(y, encode_key)
+        keys = jrnd.split(key, jnp.size(t, 0))
 
-        return smooth_batch(jrnd.split(key, jnp.size(t, 0)), t, alpha, u, c)
+        match self.conf.mode:
+            case Mode.CAUSAL:
+                smooth_batch = vmap(partial(core.causal_filter, self))
+                return smooth_batch(keys, t, a, b, u, c)
+            case Mode.SMOOTH:
+                smooth_batch = vmap(partial(core.filter, self))
+                return smooth_batch(keys, t, a + b, u, c)
+            case _:
+                raise ValueError(
+                    f"Unsupported mode: {self.conf.mode}. Expected one of "
+                    f"{Mode.SMOOTH!s}, {Mode.CAUSAL!s}."
+                )

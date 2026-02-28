@@ -30,7 +30,7 @@ def sample_data():
 def model_conf():
     return OmegaConf.create(
         {
-            "mode": "pseudo",
+            "mode": "smooth",
             "observation_dim": 10,
             "state_dim": 2,
             "forward": "MockDynamics",
