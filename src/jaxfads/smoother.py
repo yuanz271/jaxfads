@@ -195,12 +195,17 @@ class XFADS(ConfModule):
         observation_model_cls = Observation.get_subclass(obs_conf.model)
         self.observation = observation_model_cls(obs_conf, key=ky)
 
-        # Encoders are approx-agnostic; inject the size of the encoder free-form
-        # output vector derived from the configured approximation.
-        free_size = int(self.approx.encoder_free_size())
+        # Encoders are approx-agnostic; inject representation-level sizes.
+        free_size = int(self.approx.free_size())
+        param_size = int(self.approx.param_size())
+
         enc_conf = OmegaConf.merge(
             self.conf.enc_conf,
-            {"param_size": free_size, "observation_dim": self.conf.observation_dim},
+            {
+                "observation_dim": self.conf.observation_dim,
+                "param_size": param_size,
+                "free_size": free_size,
+            },
         )
 
         key, ky = jrnd.split(key)
@@ -378,11 +383,8 @@ class XFADS(ConfModule):
         >>> natural, moment, pred = model(t, y_batch, u_batch, c_batch, key=key)
         """
         approx = self.approx
-        natural_size = int(approx.param_size())
-        free_size = int(approx.encoder_free_size())
-
         def _free_to_natural(free_flat: Array) -> Array:
-            return approx.encoder_free_to_natural(free_flat)
+            return approx.free_to_natural(free_flat)
 
         batch_free_to_natural = vmap(vmap(_free_to_natural))
         batch_alpha_encode = vmap_with_key(vmap_with_key(self.alpha_encoder))
@@ -402,48 +404,22 @@ class XFADS(ConfModule):
                     # chex.assert_equal_shape((y, mask_y), dims=(0, 1))
                     y = jnp.where(mask_y, y, 0)
 
-                    if free_size == natural_size:
-                        # Backwards-compatible path: BetaEncoder consumes *natural*
-                        # alpha updates.
-                        key, alpha_key = jrnd.split(key)
-                        a = batch_free_to_natural(batch_alpha_encode(y, key=alpha_key))
-                        a = jnp.where(
-                            mask_y, a, 0
-                        )  # miss_values have no updates to state
-
-                        key, mask_key = jrnd.split(key)
-                        mask_a = self.masker(y, key=mask_key)
-                        a = jnp.where(mask_a, a, 0)  # pseudo missing values
-
-                        key, beta_key = jrnd.split(key)
-                        b_free = batch_beta_encode(a, key=beta_key)
-                        b = batch_free_to_natural(b_free)
-
-                        key, mask_key = jrnd.split(key)
-                        mask_b = self.masker(y, key=mask_key)
-                        b = jnp.where(mask_b, b, 0)  # filter only steps
-
-                        return a + b
-
-                    # LoRA/compact-encoder path: BetaEncoder consumes encoder-free
-                    # alpha updates.
                     key, alpha_key = jrnd.split(key)
                     a_free = batch_alpha_encode(y, key=alpha_key)
-                    a_free = jnp.where(mask_y, a_free, 0)
+                    a = batch_free_to_natural(a_free)
+                    a = jnp.where(mask_y, a, 0)  # missing values: no update
 
                     key, mask_key = jrnd.split(key)
                     mask_a = self.masker(y, key=mask_key)
-                    a_free = jnp.where(mask_a, a_free, 0)
+                    a = jnp.where(mask_a, a, 0)  # pseudo missing values
 
                     key, beta_key = jrnd.split(key)
-                    b_free = batch_beta_encode(a_free, key=beta_key)
+                    b_free = batch_beta_encode(a, key=beta_key)
+                    b = batch_free_to_natural(b_free)
 
                     key, mask_key = jrnd.split(key)
                     mask_b = self.masker(y, key=mask_key)
-                    b_free = jnp.where(mask_b, b_free, 0)
-
-                    a = batch_free_to_natural(a_free)
-                    b = batch_free_to_natural(b_free)
+                    b = jnp.where(mask_b, b, 0)  # filter only steps
                     return a + b
 
         key, encode_key = jrnd.split(key)

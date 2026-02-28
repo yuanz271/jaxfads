@@ -171,10 +171,10 @@ def test_kl_matches_tfp(structure, dim):
 
 def test_encoder_free_hooks_default_mvn_matches_standard_chain():
     mvn = MVN(dim=3, structure="full")
-    assert mvn.encoder_free_size() == mvn.param_size()
+    assert mvn.free_size() == mvn.param_size()
 
     free = mvn.free_from_kw(scale=1.5)
-    natural = mvn.encoder_free_to_natural(free)
+    natural = mvn.free_to_natural(free)
     chex.assert_shape(natural, (mvn.param_size(),))
 
     canon = mvn.free_to_canon(free)
@@ -187,14 +187,14 @@ def test_encoder_free_hooks_lora_mvn_produces_psd_precision_update():
     dim, rank = 4, 2
     approx = LoRaMVN(dim=dim, rank=rank)
 
-    assert approx.encoder_free_size() == rank + rank * dim
+    assert approx.free_size() == rank + rank * dim
     assert approx.param_size() == dim + dim * dim
 
     b = jrnd.normal(jrnd.key(0), (rank,))
     K = jrnd.normal(jrnd.key(1), (rank, dim))
     free = jnp.concatenate((b, K.ravel()))
 
-    natural = approx.encoder_free_to_natural(free)
+    natural = approx.free_to_natural(free)
     chex.assert_shape(natural, (approx.param_size(),))
 
     h = natural[:dim]
@@ -210,6 +210,17 @@ def test_encoder_free_hooks_lora_mvn_produces_psd_precision_update():
     x = jrnd.normal(jrnd.key(2), (dim,))
     quad = x @ J @ x
     assert quad >= -1e-5
+
+
+def test_encoder_free_hooks_lora_mvn_zero_is_noop_update():
+    dim, rank = 5, 2
+    approx = LoRaMVN(dim=dim, rank=rank)
+
+    free = jnp.zeros((approx.free_size(),))
+    natural = approx.free_to_natural(free)
+
+    chex.assert_shape(natural, (approx.param_size(),))
+    chex.assert_trees_all_close(natural, jnp.zeros_like(natural), atol=1e-8)
 
 
 def test_registry_lookup():

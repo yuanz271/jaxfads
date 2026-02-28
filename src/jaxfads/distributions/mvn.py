@@ -439,11 +439,11 @@ class LoRaMVN(MVN):
         super().__init__(dim=dim, structure="full")
         self._rank = rank
 
-    def encoder_free_size(self) -> int:
+    def free_size(self) -> int:
         d = self._layout.dim
         return self._rank + self._rank * d
 
-    def encoder_free_to_natural(self, free: Array) -> Array:
+    def free_to_natural(self, free: Array) -> Array:
         d = self._layout.dim
         b_raw = free[: self._rank]
         K_raw = jnp.reshape(free[self._rank :], (self._rank, d))
@@ -457,10 +457,12 @@ class LoRaMVN(MVN):
         h = K.T @ b
         J = K.T @ K
 
-        # Add an isotropic precision floor for numerical stability.
-        # When rank < dim, KᵀK is low-rank; without a diagonal term the
-        # posterior can become extremely diffuse in the nullspace, which can
-        # destabilize Monte Carlo dynamics evaluation.
+        # Add a magnitude-gated isotropic precision floor for numerical
+        # stability while preserving zero-update semantics:
+        # free_to_natural(0) must return 0 so masked timesteps stay
+        # true no-op updates in compact-encoder mode.
         base_precision = 1.0
-        J = 0.5 * (J + J.T) + base_precision * jnp.eye(d, dtype=J.dtype)
+        k_energy = jnp.sum(jnp.square(K))
+        floor_gate = k_energy / (1.0 + k_energy)  # in [0, 1), exactly 0 at K=0
+        J = 0.5 * (J + J.T) + floor_gate * base_precision * jnp.eye(d, dtype=J.dtype)
         return jnp.concatenate((h, J.ravel()))

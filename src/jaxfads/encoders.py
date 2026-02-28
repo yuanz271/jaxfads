@@ -4,10 +4,13 @@ This module implements neural network encoders that convert observations and
 temporal information into natural parameter updates for variational inference in
 XFADS.
 
-Encoders are **Approx-agnostic**: they only need to know the flat parameter
-vector length (`param_size`) in order to size their output layers.
+Encoders are **Approx-agnostic**: they only need flat vector sizes injected by
+`XFADS`:
 
-`XFADS` injects `param_size` into the encoder config at construction time based
+- `param_size`: natural-parameter vector length
+- `free_size`: encoder free-form vector length
+
+`XFADS` injects these sizes into the encoder config at construction time based
 on the configured `Approx` instance.
 """
 
@@ -28,7 +31,7 @@ class AlphaEncoder(ConfModule):
     """Alpha encoder for observation-driven information updates in XFADS.
 
     The alpha encoder is a feedforward neural network that converts raw
-    observations into flat natural-parameter updates for the variational
+    observations into flat free-form updates for the variational
     posterior.
 
     Parameters
@@ -36,7 +39,7 @@ class AlphaEncoder(ConfModule):
     conf : DictConfig
         Configuration containing:
         - observation_dim: Dimensionality of input observations
-        - param_size: Length of the flat natural parameter vector
+        - free_size: Length of the flat encoder free-form vector
         - width: Hidden layer width
         - depth: Number of hidden layers
         - dropout: Dropout probability (optional)
@@ -49,19 +52,19 @@ class AlphaEncoder(ConfModule):
 
     ``α_t = AlphaEncoder(y_t)``
 
-    where ``α_t`` is a flat vector in the natural-parameter layout of the chosen
-    `Approx`.
+    where ``α_t`` is a flat vector in the encoder free-form layout of the
+    chosen `Approx`.
     """
 
     layer: Callable
 
     def __init__(self, conf: DictConfig, key: Array):
         self.conf = conf
-        param_size = int(conf.param_size)
+        free_size = int(conf.free_size)
 
         self.layer = make_mlp(
             conf.observation_dim,
-            param_size,
+            free_size,
             conf.width,
             conf.depth,
             key=key,
@@ -69,7 +72,7 @@ class AlphaEncoder(ConfModule):
         )
 
     def __call__(self, y: Array, *, key=None) -> Array:
-        """Encode a single observation vector into a natural-parameter update."""
+        """Encode a single observation vector into a free-form update."""
         return self.layer(y, key=key)
 
 
@@ -83,7 +86,8 @@ class BetaEncoder(ConfModule):
     ----------
     conf : DictConfig
         Configuration containing:
-        - param_size: Length of the flat natural parameter vector
+        - param_size: Length of the flat natural parameter vector (input)
+        - free_size: Length of the flat encoder free-form vector (output)
         - width: Hidden state dimension for the GRU
         - dropout: Dropout probability (optional)
     key : Array
@@ -97,17 +101,18 @@ class BetaEncoder(ConfModule):
 
     def __init__(self, conf: DictConfig, key: Array):
         self.conf = conf
-        param_size = int(conf.param_size)
+        input_size = int(conf.param_size)
+        output_size = int(conf.free_size)
 
         key, ky = jrnd.split(key)
         lim = 1 / math.sqrt(conf.width)
         self.h0 = jrnd.uniform(ky, (conf.width,), minval=-lim, maxval=lim)
 
         key, ky = jrnd.split(key)
-        self.cell = eqx.nn.GRUCell(param_size, conf.width, key=ky)
+        self.cell = eqx.nn.GRUCell(input_size, conf.width, key=ky)
 
         key, ky = jrnd.split(key)
-        self.output = eqx.nn.Linear(conf.width, param_size, key=ky)
+        self.output = eqx.nn.Linear(conf.width, output_size, key=ky)
 
         if conf.dropout is not None:
             self.dropout = eqx.nn.Dropout(conf.dropout)

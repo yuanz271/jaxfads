@@ -72,7 +72,8 @@ Invariant for callers:
   `XFADS` injects these into `dyn_conf`/`obs_conf`/`enc_conf` at construction.
 - `enc_conf` does **not** contain `approx` / `approx_kwargs`.
   Encoders are Approx-agnostic and only require:
-  - `param_size` (injected by `XFADS`)
+  - `param_size` (natural-parameter size; injected by `XFADS`)
+  - `free_size` (encoder free-form size; injected by `XFADS`)
   - `observation_dim` (injected by `XFADS`)
   - encoder hyperparameters (`width`, `depth`, `dropout`)
 

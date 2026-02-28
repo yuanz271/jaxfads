@@ -111,7 +111,7 @@ class Approx(SubclassRegistryMixin, ABC):
     # Encoder-facing hooks
     # ------------------------------------------------------------------
 
-    def encoder_free_size(self) -> int:
+    def free_size(self) -> int:
         """Return the size of the encoder free-form output vector.
 
         By default, encoders emit free-form vectors in the same flat layout as
@@ -125,8 +125,8 @@ class Approx(SubclassRegistryMixin, ABC):
 
         return self.param_size()
 
-    def encoder_free_to_natural(self, free: Array) -> Array:
-        """Convert an encoder free-form vector into an additive natural update.
+    def free_to_natural(self, free: Array) -> Array:
+        """Convert a free-form vector into an additive natural update.
 
         Default implementation follows the standard conversion chain:
 
