@@ -20,7 +20,7 @@ from jax import numpy as jnp
 from jax import random as jr
 
 from jaxfads import core
-from jaxfads.base import Dynamics
+from jaxfads.base import StateMap
 from jaxfads.core import expected_predictive_moment
 from jaxfads.vi import elbo
 
@@ -30,11 +30,11 @@ from jaxfads.vi import elbo
 # -----------------------------------------------------------------------------
 
 
-class _IdentityDynamics(Dynamics):
+class _IdentityStateMap(StateMap):
     def __init__(self, state_dim: int):
         self.conf = SimpleNamespace(state_dim=state_dim)
 
-    def forward(self, z, u, c, *, key=None):
+    def eval(self, z, u, c, *, key=None):
         del u, c, key
         return z
 
@@ -45,8 +45,8 @@ class _DummyModel:
     def __init__(self, approx, state_dim: int, mc_size: int = 1, cov: float = 1.0):
         self.approx = approx
         self.conf = SimpleNamespace(mc_size=mc_size)
-        self.forward = _IdentityDynamics(state_dim)
-        self.backward = _IdentityDynamics(state_dim)
+        self.transition = _IdentityStateMap(state_dim)
+        self.backward = _IdentityStateMap(state_dim)
         self.noise_free = approx.free_from_kw(scale=cov)
 
     def prior_natural(self):
@@ -144,7 +144,7 @@ def test_causal_zero_beta_reduces_to_alpha_filter(diag):
 # -----------------------------------------------------------------------------
 
 
-class _Nonlinear(Dynamics):
+class _Nonlinear(StateMap):
     """Small nonlinear dynamics used only for algorithm tests."""
 
     f: Callable[..., Array]
@@ -163,13 +163,13 @@ class _Nonlinear(Dynamics):
             dropout=conf.dropout,
         )
 
-    def forward(self, z: Array, u: Array, c: Array, *, key=None) -> Array:
+    def eval(self, z: Array, u: Array, c: Array, *, key=None) -> Array:
         x = jnp.concatenate((z, u), axis=-1)
         return z + self.f(x, key=key)
 
 
 def _make_nonlinear(spec, key):
-    return Dynamics.get_subclass(_Nonlinear.__name__)(
+    return StateMap.get_subclass(_Nonlinear.__name__)(
         SimpleNamespace(
             state_dim=spec["state_dim"],
             input_dim=spec["input_dim"],

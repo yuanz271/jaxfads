@@ -2,11 +2,25 @@ import jax
 import jax.numpy as jnp
 import chex
 import pytest
+import equinox as eqx
+from jax import Array
 from omegaconf import OmegaConf
 
+from jaxfads.base import StateMap
 from jaxfads.smoother import XFADS
 from jaxfads.trainer import batch_loss
 import jaxfads.observations  # noqa: F401 — register GLM subclass
+
+
+class MockStateMap(StateMap):
+    layer: eqx.Module | None
+
+    def __init__(self, conf, key: Array):
+        self.conf = conf
+        self.layer = None
+
+    def eval(self, z: Array, u: Array, c: Array, *, key=None) -> Array:
+        return z
 
 
 @pytest.fixture
@@ -33,7 +47,7 @@ def model_conf():
             "mode": "smooth",
             "observation_dim": 10,
             "state_dim": 2,
-            "forward": "MockDynamics",
+            "state_map": "MockStateMap", "stepper": "DiscreteStepper",
             "approx": "MVN",
             "approx_kwargs": {},
             "mc_size": 1,
@@ -48,7 +62,7 @@ def model_conf():
                     "depth": 1,
                     "input_dim": 1,
                     "context_dim": 0,
-                    "state_noise": 1.0,
+                    "state_noise": 1.0, "system_type": "discrete",
                 }
             ),
             "enc_conf": OmegaConf.create(
@@ -92,8 +106,6 @@ def test_noise_regularizer_is_added(model_conf, sample_data):
 
 def test_stop_gradient_on_noise_free_zeroes_its_grad_component(model_conf, sample_data):
     """Sanity check: explicit stop_gradient removes noise_free gradient."""
-    import equinox as eqx
-
     model = XFADS(model_conf, jax.random.key(0))
     model = model.initialize(*sample_data)
 

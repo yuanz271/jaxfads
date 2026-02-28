@@ -19,10 +19,10 @@ from jax import random as jrnd
 from gearax.modules import ConfModule, load_model, save_model
 from omegaconf import OmegaConf
 
-from . import core, distributions, dynamics, encoders, observations  # noqa: F401 — side-effect registers subclasses
+from . import core, distributions, encoders, observations, state_maps, steppers  # noqa: F401 — side-effect registers subclasses
 from .core import Mode
 from .base import Approx
-from .base import Dynamics
+from .base import StateMap, Stepper
 from .nn import DataMasker
 from .base import Observation
 from .util import vmap_with_key
@@ -50,14 +50,17 @@ class XFADS(ConfModule):
         - mc_size: Number of Monte Carlo samples
         - approx: Exponential family approximation name (e.g. 'MVN')
         - approx_kwargs: Keyword arguments for approx instantiation
-        - forward: Forward dynamics model type
+        - state_map: State-map model type
+        - stepper: Stepper type
         - obs_conf: Observation model config
         - mode: Inference mode ('filter', 'smooth', 'causal')
 
     Attributes
     ----------
-    forward : Dynamics
-        Forward dynamics model for state transitions.
+    state_map : StateMap
+        State-map model for latent dynamics.
+    stepper : Stepper
+        Numerical stepper used to evolve latent state.
     observation : ObservationModel
         Observation model with likelihood and readout.
     alpha_encoder : AlphaEncoder
@@ -92,7 +95,8 @@ class XFADS(ConfModule):
     ...     'mc_size': 100,
     ...     'approx': 'MVN',
     ...     'approx_kwargs': {},
-    ...     'forward': 'Linear',
+    ...     'state_map': 'OUStateMap',
+    ...     'stepper': 'EulerStepper',
     ...     'obs_conf': {
     ...         'model': 'GLM',
     ...         'likelihood': 'Poisson',
@@ -113,8 +117,9 @@ class XFADS(ConfModule):
     >>> natural, mean, prediction = model(t, y, u, c, key=key)
     """
 
-    forward: Dynamics
-    # backward: Dynamics | None
+    state_map: StateMap
+    stepper: Stepper
+    # backward: StateMap | None
     observation: Observation
     alpha_encoder: Callable
     beta_encoder: Callable
@@ -145,16 +150,18 @@ class XFADS(ConfModule):
 
         seed = self.conf.seed
         dropout = self.conf.dropout
-        forward = self.conf.forward
+        state_map_name = self.conf.state_map
+        stepper_name = self.conf.stepper
 
         key = jrnd.key(seed)
 
         logger.info(
-            "XFADS init: mode=%s approx=%s approx_kwargs=%s forward=%s observation_model=%s state_dim=%s obs_dim=%s mc_size=%s dropout=%s seed=%s",
+            "XFADS init: mode=%s approx=%s approx_kwargs=%s state_map=%s stepper=%s observation_model=%s state_dim=%s obs_dim=%s mc_size=%s dropout=%s seed=%s",
             str(self.conf.mode),
             str(self.conf.approx),
             str(dict(self.conf.approx_kwargs)),
-            str(forward),
+            str(state_map_name),
+            str(stepper_name),
             str(self.conf.obs_conf.model),
             str(self.conf.state_dim),
             str(self.conf.observation_dim),
@@ -176,7 +183,8 @@ class XFADS(ConfModule):
         )
 
         key, ky = jrnd.split(key)
-        self.forward = Dynamics.get_subclass(forward)(dyn_conf, key=ky)
+        self.state_map = StateMap.get_subclass(state_map_name)(dyn_conf, key=ky)
+        self.stepper = Stepper.get_subclass(stepper_name)(dyn_conf)
 
         self.noise_free = self.approx.free_from_kw(scale=dyn_conf.state_noise)
 
@@ -216,9 +224,13 @@ class XFADS(ConfModule):
 
         # TODO: add hooks to freeze observation parameters if needed.
         # if "s" in static_params:
-        #     self.forward.set_static()
+        #     self.state_map.set_static()
 
         self.unconstrained_prior_natural = self.approx.free_from_kw(scale=1.0)
+
+    def transition(self, z: Array, u: Array, c: Array, *, key=None) -> Array:
+        """One-step latent transition composed from state map and stepper."""
+        return self.stepper.step(z, u, c, self.state_map, key=key)
 
     def initialize(self, t, y, u, c):
         """

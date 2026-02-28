@@ -2,6 +2,9 @@
 
 This guide explains how to configure and run XFADS training.
 
+See also: [Quickstart](quickstart.md), [Dynamics](dynamics.md),
+[Algorithm](algorithm.md).
+
 ## Overview
 
 Training maximises the Evidence Lower Bound (ELBO) over mini-batches using

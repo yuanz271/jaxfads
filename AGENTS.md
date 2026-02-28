@@ -1,7 +1,7 @@
 # JAXFADS - Project Knowledge Base
 
-**Updated:** 2026-02-25  
-**Branch:** feature/unify-noise-approx
+**Updated:** 2026-02-28  
+**Branch:** feature/statemap-stepper
 
 ## Overview
 
@@ -14,9 +14,11 @@ approximate posteriors via Equinox/JAX.
 ```
 jaxfads/
 ├── src/jaxfads/                 # Core library
-│   ├── base.py                  # ABCs + subclass registries (Approx/Dynamics/Observation)
+│   ├── base.py                  # ABCs + subclass registries (Approx/StateMap/Stepper/Observation)
 │   ├── smoother.py              # XFADS orchestrator
 │   ├── core.py                  # filtering/smoothing primitives
+│   ├── state_maps/              # built-in latent state maps (e.g. OU, function wrapper)
+│   ├── steppers.py              # Euler/RK4/discrete steppers
 │   ├── vi.py                    # ELBO
 │   ├── observations.py          # GLM observation model + Poisson/Gaussian likelihoods
 │   ├── encoders.py              # Alpha/Beta encoders
@@ -41,7 +43,7 @@ jaxfads/
 | Observation models | `src/jaxfads/observations.py` | `GLM`, `Poisson`, `Gaussian` |
 | Encoders | `src/jaxfads/encoders.py` | `AlphaEncoder`, `BetaEncoder` |
 | Training | `src/jaxfads/trainer.py` | `train()`, `batch_loss()`, `DEFAULT_TRAINER_CONFIG` |
-| Abstract interfaces | `src/jaxfads/base.py` | `Approx`, `Dynamics`, `Observation` |
+| Abstract interfaces | `src/jaxfads/base.py` | `Approx`, `StateMap`, `Stepper`, `Observation` |
 
 ## Core Design Notes
 
