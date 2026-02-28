@@ -45,6 +45,31 @@ class MyStateMap(StateMap):
 ## Built-in StateMap
 
 - `OUStateMap`: continuous OU drift map `dz/dt = -theta * z`
+- `FunctionStateMap`: wraps a non-trainable callable
+
+`FunctionStateMap` only accepts:
+- plain Python functions/lambdas
+- bound methods
+- `functools.partial` of the above
+
+It intentionally rejects arbitrary callable objects.
+Set callable import path under `dyn_conf.fn_path` (`module:function`) and
+optional kwargs under `dyn_conf.fn_kwargs`.
+
+Example:
+
+```yaml
+state_map: FunctionStateMap
+stepper: DiscreteStepper
+
+dyn_conf:
+  system_type: discrete
+  fn_path: my_pkg.my_maps:my_transition
+  fn_kwargs: {gain: 1.0}
+  state_noise: 1.0
+  input_dim: 0
+  context_dim: 0
+```
 
 ## Configuration Example (Continuous)
 

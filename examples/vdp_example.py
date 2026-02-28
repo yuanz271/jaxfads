@@ -4,8 +4,8 @@ Three cases:
 
 1. **MLPStateMap** — trainable MLP learns continuous-time dynamics, stepped with RK4.
 2. **OUStateMap** — built-in tracking prior drift.
-3. **LoRaMVN** — low-rank pseudo-observation encoder updates (paper Eq. 19–21),
-   using the ground-truth VDPStateMap transition.
+3. **LoRaMVN + FunctionStateMap** — low-rank pseudo-observation encoder updates
+   (paper Eq. 19–21), using a declarative function-backed Van der Pol map.
 
 All use Factor Analysis readout initialisation. Evaluation uses Procrustes
 alignment to compare inferred latents against ground truth.
@@ -77,30 +77,21 @@ def simulate_vdp(
 
 
 # ---------------------------------------------------------------------------
-# Dynamics modules
+# State-map modules
 # ---------------------------------------------------------------------------
 
 
-class VDPStateMap(StateMap):
-    """Exact Van der Pol step (no model mismatch).
-
-    Noise is auto-initialised by XFADS via ``state_noise`` in dyn_conf.
-    """
-
-    mu: float
-    dt: float
-
-    def __init__(self, conf, key):
-        self.conf = conf
-        self.mu, self.dt = float(conf.mu), float(conf.dt)
-
-    def rhs(self, z):
-        """Continuous-time derivative: Van der Pol RHS."""
-        return vdp_rhs(z, self.mu)
-
-    def eval(self, z, u, c, *, key=None):
-        del u, c, key
-        return self.rhs(z)
+def vdp_state_map(
+    z: jax.Array,
+    u: jax.Array,
+    c: jax.Array,
+    *,
+    mu: float,
+    key: jax.Array | None = None,
+) -> jax.Array:
+    """FunctionStateMap-compatible Van der Pol continuous-time map."""
+    del u, c, key
+    return vdp_rhs(z, mu)
 
 
 class MLPStateMap(StateMap):
@@ -285,7 +276,7 @@ def evaluate(
     align_flow : bool, default=True
         Whether to pass the Procrustes alignment to flow-field
         evaluation.  Set ``False`` when the dynamics operate in the
-        true coordinate system (e.g. VDPStateMap).
+        true coordinate system (e.g. ``vdp_state_map``).
 
     Returns dict with metric values, aligned means, covariances, and
     the Procrustes alignment.
@@ -674,10 +665,10 @@ def main() -> None:
     )
 
     # ===================================================================
-    # Case 3: LoRaMVN encoder updates (paper Eq. 19–21)
+    # Case 3: LoRaMVN encoder updates + declarative FunctionStateMap
     # ===================================================================
     print("\n" + "=" * 60)
-    print("Case 3: LoRaMVN encoder updates")
+    print("Case 3: LoRaMVN + FunctionStateMap")
     print("=" * 60)
 
     conf3 = OmegaConf.create(
@@ -685,13 +676,14 @@ def main() -> None:
             **shared_conf,
             "approx": "LoRaMVN",
             "approx_kwargs": {"rank": 1},
-            "state_map": "VDPStateMap",
+            "state_map": "FunctionStateMap",
             "stepper": "RK4Stepper",
             "mc_size": 4,
             "dyn_conf": dict(
                 input_dim=0,
                 context_dim=0,
-                mu=mu,
+                fn_path="examples.vdp_example:vdp_state_map",
+                fn_kwargs={"mu": mu},
                 dt=dt,
                 system_type="continuous",
                 state_noise=1.0,
