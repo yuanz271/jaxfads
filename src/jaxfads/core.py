@@ -22,7 +22,6 @@ from .base import Approx
 __all__ = [
     "expected_predictive_moment",
     "Mode",
-    "site_filter",
     "filter",
     "smooth",
     "causal",
@@ -130,7 +129,7 @@ class Mode(StrEnum):
     CAUSAL = auto()
 
 
-def site_filter(
+def _site_filter(
     model,
     key: Array,
     _t: Array,
@@ -235,7 +234,7 @@ def filter(
 
     This returns filtering natural/moment parameters and predictive moments.
     """
-    return site_filter(model, key, _t, alpha, u, c)
+    return _site_filter(model, key, _t, alpha, u, c)
 
 
 def smooth(
@@ -250,7 +249,7 @@ def smooth(
     """
     Smoothing-side recursion using additive natural sites ``alpha + beta``.
     """
-    return site_filter(model, key, _t, alpha + beta, u, c)
+    return _site_filter(model, key, _t, alpha + beta, u, c)
 
 
 def causal(

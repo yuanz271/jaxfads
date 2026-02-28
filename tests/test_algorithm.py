@@ -40,7 +40,7 @@ class _IdentityDynamics(Dynamics):
 
 
 class _DummyModel:
-    """Minimal model duck-typing XFADS for core.site_filter / core._bismooth."""
+    """Minimal model duck-typing XFADS for core.filter / core._bismooth."""
 
     def __init__(self, approx, state_dim: int, mc_size: int = 1, cov: float = 1.0):
         self.approx = approx

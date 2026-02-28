@@ -36,7 +36,7 @@ jaxfads/
 | Task | Location | Notes |
 |------|----------|-------|
 | Main model class | `src/jaxfads/smoother.py` | `XFADS` |
-| Filtering primitives | `src/jaxfads/core.py` | `site_filter()`, `filter()`, `smooth()`, `causal()`, `expected_predictive_moment()` |
+| Filtering primitives | `src/jaxfads/core.py` | `filter()`, `smooth()`, `causal()`, `expected_predictive_moment()` |
 | Approx posterior families | `src/jaxfads/distributions/` | currently `MVN` |
 | Observation models | `src/jaxfads/observations.py` | `GLM`, `Poisson`, `Gaussian` |
 | Encoders | `src/jaxfads/encoders.py` | `AlphaEncoder`, `BetaEncoder` |

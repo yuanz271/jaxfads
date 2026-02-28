@@ -212,7 +212,7 @@ while not converged:
 | Local encoder `α_t = NN(y_t)` | `AlphaEncoder` in `encoders.py` | MLP mapping observations → natural params |
 | Backward encoder `β_t = S2S(β_{t+1}, α_t)` | `BetaEncoder` in `encoders.py` | GRU running backward over alpha outputs |
 | Variational predict (Eq 12) | `expected_predictive_moment()` in `core.py` | MC approximation of `E[μ_θ(z_{t-1})]` |
-| Variational update (Eq 13) | `nature_t = nature_p_t + site_t` in `core.site_filter()` | Additive natural parameter update from the passed natural-parameter site term |
+| Variational update (Eq 13) | `nature_t = nature_p_t + site_t` in `core.filter()/core.smooth()` | Additive natural parameter update from the passed natural-parameter site term |
 | Approximate ELBO (Eq 17) | `elbo()` in `vi.py` | `E[log p(y\|z)] - β·KL(π \|\| π̄)` |
 | KL(π ∥ π̄) | `approx.kl()` on `MVN` | Via TFP `MultivariateNormalFullCovariance` |
 | Exp-family natural params | `Approx.moment_to_natural()` | Flat array; layout defined by MVN |
