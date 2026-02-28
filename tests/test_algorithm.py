@@ -40,7 +40,7 @@ class _IdentityDynamics(Dynamics):
 
 
 class _DummyModel:
-    """Minimal model duck-typing XFADS for core.filter / core.bismooth."""
+    """Minimal model duck-typing XFADS for core.filter / core._bismooth."""
 
     def __init__(self, approx, state_dim: int, mc_size: int = 1, cov: float = 1.0):
         self.approx = approx
@@ -84,11 +84,59 @@ def test_bismooth_shapes_and_finite(diag):
     u = jnp.zeros((T, 0))
     c = jnp.zeros((T, 0))
 
-    nature_s, moment_s, moment_p = core.bismooth(model, key, jnp.arange(T), alpha, u, c)
+    nature_s, moment_s, moment_p = core._bismooth(model, key, jnp.arange(T), alpha, u, c)
 
     for arr in (nature_s, moment_s, moment_p):
         chex.assert_shape(arr, (T, param_dim))
         chex.assert_tree_all_finite(arr)
+
+
+def test_causal_reindexed_identity(diag):
+    """Causal mode uses code indexing: lambda_t = check_lambda_t + beta_t."""
+    state_dim, T = 2, 6
+    model = _DummyModel(diag, state_dim)
+    key = jr.key(10)
+    param_dim = diag.param_size()
+
+    alpha = jr.normal(jr.key(11), (T, param_dim)) * 0.05
+    beta = jr.normal(jr.key(12), (T, param_dim)) * 0.05
+    u = jnp.zeros((T, 0))
+    c = jnp.zeros((T, 0))
+
+    check_nature, _, _ = core.filter(model, key, jnp.arange(T), alpha, u, c)
+    nature, moment, moment_p = core.causal(
+        model, key, jnp.arange(T), alpha, beta, u, c
+    )
+
+    chex.assert_trees_all_close(nature, check_nature + beta, atol=1e-6)
+    chex.assert_shape(moment, (T, param_dim))
+    chex.assert_shape(moment_p, (T, param_dim))
+    chex.assert_tree_all_finite(moment)
+    chex.assert_tree_all_finite(moment_p)
+
+
+def test_causal_zero_beta_reduces_to_alpha_filter(diag):
+    """If beta is zero, causal matches alpha-only filtering."""
+    state_dim, T = 2, 5
+    model = _DummyModel(diag, state_dim)
+    key = jr.key(20)
+    param_dim = diag.param_size()
+
+    alpha = jr.normal(jr.key(21), (T, param_dim)) * 0.05
+    beta = jnp.zeros_like(alpha)
+    u = jnp.zeros((T, 0))
+    c = jnp.zeros((T, 0))
+
+    check_nature, check_moment, check_moment_p = core.filter(
+        model, key, jnp.arange(T), alpha, u, c
+    )
+    nature, moment, moment_p = core.causal(
+        model, key, jnp.arange(T), alpha, beta, u, c
+    )
+
+    chex.assert_trees_all_close(nature, check_nature, atol=1e-6)
+    chex.assert_trees_all_close(moment, check_moment, atol=1e-6)
+    chex.assert_trees_all_close(moment_p, check_moment_p, atol=1e-6)
 
 
 # -----------------------------------------------------------------------------

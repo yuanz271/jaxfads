@@ -20,7 +20,7 @@ Legend:
 | Missing-observation handling via zero update | `MATCH` | `src/jaxfads/smoother.py:401`, `src/jaxfads/smoother.py:410` | Non-finite observations are masked and produce zero local update. |
 | Low-rank pseudo-observation parameter output from encoders | `PARTIAL` | `src/jaxfads/distributions/mvn.py:408`, `src/jaxfads/distributions/mvn.py:442`, `src/jaxfads/distributions/mvn.py:446`; smoke test in `tests/test_smoother.py:186` | Implemented through `LoRaMVN` compact free-form output. Not the default path (`MVN` still emits dense free vectors). |
 | Low-rank structured linear algebra complexity claims (Woodbury/Cholesky pipeline) | `MISMATCH` | `src/jaxfads/distributions/mvn.py:295`, `src/jaxfads/distributions/mvn.py:305`, `src/jaxfads/distributions/mvn.py:258`, `src/jaxfads/distributions/mvn.py:274` | Current inference/kl/sample paths materialize full covariance/precision operations (TFP full-cov + dense solves), so paper's scalable structured complexity is not realized end-to-end. |
-| Streaming/causal inference recursion (paper Eq. 29 family) | `MISMATCH` | `src/jaxfads/smoother.py:423`, `src/jaxfads/core.py:191` | Main path performs additive site updates (`alpha + beta`, then `η_t = η̄_t + site_t`) and does not implement Eq. 29's modified recursion. |
+| Streaming/causal inference recursion (paper Eq. 29 family) | `MATCH` | `src/jaxfads/core.py` (`causal`), `src/jaxfads/smoother.py` (`mode="causal"` branch) | Implemented as alpha-only filtering for `λ̆_t` followed by reconstruction `λ_t = λ̆_t + b_t` (code indexing, where `b_t` corresponds to paper `β_{t+1}`). The API also exposes `mode="filter"` for alpha-only filtering output directly. |
 
 ## Consistency Details
 
@@ -32,9 +32,9 @@ Legend:
 
 - The paper's major scalability contribution (structured low-rank matrix identities through filtering and KL computation) is not implemented as the main compute path.
 - The low-rank implementation in `LoRaMVN` is a compact parameterization layer, but downstream operations still use dense Gaussian algebra.
-- The paper's streaming/causal Eq. 29 variant is not available in executable model flow.
+- Indexing difference alone (`β_t` vs `β_{t+1}`) does not imply mismatch; this implementation documents the code convention `b_t ↔ β_{t+1}` and checks recurrence form.
 - The `LoRaMVN` low-rank map constrains linear and quadratic terms via `h = K^T b` and `J = K^T K`; this is more restrictive than a generic `(k, K)` parameterization where `k` can vary independently.
 
 ## Overall Assessment
 
-Implementation parity is strong for the core XFADS variational filtering objective and encoder-driven pseudo-observation inference, but incomplete for the paper's scalability-focused structured linear algebra and causal-network variant.
+Implementation parity is strong for the core XFADS variational filtering objective, encoder-driven pseudo-observation inference, and Eq. 29 causal recursion; the remaining major gap is the paper's scalability-focused structured linear algebra path.

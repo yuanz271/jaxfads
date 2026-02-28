@@ -120,6 +120,11 @@ The pseudo-observation parameters decompose into two additive components:
 λ̃_t = α_t + β_{t+1}
 ```
 
+Code indexing convention:
+- The implementation uses a beta tensor `b_t` at step `t` that corresponds to
+  paper `β_{t+1}`. This is an indexing convention, not by itself an algorithmic
+  mismatch.
+
 - **Alpha (local encoder)**: `α_t = NN(y_t)` — feedforward, captures
   instantaneous information from current observation
 - **Beta (backward encoder)**: `β_t = S2S(β_{t+1}, α_t)` — GRU running
@@ -162,6 +167,16 @@ Alternative recursion that produces filtering distributions as a byproduct:
 where `λ̆_t = λ_t - β_{t+1}` gives causal (filtering) estimates
 `π̆(z_t) ≈ p(z_t | y_{1:t})`.
 
+With the code indexing convention (`b_t ↔ β_{t+1}`), this is tracked as:
+`λ_t = λ̆_t + b_t` and `λ̆_t = λ_t - b_t`.
+
+In this codebase, inference-mode semantics are:
+
+- `mode="filter"`: alpha-only filtering (`λ̆_t`)
+- `mode="smooth"`: additive-site filtering (`alpha + beta`)
+- `mode="causal"`: alpha-only filtering plus reconstructed smoothing natural
+  parameters via `λ_t = λ̆_t + b_t` (code indexing)
+
 ## End-to-End Learning (Algorithm 1)
 
 ```
@@ -193,17 +208,17 @@ while not converged:
 | Generative model `p(z_t \| z_{t-1})` | `Dynamics.forward()` in `base.py` | Deterministic transition `m_θ(z, u, c)`; process noise owned by `XFADS` |
 | State noise `Q_θ` | `XFADS.noise_free` in `smoother.py` | Stored as free-form; constrained via `approx.free_to_canon → canon_to_moment` |
 | Observation model `p(y_t \| z_t)` | `Observation.eloglik()` in `observations.py` | Poisson and Gaussian implementations |
-| Pseudo-observation `λ̃_t` | `alpha + beta` computed in `XFADS.__call__()` | Added in natural parameter space |
+| Pseudo-observation `λ̃_t` | `alpha + beta` computed in `XFADS.__call__()` | Added in natural parameter space; code `b_t` corresponds to paper `β_{t+1}` |
 | Local encoder `α_t = NN(y_t)` | `AlphaEncoder` in `encoders.py` | MLP mapping observations → natural params |
 | Backward encoder `β_t = S2S(β_{t+1}, α_t)` | `BetaEncoder` in `encoders.py` | GRU running backward over alpha outputs |
 | Variational predict (Eq 12) | `expected_predictive_moment()` in `core.py` | MC approximation of `E[μ_θ(z_{t-1})]` |
-| Variational update (Eq 13) | `nature_t = nature_p_t + a_t` in `core.filter()` | Additive natural parameter update |
+| Variational update (Eq 13) | `nature_t = nature_p_t + site_t` in `core.filter()/core.smooth()` | Additive natural parameter update from the passed natural-parameter site term |
 | Approximate ELBO (Eq 17) | `elbo()` in `vi.py` | `E[log p(y\|z)] - β·KL(π \|\| π̄)` |
 | KL(π ∥ π̄) | `approx.kl()` on `MVN` | Via TFP `MultivariateNormalFullCovariance` |
 | Exp-family natural params | `Approx.moment_to_natural()` | Flat array; layout defined by MVN |
 | Exp-family moment params | `Approx.natural_to_moment()` | Flat array `[E[z], E[-½ zzᵀ]_flat]` |
 | MVN implementation | `MVN(dim, structure=...)` | Supports `structure="full"` and `structure="diag"` |
-| Causal/streaming inference (Eq 29) | Not yet implemented | Distinct from `BIFILTER`; main path uses additive pseudo-observation updates in `XFADS.__call__` + `core.filter` |
+| Causal/streaming inference (Eq 29) | Implemented via `mode="causal"` | Uses alpha-only filtering for `λ̆_t` and reconstructs `λ_t = λ̆_t + b_t` (code indexing) |
 | Efficient structured ops (App B.5) | Not implemented | Current impl materializes full covariance |
 
 ## Faithful Implementations
@@ -236,11 +251,9 @@ while not converged:
    code materializes full covariance matrices via TFP, giving O(L³) cost.
    This limits scalability to large `L`.
 
-2. **No causal/streaming Eq 29 recursion**: Eq 29's modified recursion
-   `λ_t = F_θ(λ_{t-1} - β_t) + α_t + β_{t+1}` is not implemented in the
-   current executable path. This is separate from `BIFILTER`/`bismooth`,
-   which is a bidirectional smoothing direction rather than the streaming
-   recursion from Eq 29.
+2. **Causal indexing caveat**: For Eq 29, paper notation uses `β_{t+1}` while
+   code uses `b_t` at the same implementation step. Parity should be checked by
+   recurrence equivalence, not by raw index labels alone.
 
 3. **Noise ownership**: Paper has `Q_θ` as part of the dynamics. Codebase
    separates: `Dynamics` is purely deterministic `m_θ(z, u, c)`; process noise

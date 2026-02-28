@@ -70,7 +70,7 @@ def model_conf():
     """Create a minimal model configuration for testing."""
     return OmegaConf.create(
         {
-            "mode": "pseudo",
+            "mode": "smooth",
             "observation_dim": 10,
             "state_dim": 2,
             "forward": "MockDynamics",
@@ -132,7 +132,7 @@ def test_train_lora_rank1_end_to_end(trainer_config, sample_data):
     """LoRaMVN rank-1 should train and run end-to-end without NaNs."""
     model_conf = OmegaConf.create(
         {
-            "mode": "pseudo",
+            "mode": "smooth",
             "observation_dim": 10,
             "state_dim": 2,
             "forward": "MockDynamics",

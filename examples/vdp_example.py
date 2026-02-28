@@ -502,7 +502,7 @@ def main() -> None:
         readout_init_conf=dict(obs_noise_var=float(sigma_obs**2)),
     )
     shared_conf = dict(
-        mode="pseudo",
+        mode="smooth",
         observation_dim=obs_dim,
         state_dim=state_dim,
         approx="MVN",
