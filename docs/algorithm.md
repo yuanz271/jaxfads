@@ -203,7 +203,7 @@ while not converged:
 | Exp-family natural params | `Approx.moment_to_natural()` | Flat array; layout defined by MVN |
 | Exp-family moment params | `Approx.natural_to_moment()` | Flat array `[E[z], E[-½ zzᵀ]_flat]` |
 | MVN implementation | `MVN(dim, structure=...)` | Supports `structure="full"` and `structure="diag"` |
-| Causal inference (Eq 29) | Not yet implemented | `Mode.BIFILTER` exists but raises `NotImplementedError` |
+| Causal/streaming inference (Eq 29) | Not yet implemented | Distinct from `BIFILTER`; main path uses additive pseudo-observation updates in `XFADS.__call__` + `core.filter` |
 | Efficient structured ops (App B.5) | Not implemented | Current impl materializes full covariance |
 
 ## Faithful Implementations
@@ -236,18 +236,20 @@ while not converged:
    code materializes full covariance matrices via TFP, giving O(L³) cost.
    This limits scalability to large `L`.
 
-2. **No causal inference network**: Eq 29's modified recursion
-   `λ_t = F_θ(λ_{t-1} - β_t) + α_t + β_{t+1}` is not implemented.
-   `Mode.BIFILTER` exists as a stub. The `bismooth` function implements
-   a different bidirectional scheme (forward + backward dynamics).
+2. **No causal/streaming Eq 29 recursion**: Eq 29's modified recursion
+   `λ_t = F_θ(λ_{t-1} - β_t) + α_t + β_{t+1}` is not implemented in the
+   current executable path. This is separate from `BIFILTER`/`bismooth`,
+   which is a bidirectional smoothing direction rather than the streaming
+   recursion from Eq 29.
 
 3. **Noise ownership**: Paper has `Q_θ` as part of the dynamics. Codebase
    separates: `Dynamics` is purely deterministic `m_θ(z, u, c)`; process noise
    is owned by `XFADS` as `noise_free` (constrained via the `Approx`).
 
-4. **Low-rank encoder output**: The paper specifies low-rank precision updates
-   in the pseudo-observations. The current codebase outputs dense flat natural
-   parameter vectors (no explicit low-rank structure).
+4. **Low-rank encoder output is optional**: The paper specifies low-rank
+   precision updates in pseudo-observations. The codebase now supports this via
+   `LoRaMVN` compact encoder outputs, but the default `MVN` path remains dense.
+   See `docs/paper_parity_2403_01371.md` for a full parity matrix.
 
 5. **`predictive_moment` averaging**: The paper averages in mean (moment) parameter
    space (Eq 22). The code does this correctly via `predictive_moment` on `MVN`,
