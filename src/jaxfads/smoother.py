@@ -184,8 +184,7 @@ class XFADS(ConfModule):
 
         key, ky = jrnd.split(key)
         self.state_map = StateMap.get_subclass(state_map_name)(dyn_conf, key=ky)
-        key, ky = jrnd.split(key)
-        self.stepper = Stepper.get_subclass(stepper_name)(dyn_conf, key=ky)
+        self.stepper = Stepper.get_subclass(stepper_name)(dyn_conf)
 
         self.noise_free = self.approx.free_from_kw(scale=dyn_conf.state_noise)
 

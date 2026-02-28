@@ -21,9 +21,7 @@ class EulerStepper(Stepper):
 
     dt: float
 
-    def __init__(self, conf, key: Array):
-        del key
-        self.conf = conf
+    def __init__(self, conf):
         if str(conf.system_type) != "continuous":
             raise ValueError("EulerStepper requires dyn_conf.system_type='continuous'.")
         if not _has_attr(conf, "dt"):
@@ -47,9 +45,7 @@ class RK4Stepper(Stepper):
 
     dt: float
 
-    def __init__(self, conf, key: Array):
-        del key
-        self.conf = conf
+    def __init__(self, conf):
         if str(conf.system_type) != "continuous":
             raise ValueError("RK4Stepper requires dyn_conf.system_type='continuous'.")
         if not _has_attr(conf, "dt"):
@@ -76,9 +72,7 @@ class RK4Stepper(Stepper):
 class DiscreteStepper(Stepper):
     """Pass-through stepper for discrete-time state maps."""
 
-    def __init__(self, conf, key: Array):
-        del key
-        self.conf = conf
+    def __init__(self, conf):
         if str(conf.system_type) != "discrete":
             raise ValueError(
                 "DiscreteStepper requires dyn_conf.system_type='discrete'."

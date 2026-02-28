@@ -29,7 +29,7 @@ def test_ou_state_map_registry_and_euler_step():
     )
 
     state_map = map_cls(conf, key=jr.key(0))
-    stepper = stepper_cls(conf, key=jr.key(1))
+    stepper = stepper_cls(conf)
 
     z = jr.normal(jr.key(1), (state_dim,))
     out = stepper.step(z, jnp.zeros((0,)), jnp.zeros((0,)), state_map)

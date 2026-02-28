@@ -329,7 +329,7 @@ class StateMap(SubclassRegistryMixin, ConfModule):  # pyright: ignore[reportImpl
         return self.eval(*args, **kwargs)
 
 
-class Stepper(SubclassRegistryMixin, ConfModule):  # pyright: ignore[reportImplicitAbstractClass]
+class Stepper(SubclassRegistryMixin, ABC):
     """Abstract base class for state-evolution steppers in XFADS."""
 
     @abstractmethod
