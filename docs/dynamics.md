@@ -3,6 +3,9 @@
 This guide explains how latent dynamics are defined in XFADS after the
 `StateMap + Stepper` refactor.
 
+See also: [Quickstart](quickstart.md), [Training](training.md),
+[Algorithm](algorithm.md).
+
 ## Overview
 
 XFADS composes latent transition updates as:

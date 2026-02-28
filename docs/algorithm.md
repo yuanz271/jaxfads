@@ -4,6 +4,10 @@ Reference: Dowling, Zhao, Park (2024). *eXponential FAmily Dynamical Systems
 (XFADS): Large-scale nonlinear Gaussian state-space modeling.* NeurIPS 2024.
 [arXiv:2403.01371](https://arxiv.org/abs/2403.01371)
 
+See also: [Quickstart](quickstart.md), [Dynamics](dynamics.md),
+[Training](training.md), and
+[Parity Review](paper_parity_2403_01371.md).
+
 ## Problem Setting
 
 State-space model with latent states `z_t ∈ ℝ^L` and observations `y_t`:

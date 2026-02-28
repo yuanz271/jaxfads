@@ -24,8 +24,11 @@ All dependencies—including `gearax` (pinned to a specific commit)—are resolv
 
 ## Documentation
 
+- [Quickstart](docs/quickstart.md)
 - [Writing Custom State Maps and Steppers](docs/dynamics.md)
 - [Training Configuration](docs/training.md)
+- [Algorithm Overview](docs/algorithm.md)
+- [Paper Parity Review (arXiv:2403.01371)](docs/paper_parity_2403_01371.md)
 
 Training note: parameter freezing is configured declaratively via
 `trainer_conf.freeze_paths` (for example `["noise_free"]`).
