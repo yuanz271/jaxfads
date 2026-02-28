@@ -124,3 +124,68 @@ def test_train(model_conf, trainer_config, sample_data):
     assert trained_model is not None
     assert hasattr(trained_model, "conf")
     assert hasattr(trained_model, "forward")
+
+
+def test_train_lora_rank1_end_to_end(trainer_config, sample_data):
+    """LoRaMVN rank-1 should train and run end-to-end without NaNs."""
+    model_conf = OmegaConf.create(
+        {
+            "mode": "pseudo",
+            "observation_dim": 10,
+            "state_dim": 2,
+            "forward": "MockDynamics",
+            "approx": "LoRaMVN",
+            "approx_kwargs": {"rank": 1},
+            "mc_size": 2,
+            "seed": 0,
+            "n_steps": 10,
+            "fb_penalty": 0,
+            "noise_penalty": 0.01,
+            "dropout": 0.0,
+            "dyn_conf": OmegaConf.create(
+                {
+                    "width": 8,
+                    "depth": 1,
+                    "input_dim": 1,
+                    "context_dim": 0,
+                    "state_noise": 0.1,
+                }
+            ),
+            "enc_conf": OmegaConf.create(
+                {
+                    "width": 8,
+                    "depth": 1,
+                    "dropout": 0.0,
+                }
+            ),
+            "obs_conf": OmegaConf.create(
+                {
+                    "model": "GLM",
+                    "emission_noise": 1.0,
+                    "norm_readout": False,
+                    "dropout": 0.0,
+                    "likelihood": "Poisson",
+                }
+            ),
+        }
+    )
+
+    model = XFADS(model_conf, jrnd.key(0))
+    trainer_config.max_epoch = 5
+    trainer_config.batch_size = 64
+    trainer_config.validation_size = 32
+
+    trained_model = train(model, sample_data, conf=trainer_config)
+
+    times, observations, controls, contexts = sample_data
+    batch = (
+        times[:4],
+        observations[:4],
+        controls[:4],
+        contexts[:4],
+    )
+    free_energy, post_mom, prior_mom = trained_model(*batch, key=jrnd.key(1))
+
+    assert jnp.isfinite(free_energy).all()
+    assert jnp.isfinite(post_mom).all()
+    assert jnp.isfinite(prior_mom).all()

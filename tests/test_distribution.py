@@ -1,4 +1,5 @@
 import pytest
+from jax import nn
 from jax import numpy as jnp
 from jax import random as jrnd
 import chex
@@ -202,7 +203,7 @@ def test_encoder_free_hooks_lora_mvn_produces_psd_precision_update():
 
     scale = 5.0
     chex.assert_trees_all_close(
-        h, (scale * jnp.tanh(K)).T @ (scale * jnp.tanh(b)), atol=1e-6
+        h, (scale * nn.soft_sign(K)).T @ (scale * nn.soft_sign(b)), atol=1e-6
     )
     chex.assert_trees_all_close(J, 0.5 * (J + J.T), atol=1e-6)
 

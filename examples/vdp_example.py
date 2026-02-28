@@ -676,13 +676,13 @@ def main() -> None:
             "approx": "LoRaMVN",
             "approx_kwargs": {"rank": 1},
             "forward": "VDPDynamics",
-            "mc_size": 1,
+            "mc_size": 4,
             "dyn_conf": dict(
                 input_dim=0,
                 context_dim=0,
                 mu=mu,
                 dt=dt,
-                state_noise=0.1,
+                state_noise=1.0,
             ),
         }
     )

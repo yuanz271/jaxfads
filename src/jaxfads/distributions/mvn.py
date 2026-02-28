@@ -30,7 +30,7 @@ from __future__ import annotations
 
 from typing import Literal, NamedTuple
 
-from jax import Array
+from jax import Array, nn
 from jax import numpy as jnp
 from tensorflow_probability.substrates.jax import distributions as tfd
 
@@ -448,21 +448,14 @@ class LoRaMVN(MVN):
         b_raw = free[: self._rank]
         K_raw = jnp.reshape(free[self._rank :], (self._rank, d))
 
-        # Constrain encoder outputs to a numerically stable range while still
-        # allowing sufficiently strong precision updates.
+        # Use a smooth, less-saturating bound than tanh to improve gradient
+        # flow while still keeping updates numerically controlled.
         scale = 5.0
-        b = scale * jnp.tanh(b_raw)
-        K = scale * jnp.tanh(K_raw)
+        b = scale * nn.soft_sign(b_raw)
+        K = scale * nn.soft_sign(K_raw)
 
         h = K.T @ b
         J = K.T @ K
 
-        # Add a magnitude-gated isotropic precision floor for numerical
-        # stability while preserving zero-update semantics:
-        # free_to_natural(0) must return 0 so masked timesteps stay
-        # true no-op updates in compact-encoder mode.
-        base_precision = 1.0
-        k_energy = jnp.sum(jnp.square(K))
-        floor_gate = k_energy / (1.0 + k_energy)  # in [0, 1), exactly 0 at K=0
-        J = 0.5 * (J + J.T) + floor_gate * base_precision * jnp.eye(d, dtype=J.dtype)
+        J = 0.5 * (J + J.T)
         return jnp.concatenate((h, J.ravel()))
