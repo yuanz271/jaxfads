@@ -159,14 +159,20 @@ def _model_rhs(model, grid_pts, alignment=None):
     Parameters
     ----------
     model : XFADS
-        Trained model whose ``forward`` module exposes a ``rhs(z)`` method.
+        Trained model whose ``state_map`` implements ``eval(z, u, c, key=...)``.
     grid_pts : Array, shape (M, D)
         Points at which to evaluate the derivative (in true coordinates).
     alignment : AffineAlignment, optional
         If provided, grid points are mapped into latent space before
         evaluation, and the resulting derivatives are mapped back.
     """
-    rhs_fn = model.state_map.rhs
+    input_dim = int(model.state_map.conf.input_dim)
+    context_dim = int(model.state_map.conf.context_dim)
+    u0 = jnp.zeros((input_dim,), dtype=grid_pts.dtype)
+    c0 = jnp.zeros((context_dim,), dtype=grid_pts.dtype)
+
+    def rhs_fn(z):
+        return model.state_map.eval(z, u0, c0, key=None)
 
     if alignment is not None:
         A_inv = jnp.linalg.inv(alignment.A)
@@ -183,7 +189,7 @@ def flow_metrics(model, *, mu, xlim, vlim, data_pts, grid=25, alignment=None):
     Parameters
     ----------
     model : XFADS
-        Trained model whose dynamics module exposes ``rhs()``.
+        Trained model whose state map supports ``eval()``.
     mu : float
         Van der Pol parameter for the ground-truth RHS.
     xlim, vlim : tuple[float, float]
@@ -682,7 +688,7 @@ def main() -> None:
             "dyn_conf": dict(
                 input_dim=0,
                 context_dim=0,
-                fn_path="examples.vdp_example:vdp_state_map",
+                fn_path="__main__:vdp_state_map",
                 fn_kwargs={"mu": mu},
                 dt=dt,
                 system_type="continuous",
