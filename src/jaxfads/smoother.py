@@ -392,43 +392,48 @@ class XFADS(ConfModule):
         batch_alpha_encode = vmap_with_key(vmap_with_key(self.alpha_encoder))
         batch_beta_encode = vmap_with_key(self.beta_encoder)
 
-        def batch_encode(y: Array, key) -> tuple[Array, Array]:
+        def batch_encode_alpha(y: Array, key) -> Array:
             # handling missing values
             mask_y = jnp.all(
                 jnp.isfinite(y), axis=2, keepdims=True
             )  # nonfinite are missing values
-            y = jnp.where(mask_y, y, 0)
+            y_clean = jnp.where(mask_y, y, 0)
 
             key, alpha_key = jrnd.split(key)
-            a_free = batch_alpha_encode(y, key=alpha_key)
+            a_free = batch_alpha_encode(y_clean, key=alpha_key)
             a = batch_free_to_natural(a_free)
             a = jnp.where(mask_y, a, 0)  # missing values: no update
 
             key, mask_key = jrnd.split(key)
-            mask_a = self.masker(y, key=mask_key)
+            mask_a = self.masker(y_clean, key=mask_key)
             a = jnp.where(mask_a, a, 0)  # pseudo missing values
+            return a
 
+        def batch_encode_beta(a: Array, key) -> Array:
             key, beta_key = jrnd.split(key)
             b_free = batch_beta_encode(a, key=beta_key)
             b = batch_free_to_natural(b_free)
 
             key, mask_key = jrnd.split(key)
-            mask_b = self.masker(y, key=mask_key)
+            # DataMasker only uses shape[:2], so use alpha as mask reference.
+            mask_b = self.masker(a, key=mask_key)
             b = jnp.where(mask_b, b, 0)
-            return a, b
+            return b
 
-        key, encode_key = jrnd.split(key)
-        a, b = batch_encode(y, encode_key)
-        keys = jrnd.split(key, jnp.size(t, 0))
+        alpha_key, beta_key, rest_key = jrnd.split(key, 3)
+        a = batch_encode_alpha(y, alpha_key)
+        keys = jrnd.split(rest_key, jnp.size(t, 0))
 
         match self.conf.mode:
             case Mode.FILTER:
                 smooth_batch = vmap(partial(core.filter, self))
                 return smooth_batch(keys, t, a, u, c)
             case Mode.CAUSAL:
+                b = batch_encode_beta(a, beta_key)
                 smooth_batch = vmap(partial(core.causal, self))
                 return smooth_batch(keys, t, a, b, u, c)
             case Mode.SMOOTH:
+                b = batch_encode_beta(a, beta_key)
                 smooth_batch = vmap(partial(core.smooth, self))
                 return smooth_batch(keys, t, a, b, u, c)
             case _:
