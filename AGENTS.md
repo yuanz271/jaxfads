@@ -1,7 +1,7 @@
 # JAXFADS - Project Knowledge Base
 
-**Updated:** 2026-02-28  
-**Branch:** feature/statemap-stepper
+**Updated:** 2026-03-01  
+**Branch:** main
 
 ## Overview
 

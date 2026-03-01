@@ -222,7 +222,6 @@ class XFADS(ConfModule):
         key, ky = jrnd.split(key)
         self.beta_encoder = encoders.BetaEncoder(enc_conf, ky)
 
-        # TODO: add hooks to freeze observation parameters if needed.
         # if "s" in static_params:
         #     self.state_map.set_static()
 

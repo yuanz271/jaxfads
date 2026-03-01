@@ -28,6 +28,8 @@ All dependencies—including `gearax` (pinned to a specific commit)—are resolv
 - [Writing Custom State Maps and Steppers](docs/dynamics.md)
 - [Training Configuration](docs/training.md)
 - [Algorithm Overview](docs/algorithm.md)
+- [API and Architecture Design](docs/design.md)
+- [Mathematical Notation](docs/notation.md)
 - [Paper Parity Review (arXiv:2403.01371)](docs/paper_parity_2403_01371.md)
 
 Training note: parameter freezing is configured declaratively via
