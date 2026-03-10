@@ -163,9 +163,9 @@ def main() -> None:
         data = (times, obs, controls, covariates)
 
         variants = [
-            ("DiagMVN", "MVN", {"structure": "diag"}),
-            ("FullMVN", "MVN", {"structure": "full"}),
-        ] + [(f"LoRaMVN-r{r}", "LoRaMVN", {"rank": r}) for r in ranks if r <= dim]
+            ("DiagMVN", "MVN", {"rank": 0}),
+            ("FullMVN", "MVN", {}),
+        ] + [(f"LoRaMVN-r{r}", "MVN", {"rank": r}) for r in ranks if r <= dim]
 
         for variant_name, approx_name, approx_kwargs in variants:
             for seed in seeds:

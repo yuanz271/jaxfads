@@ -132,7 +132,7 @@ def test_train(model_conf, trainer_config, sample_data):
 
 
 def test_train_lora_rank1_end_to_end(trainer_config, sample_data):
-    """LoRaMVN rank-1 should train and run end-to-end without NaNs."""
+    """MVN rank-1 should train and run end-to-end without NaNs."""
     model_conf = OmegaConf.create(
         {
             "mode": "smooth",
@@ -140,7 +140,7 @@ def test_train_lora_rank1_end_to_end(trainer_config, sample_data):
             "state_dim": 2,
             "state_map": "MockStateMap",
             "stepper": "DiscreteStepper",
-            "approx": "LoRaMVN",
+            "approx": "MVN",
             "approx_kwargs": {"rank": 1},
             "mc_size": 2,
             "seed": 0,

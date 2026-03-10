@@ -1,11 +1,13 @@
 import pytest
-from jax import nn
 from jax import numpy as jnp
 from jax import random as jrnd
 import chex
 import tensorflow_probability.substrates.jax.distributions as tfp
 
-from jaxfads.distributions import LoRaMVN, MVN
+from jaxfads.distributions import MVN
+
+# rank=0 → diagonal, rank=dim → full
+_RANK_CASES = [(4, 4), (4, 0)]  # (dim, rank)
 
 
 def _random_pd(key, dim: int, jitter: float = 1e-1) -> jnp.ndarray:
@@ -18,25 +20,22 @@ def _random_diag_pd(key, dim: int, jitter: float = 1e-1) -> jnp.ndarray:
     return jnp.diag(v)
 
 
-@pytest.mark.parametrize("structure", ["full", "diag"])
-@pytest.mark.parametrize("dim", [1, 4])
-def test_param_size(structure, dim):
-    mvn = MVN(dim=dim, structure=structure)
-    expected = (dim + dim * dim) if structure == "full" else (2 * dim)
+def _random_cov(key, dim: int, rank: int):
+    return _random_pd(key, dim) if rank > 0 else _random_diag_pd(key, dim)
+
+
+@pytest.mark.parametrize("dim,rank", [(1, 1), (1, 0), (4, 4), (4, 0)])
+def test_param_size(dim, rank):
+    mvn = MVN(dim=dim, rank=rank)
+    expected = (dim + dim * dim) if rank > 0 else (2 * dim)
     assert mvn.param_size() == expected
 
 
-@pytest.mark.parametrize("structure", ["full", "diag"])
-@pytest.mark.parametrize("dim", [4])
-def test_pack_unpack_roundtrip(structure, dim):
-    mvn = MVN(dim=dim, structure=structure)
-    key = jrnd.key(0)
-    mean = jrnd.normal(key, (dim,))
-
-    if structure == "full":
-        cov = _random_pd(jrnd.key(1), dim)
-    else:
-        cov = _random_diag_pd(jrnd.key(1), dim)
+@pytest.mark.parametrize("dim,rank", _RANK_CASES)
+def test_pack_unpack_roundtrip(dim, rank):
+    mvn = MVN(dim=dim, rank=rank)
+    mean = jrnd.normal(jrnd.key(0), (dim,))
+    cov = _random_cov(jrnd.key(1), dim, rank)
 
     moment = mvn.pack(mean, cov)
     mean_rt, cov_rt = mvn.unpack(moment)
@@ -44,17 +43,11 @@ def test_pack_unpack_roundtrip(structure, dim):
     chex.assert_trees_all_close(cov_rt, cov, atol=1e-5)
 
 
-@pytest.mark.parametrize("structure", ["full", "diag"])
-@pytest.mark.parametrize("dim", [4])
-def test_natural_moment_roundtrip(structure, dim):
-    mvn = MVN(dim=dim, structure=structure)
+@pytest.mark.parametrize("dim,rank", _RANK_CASES)
+def test_natural_moment_roundtrip(dim, rank):
+    mvn = MVN(dim=dim, rank=rank)
     mean = jrnd.normal(jrnd.key(0), (dim,))
-
-    if structure == "full":
-        cov = _random_pd(jrnd.key(1), dim)
-    else:
-        cov = _random_diag_pd(jrnd.key(1), dim)
-
+    cov = _random_cov(jrnd.key(1), dim, rank)
     moment = mvn.pack(mean, cov)
 
     natural = mvn.moment_to_natural(moment)
@@ -65,14 +58,12 @@ def test_natural_moment_roundtrip(structure, dim):
     chex.assert_trees_all_close(cov_rt, cov, atol=1e-4)
 
 
-@pytest.mark.parametrize("structure", ["full", "diag"])
-@pytest.mark.parametrize("dim", [4])
-def test_free_canon_roundtrip(structure, dim):
-    mvn = MVN(dim=dim, structure=structure)
-    key = jrnd.key(0)
-    loc = jrnd.normal(key, (dim,))
+@pytest.mark.parametrize("dim,rank", _RANK_CASES)
+def test_free_canon_roundtrip(dim, rank):
+    mvn = MVN(dim=dim, rank=rank)
+    loc = jrnd.normal(jrnd.key(0), (dim,))
 
-    if structure == "full":
+    if rank > 0:
         chol_free = jrnd.normal(jrnd.key(1), (dim, dim))
         free = jnp.concatenate((loc, chol_free.ravel()))
     else:
@@ -83,17 +74,15 @@ def test_free_canon_roundtrip(structure, dim):
     free_rt = mvn.canon_to_free(canon)
     canon_rt = mvn.free_to_canon(free_rt)
 
-    # Roundtrip should preserve the constrained representation.
     # Tolerance is relaxed because the precision parameterization involves
     # two matrix inversions per roundtrip leg, accumulating float32 error.
     chex.assert_trees_all_close(canon.loc, canon_rt.loc, atol=1e-4)
     chex.assert_trees_all_close(canon.chol, canon_rt.chol, atol=1e-4)
 
 
-@pytest.mark.parametrize("structure", ["full", "diag"])
-@pytest.mark.parametrize("dim", [4])
-def test_free_from_kw(structure, dim):
-    mvn = MVN(dim=dim, structure=structure)
+@pytest.mark.parametrize("dim,rank", _RANK_CASES)
+def test_free_from_kw(dim, rank):
+    mvn = MVN(dim=dim, rank=rank)
     free = mvn.free_from_kw(scale=2.0)
     canon = mvn.free_to_canon(free)
     moment = mvn.canon_to_moment(canon)
@@ -103,16 +92,11 @@ def test_free_from_kw(structure, dim):
     chex.assert_trees_all_close(cov, 2.0 * jnp.eye(dim), atol=1e-5)
 
 
-@pytest.mark.parametrize("structure", ["full", "diag"])
-@pytest.mark.parametrize("dim", [4])
-def test_predictive_moment_matches_closed_form(structure, dim):
-    mvn = MVN(dim=dim, structure=structure)
+@pytest.mark.parametrize("dim,rank", _RANK_CASES)
+def test_predictive_moment_matches_closed_form(dim, rank):
+    mvn = MVN(dim=dim, rank=rank)
     z = jrnd.normal(jrnd.key(0), (dim,))
-
-    if structure == "full":
-        Q = _random_pd(jrnd.key(1), dim)
-    else:
-        Q = _random_diag_pd(jrnd.key(1), dim)
+    Q = _random_cov(jrnd.key(1), dim, rank)
 
     noise = mvn.pack(jnp.zeros(dim), Q)
     stats = mvn.predictive_moment(z, noise)
@@ -121,17 +105,11 @@ def test_predictive_moment_matches_closed_form(structure, dim):
     chex.assert_trees_all_close(stats, expected, atol=1e-6)
 
 
-@pytest.mark.parametrize("structure", ["full", "diag"])
-@pytest.mark.parametrize("dim", [4])
-def test_sampling_matches_moments(structure, dim):
-    mvn = MVN(dim=dim, structure=structure)
+@pytest.mark.parametrize("dim,rank", _RANK_CASES)
+def test_sampling_matches_moments(dim, rank):
+    mvn = MVN(dim=dim, rank=rank)
     mean = jrnd.normal(jrnd.key(0), (dim,))
-
-    if structure == "full":
-        cov = _random_pd(jrnd.key(1), dim)
-    else:
-        cov = _random_diag_pd(jrnd.key(1), dim)
-
+    cov = _random_cov(jrnd.key(1), dim, rank)
     moment = mvn.pack(mean, cov)
 
     samples = mvn.sample_by_moment(jrnd.key(2), moment, 10_000)
@@ -142,24 +120,21 @@ def test_sampling_matches_moments(structure, dim):
     chex.assert_trees_all_close(jnp.cov(samples.T), cov, atol=0.2)
 
 
-@pytest.mark.parametrize("structure", ["full", "diag"])
-@pytest.mark.parametrize("dim", [4])
-def test_kl_matches_tfp(structure, dim):
-    mvn = MVN(dim=dim, structure=structure)
+@pytest.mark.parametrize("dim,rank", _RANK_CASES)
+def test_kl_matches_tfp(dim, rank):
+    mvn = MVN(dim=dim, rank=rank)
     mean1 = jrnd.normal(jrnd.key(0), (dim,))
     mean2 = jrnd.normal(jrnd.key(2), (dim,))
+    cov1 = _random_cov(jrnd.key(1), dim, rank)
+    cov2 = _random_cov(jrnd.key(3), dim, rank)
 
-    if structure == "full":
-        cov1 = _random_pd(jrnd.key(1), dim)
-        cov2 = _random_pd(jrnd.key(3), dim)
+    if rank > 0:
         expected = tfp.kl_divergence(
             tfp.MultivariateNormalFullCovariance(mean1, cov1),
             tfp.MultivariateNormalFullCovariance(mean2, cov2),
             allow_nan_stats=False,
         )
     else:
-        cov1 = _random_diag_pd(jrnd.key(1), dim)
-        cov2 = _random_diag_pd(jrnd.key(3), dim)
         expected = tfp.kl_divergence(
             tfp.MultivariateNormalDiag(mean1, scale_diag=jnp.sqrt(jnp.diag(cov1))),
             tfp.MultivariateNormalDiag(mean2, scale_diag=jnp.sqrt(jnp.diag(cov2))),
@@ -172,67 +147,88 @@ def test_kl_matches_tfp(structure, dim):
     chex.assert_trees_all_close(mvn.kl(moment1, moment2), expected, atol=1e-5)
 
 
-def test_encoder_free_hooks_default_mvn_matches_standard_chain():
-    mvn = MVN(dim=3, structure="full")
-    assert mvn.free_size() == mvn.param_size()
+# ---- Encoder free_to_natural tests ----
 
-    free = mvn.free_from_kw(scale=1.5)
+
+@pytest.mark.parametrize("rank", [0, 2, 3])
+def test_encoder_free_to_natural_shapes_and_psd(rank):
+    """free_to_natural produces correct-size natural params with PSD J."""
+    dim = 3
+    mvn = MVN(dim=dim, rank=rank)
+    assert mvn.free_size() == 2 * dim + dim * rank
+
+    free = jrnd.normal(jrnd.key(0), (mvn.free_size(),))
     natural = mvn.free_to_natural(free)
     chex.assert_shape(natural, (mvn.param_size(),))
 
-    canon = mvn.free_to_canon(free)
-    moment = mvn.canon_to_moment(canon)
-    expected = mvn.moment_to_natural(moment)
-    chex.assert_trees_all_close(natural, expected, atol=1e-6)
+    if rank > 0:
+        J = jnp.reshape(natural[dim:], (dim, dim))
+        chex.assert_trees_all_close(J, J.T, atol=1e-6)
+        eigvals = jnp.linalg.eigvalsh(J)
+        assert jnp.all(eigvals >= -1e-5)
 
 
-def test_encoder_free_hooks_lora_mvn_produces_psd_precision_update():
+def test_encoder_free_to_natural_diag_matches_softplus():
+    """For rank=0, free_to_natural returns [h, softplus(d)]."""
+    dim = 4
+    mvn = MVN(dim=dim, rank=0)
+    assert mvn.free_size() == 2 * dim
+
+    free = jrnd.normal(jrnd.key(0), (mvn.free_size(),))
+    natural = mvn.free_to_natural(free)
+
+    from jaxfads.constraints import constrain_positive
+
+    expected_h = free[:dim]
+    expected_j = constrain_positive(free[dim:])
+    chex.assert_trees_all_close(natural[:dim], expected_h, atol=1e-6)
+    chex.assert_trees_all_close(natural[dim:], expected_j, atol=1e-6)
+
+
+def test_encoder_free_hooks_low_rank_produces_psd_precision_update():
     dim, rank = 4, 2
-    approx = LoRaMVN(dim=dim, rank=rank)
+    approx = MVN(dim=dim, rank=rank)
 
-    assert approx.free_size() == rank + rank * dim
+    assert approx.free_size() == 2 * dim + rank * dim
     assert approx.param_size() == dim + dim * dim
 
-    b = jrnd.normal(jrnd.key(0), (rank,))
-    K = jrnd.normal(jrnd.key(1), (rank, dim))
-    free = jnp.concatenate((b, K.ravel()))
-
+    free = jrnd.normal(jrnd.key(0), (approx.free_size(),))
     natural = approx.free_to_natural(free)
     chex.assert_shape(natural, (approx.param_size(),))
 
-    h = natural[:dim]
     J = jnp.reshape(natural[dim:], (dim, dim))
-
-    scale = 5.0
-    chex.assert_trees_all_close(
-        h, (scale * nn.soft_sign(K)).T @ (scale * nn.soft_sign(b)), atol=1e-6
-    )
     chex.assert_trees_all_close(J, 0.5 * (J + J.T), atol=1e-6)
 
-    # PSD sanity check: x^T J x >= 0 for random x.
     x = jrnd.normal(jrnd.key(2), (dim,))
     quad = x @ J @ x
     assert quad >= -1e-5
 
 
-def test_encoder_free_hooks_lora_mvn_zero_matches_full_baseline():
-    """At free=0, LoRaMVN should produce the same baseline as FullMVN."""
-    dim, rank = 5, 2
-    lora = LoRaMVN(dim=dim, rank=rank)
-    full = MVN(dim=dim, structure="full")
+@pytest.mark.parametrize("rank", [0, 2, 5])
+def test_encoder_free_zero_baseline_matches_across_ranks(rank):
+    """At free=0, all ranks produce the same isotropic baseline precision."""
+    dim = 5
+    mvn = MVN(dim=dim, rank=rank)
+    full = MVN(dim=dim, rank=dim)
 
-    lora_nat = lora.free_to_natural(jnp.zeros((lora.free_size(),)))
+    nat = mvn.free_to_natural(jnp.zeros((mvn.free_size(),)))
     full_nat = full.free_to_natural(jnp.zeros((full.free_size(),)))
 
-    chex.assert_shape(lora_nat, (lora.param_size(),))
+    chex.assert_shape(nat, (mvn.param_size(),))
     # h should be zero (no mean shift at free=0)
-    chex.assert_trees_all_close(lora_nat[:dim], jnp.zeros(dim), atol=1e-8)
-    # J should match FullMVN baseline (isotropic precision)
-    chex.assert_trees_all_close(lora_nat[dim:], full_nat[dim:], atol=1e-6)
+    chex.assert_trees_all_close(nat[:dim], jnp.zeros(dim), atol=1e-8)
+    # J diagonal should match full-rank baseline
+    if rank > 0:
+        chex.assert_trees_all_close(nat[dim:], full_nat[dim:], atol=1e-6)
+    else:
+        # diag: precision = softplus(0) per element
+        from jaxfads.constraints import constrain_positive
+
+        expected_j = constrain_positive(jnp.zeros(dim))
+        chex.assert_trees_all_close(nat[dim:], expected_j, atol=1e-6)
 
 
 def test_registry_lookup():
     from jaxfads.base import Approx
 
     assert Approx.get_subclass("MVN") is MVN
-    assert Approx.get_subclass("LoRaMVN") is LoRaMVN

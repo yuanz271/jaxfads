@@ -49,13 +49,11 @@ def _build_data(*, n_trials: int, n_steps: int, dt: float, mu: float, obs_dim: i
 
 def _variant_rows(rank_list: list[int]):
     rows = [
-        dict(name="DiagMVN", approx="MVN", approx_kwargs={"structure": "diag"}),
-        dict(name="FullMVN", approx="MVN", approx_kwargs={"structure": "full"}),
+        dict(name="DiagMVN", approx="MVN", approx_kwargs={"rank": 0}),
+        dict(name="FullMVN", approx="MVN", approx_kwargs={}),
     ]
     for r in rank_list:
-        rows.append(
-            dict(name=f"LoRaMVN-r{r}", approx="LoRaMVN", approx_kwargs={"rank": r})
-        )
+        rows.append(dict(name=f"LoRaMVN-r{r}", approx="MVN", approx_kwargs={"rank": r}))
     return rows
 
 

@@ -5,6 +5,6 @@ Concrete ``Approx`` implementations live in submodules; this package
 re-exports the public API.
 """
 
-from .mvn import LoRaMVN, MVN
+from .mvn import MVN
 
-__all__ = ["MVN", "LoRaMVN"]
+__all__ = ["MVN"]

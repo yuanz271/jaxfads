@@ -199,7 +199,7 @@ def test_lora_mvn_smoke_constructor_and_forward_pass():
             state_dim=z_size,
             state_map="Mock",
             stepper="DiscreteStepper",
-            approx="LoRaMVN",
+            approx="MVN",
             approx_kwargs={"rank": 2},
             mc_size=2,
             seed=0,

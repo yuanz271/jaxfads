@@ -249,7 +249,7 @@ def test_expected_predictive_moment_partial_invalid():
     state_dim, mc_size = 4, 64
     key = jr.key(42)
 
-    approx = MVN(dim=state_dim)
+    approx = MVN(dim=state_dim, rank=state_dim)
     noise = approx.canon_to_moment(approx.free_to_canon(approx.free_from_kw(scale=1.0)))
 
     mp = approx.pack(jnp.zeros(state_dim), 25.0 * jnp.eye(state_dim))

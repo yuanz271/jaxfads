@@ -22,13 +22,14 @@ def spec():
 
 @pytest.fixture
 def diag():
-    """MVN instance."""
-    return MVN(dim=_STATE_DIM)
+    """MVN instance (full rank)."""
+    return MVN(dim=_STATE_DIM, rank=_STATE_DIM)
 
 
 def make_approx(dim: int, approx_name: str = "MVN", **kwargs) -> Approx:
     """Instantiate an Approx from name, dim, and kwargs."""
     cls = Approx.get_subclass(approx_name)
+    kwargs.setdefault("rank", dim)
     return cls(dim=dim, **kwargs)
 
 
