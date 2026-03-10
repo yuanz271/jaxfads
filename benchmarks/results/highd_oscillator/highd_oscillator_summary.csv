@@ -1,4 +1,0 @@
-state_dim,variant,n_runs,natural_size,encoder_free_size,train_seconds_mean,train_seconds_std,post_rmse_mean,post_rmse_std,obs_rmse_mean,obs_rmse_std
-8,DiagMVN,1,16,16,3.4261765830451623,0.0,0.8659424185752869,0.0,1.6672329902648926,0.0
-8,FullMVN,1,72,72,3.8957070000469685,0.0,0.8284937143325806,0.0,1.6283128261566162,0.0
-8,LoRaMVN-r1,1,72,9,3.3963465829729103,0.0,0.8685673475265503,0.0,2.7790019512176514,0.0
