@@ -17,10 +17,15 @@ from ..base import StateMap
 def _is_plain_function_or_method(fn: Any) -> bool:
     if isinstance(fn, functools.partial):
         return _is_plain_function_or_method(fn.func)
-    return isinstance(
-        fn,
-        (types.FunctionType, types.BuiltinFunctionType, types.MethodType),
-    ) or inspect.isfunction(fn) or inspect.ismethod(fn) or inspect.isbuiltin(fn)
+    return (
+        isinstance(
+            fn,
+            (types.FunctionType, types.BuiltinFunctionType, types.MethodType),
+        )
+        or inspect.isfunction(fn)
+        or inspect.ismethod(fn)
+        or inspect.isbuiltin(fn)
+    )
 
 
 def _accepts_key_kwarg(fn: Callable[..., Any]) -> bool:

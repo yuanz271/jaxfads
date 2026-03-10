@@ -396,6 +396,7 @@ class XFADS(ConfModule):
         >>> natural, moment, pred = model(t, y_batch, u_batch, c_batch, key=key)
         """
         approx = self.approx
+
         def _free_to_natural(free_flat: Array) -> Array:
             return approx.free_to_natural(free_flat)
 

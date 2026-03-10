@@ -21,9 +21,7 @@ class Mock(StateMap):
         self.layer = None
 
     @override
-    def eval(
-        self, z: Array, u: Array, c: Array, *, key: Array | None = None
-    ) -> Array:
+    def eval(self, z: Array, u: Array, c: Array, *, key: Array | None = None) -> Array:
         return z
 
 

@@ -84,7 +84,9 @@ def test_bismooth_shapes_and_finite(diag):
     u = jnp.zeros((T, 0))
     c = jnp.zeros((T, 0))
 
-    nature_s, moment_s, moment_p = core._bismooth(model, key, jnp.arange(T), alpha, u, c)
+    nature_s, moment_s, moment_p = core._bismooth(
+        model, key, jnp.arange(T), alpha, u, c
+    )
 
     for arr in (nature_s, moment_s, moment_p):
         chex.assert_shape(arr, (T, param_dim))
@@ -104,9 +106,7 @@ def test_causal_reindexed_identity(diag):
     c = jnp.zeros((T, 0))
 
     check_nature, _, _ = core.filter(model, key, jnp.arange(T), alpha, u, c)
-    nature, moment, moment_p = core.causal(
-        model, key, jnp.arange(T), alpha, beta, u, c
-    )
+    nature, moment, moment_p = core.causal(model, key, jnp.arange(T), alpha, beta, u, c)
 
     chex.assert_trees_all_close(nature, check_nature + beta, atol=1e-6)
     chex.assert_shape(moment, (T, param_dim))
@@ -130,9 +130,7 @@ def test_causal_zero_beta_reduces_to_alpha_filter(diag):
     check_nature, check_moment, check_moment_p = core.filter(
         model, key, jnp.arange(T), alpha, u, c
     )
-    nature, moment, moment_p = core.causal(
-        model, key, jnp.arange(T), alpha, beta, u, c
-    )
+    nature, moment, moment_p = core.causal(model, key, jnp.arange(T), alpha, beta, u, c)
 
     chex.assert_trees_all_close(nature, check_nature, atol=1e-6)
     chex.assert_trees_all_close(moment, check_moment, atol=1e-6)

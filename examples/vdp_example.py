@@ -103,6 +103,7 @@ class MLPStateMap(StateMap):
     """
 
     net: enn.Sequential
+
     def __init__(self, conf, key):
         self.conf = conf
         self.net = make_mlp(
