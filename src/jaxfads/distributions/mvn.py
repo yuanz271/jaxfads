@@ -184,6 +184,10 @@ class MVN(Approx):
     def __init__(self, dim: int, rank: int):
         dim = int(dim)
         rank = int(rank)
+        if dim <= 0:
+            raise ValueError(f"dim must be positive, got {dim}")
+        if not 0 <= rank <= dim:
+            raise ValueError(f"rank must satisfy 0 <= rank <= dim, got rank={rank}, dim={dim}")
 
         structure: Literal["full", "diag"] = "diag" if rank == 0 else "full"
         self._layout = _Layout(dim=dim, structure=structure)
