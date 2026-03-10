@@ -1,0 +1,452 @@
+[
+  {
+    "state_dim": 8,
+    "variant": "DiagMVN",
+    "seed": 0,
+    "train_seconds": 6.831640459015034,
+    "natural_size": 16,
+    "encoder_free_size": 16,
+    "post_rmse": 0.444843590259552,
+    "obs_rmse": 0.774870753288269
+  },
+  {
+    "state_dim": 8,
+    "variant": "DiagMVN",
+    "seed": 1,
+    "train_seconds": 6.291559291945305,
+    "natural_size": 16,
+    "encoder_free_size": 16,
+    "post_rmse": 0.4466402232646942,
+    "obs_rmse": 0.774588942527771
+  },
+  {
+    "state_dim": 8,
+    "variant": "DiagMVN",
+    "seed": 2,
+    "train_seconds": 6.3172609159955755,
+    "natural_size": 16,
+    "encoder_free_size": 16,
+    "post_rmse": 0.44711393117904663,
+    "obs_rmse": 0.7571611404418945
+  },
+  {
+    "state_dim": 8,
+    "variant": "FullMVN",
+    "seed": 0,
+    "train_seconds": 9.661862707987893,
+    "natural_size": 72,
+    "encoder_free_size": 80,
+    "post_rmse": 0.41050073504447937,
+    "obs_rmse": 0.7115879058837891
+  },
+  {
+    "state_dim": 8,
+    "variant": "FullMVN",
+    "seed": 1,
+    "train_seconds": 9.465634041000158,
+    "natural_size": 72,
+    "encoder_free_size": 80,
+    "post_rmse": 0.4031200408935547,
+    "obs_rmse": 0.671848475933075
+  },
+  {
+    "state_dim": 8,
+    "variant": "FullMVN",
+    "seed": 2,
+    "train_seconds": 9.512576124980114,
+    "natural_size": 72,
+    "encoder_free_size": 80,
+    "post_rmse": 0.4037378132343292,
+    "obs_rmse": 0.6731141805648804
+  },
+  {
+    "state_dim": 8,
+    "variant": "LoRaMVN-r1",
+    "seed": 0,
+    "train_seconds": 9.29294537496753,
+    "natural_size": 72,
+    "encoder_free_size": 24,
+    "post_rmse": 0.4429744780063629,
+    "obs_rmse": 0.7733728885650635
+  },
+  {
+    "state_dim": 8,
+    "variant": "LoRaMVN-r1",
+    "seed": 1,
+    "train_seconds": 9.273730500019155,
+    "natural_size": 72,
+    "encoder_free_size": 24,
+    "post_rmse": 0.44850924611091614,
+    "obs_rmse": 0.7574622631072998
+  },
+  {
+    "state_dim": 8,
+    "variant": "LoRaMVN-r1",
+    "seed": 2,
+    "train_seconds": 9.297612541995477,
+    "natural_size": 72,
+    "encoder_free_size": 24,
+    "post_rmse": 0.45268282294273376,
+    "obs_rmse": 0.7488468885421753
+  },
+  {
+    "state_dim": 8,
+    "variant": "LoRaMVN-r2",
+    "seed": 0,
+    "train_seconds": 9.721035333001055,
+    "natural_size": 72,
+    "encoder_free_size": 32,
+    "post_rmse": 0.44092613458633423,
+    "obs_rmse": 0.7697020769119263
+  },
+  {
+    "state_dim": 8,
+    "variant": "LoRaMVN-r2",
+    "seed": 1,
+    "train_seconds": 9.456862374965567,
+    "natural_size": 72,
+    "encoder_free_size": 32,
+    "post_rmse": 0.4420192837715149,
+    "obs_rmse": 0.7492457032203674
+  },
+  {
+    "state_dim": 8,
+    "variant": "LoRaMVN-r2",
+    "seed": 2,
+    "train_seconds": 9.543075082998257,
+    "natural_size": 72,
+    "encoder_free_size": 32,
+    "post_rmse": 0.44187408685684204,
+    "obs_rmse": 0.7273505926132202
+  },
+  {
+    "state_dim": 8,
+    "variant": "LoRaMVN-r4",
+    "seed": 0,
+    "train_seconds": 9.892852707998827,
+    "natural_size": 72,
+    "encoder_free_size": 48,
+    "post_rmse": 0.4299771189689636,
+    "obs_rmse": 0.7463897466659546
+  },
+  {
+    "state_dim": 8,
+    "variant": "LoRaMVN-r4",
+    "seed": 1,
+    "train_seconds": 9.653179583023302,
+    "natural_size": 72,
+    "encoder_free_size": 48,
+    "post_rmse": 0.42303019762039185,
+    "obs_rmse": 0.7081618905067444
+  },
+  {
+    "state_dim": 8,
+    "variant": "LoRaMVN-r4",
+    "seed": 2,
+    "train_seconds": 9.637715917022433,
+    "natural_size": 72,
+    "encoder_free_size": 48,
+    "post_rmse": 0.42556214332580566,
+    "obs_rmse": 0.7105180621147156
+  },
+  {
+    "state_dim": 16,
+    "variant": "DiagMVN",
+    "seed": 0,
+    "train_seconds": 8.482202457962558,
+    "natural_size": 32,
+    "encoder_free_size": 32,
+    "post_rmse": 0.6168592572212219,
+    "obs_rmse": 1.2530702352523804
+  },
+  {
+    "state_dim": 16,
+    "variant": "DiagMVN",
+    "seed": 1,
+    "train_seconds": 8.040394874988124,
+    "natural_size": 32,
+    "encoder_free_size": 32,
+    "post_rmse": 0.6173117160797119,
+    "obs_rmse": 1.281517744064331
+  },
+  {
+    "state_dim": 16,
+    "variant": "DiagMVN",
+    "seed": 2,
+    "train_seconds": 8.072575583006255,
+    "natural_size": 32,
+    "encoder_free_size": 32,
+    "post_rmse": 0.6039838194847107,
+    "obs_rmse": 1.2367373704910278
+  },
+  {
+    "state_dim": 16,
+    "variant": "FullMVN",
+    "seed": 0,
+    "train_seconds": 14.805678291013464,
+    "natural_size": 272,
+    "encoder_free_size": 288,
+    "post_rmse": 0.5304045081138611,
+    "obs_rmse": 1.0327717065811157
+  },
+  {
+    "state_dim": 16,
+    "variant": "FullMVN",
+    "seed": 1,
+    "train_seconds": 14.828708334011026,
+    "natural_size": 272,
+    "encoder_free_size": 288,
+    "post_rmse": 0.544165849685669,
+    "obs_rmse": 1.0985385179519653
+  },
+  {
+    "state_dim": 16,
+    "variant": "FullMVN",
+    "seed": 2,
+    "train_seconds": 14.521046667010523,
+    "natural_size": 272,
+    "encoder_free_size": 288,
+    "post_rmse": 0.5364810824394226,
+    "obs_rmse": 1.1104897260665894
+  },
+  {
+    "state_dim": 16,
+    "variant": "LoRaMVN-r1",
+    "seed": 0,
+    "train_seconds": 13.836045959033072,
+    "natural_size": 272,
+    "encoder_free_size": 48,
+    "post_rmse": 0.5955110192298889,
+    "obs_rmse": 1.1757965087890625
+  },
+  {
+    "state_dim": 16,
+    "variant": "LoRaMVN-r1",
+    "seed": 1,
+    "train_seconds": 13.929794375027996,
+    "natural_size": 272,
+    "encoder_free_size": 48,
+    "post_rmse": 0.5988014936447144,
+    "obs_rmse": 1.196267008781433
+  },
+  {
+    "state_dim": 16,
+    "variant": "LoRaMVN-r1",
+    "seed": 2,
+    "train_seconds": 13.818807375035249,
+    "natural_size": 272,
+    "encoder_free_size": 48,
+    "post_rmse": 0.5988073945045471,
+    "obs_rmse": 1.192558765411377
+  },
+  {
+    "state_dim": 16,
+    "variant": "LoRaMVN-r2",
+    "seed": 0,
+    "train_seconds": 14.261210458003916,
+    "natural_size": 272,
+    "encoder_free_size": 64,
+    "post_rmse": 0.5779434442520142,
+    "obs_rmse": 1.1330597400665283
+  },
+  {
+    "state_dim": 16,
+    "variant": "LoRaMVN-r2",
+    "seed": 1,
+    "train_seconds": 14.221144249953795,
+    "natural_size": 272,
+    "encoder_free_size": 64,
+    "post_rmse": 0.5844647884368896,
+    "obs_rmse": 1.19155752658844
+  },
+  {
+    "state_dim": 16,
+    "variant": "LoRaMVN-r2",
+    "seed": 2,
+    "train_seconds": 14.220798416994512,
+    "natural_size": 272,
+    "encoder_free_size": 64,
+    "post_rmse": 0.5760517716407776,
+    "obs_rmse": 1.1634432077407837
+  },
+  {
+    "state_dim": 16,
+    "variant": "LoRaMVN-r4",
+    "seed": 0,
+    "train_seconds": 14.388052624999546,
+    "natural_size": 272,
+    "encoder_free_size": 96,
+    "post_rmse": 0.5654860138893127,
+    "obs_rmse": 1.1047847270965576
+  },
+  {
+    "state_dim": 16,
+    "variant": "LoRaMVN-r4",
+    "seed": 1,
+    "train_seconds": 14.194454625016078,
+    "natural_size": 272,
+    "encoder_free_size": 96,
+    "post_rmse": 0.5786978006362915,
+    "obs_rmse": 1.151673674583435
+  },
+  {
+    "state_dim": 16,
+    "variant": "LoRaMVN-r4",
+    "seed": 2,
+    "train_seconds": 14.742090917017777,
+    "natural_size": 272,
+    "encoder_free_size": 96,
+    "post_rmse": 0.5706427693367004,
+    "obs_rmse": 1.1656899452209473
+  },
+  {
+    "state_dim": 32,
+    "variant": "DiagMVN",
+    "seed": 0,
+    "train_seconds": 11.667912458011415,
+    "natural_size": 64,
+    "encoder_free_size": 64,
+    "post_rmse": 0.6797552108764648,
+    "obs_rmse": 1.968825340270996
+  },
+  {
+    "state_dim": 32,
+    "variant": "DiagMVN",
+    "seed": 1,
+    "train_seconds": 11.524956208013464,
+    "natural_size": 64,
+    "encoder_free_size": 64,
+    "post_rmse": 0.6758926510810852,
+    "obs_rmse": 1.8948458433151245
+  },
+  {
+    "state_dim": 32,
+    "variant": "DiagMVN",
+    "seed": 2,
+    "train_seconds": 11.57489266700577,
+    "natural_size": 64,
+    "encoder_free_size": 64,
+    "post_rmse": 0.6695978045463562,
+    "obs_rmse": 1.8906608819961548
+  },
+  {
+    "state_dim": 32,
+    "variant": "FullMVN",
+    "seed": 0,
+    "train_seconds": 25.697135082969908,
+    "natural_size": 1056,
+    "encoder_free_size": 1088,
+    "post_rmse": 0.686686098575592,
+    "obs_rmse": 2.140544891357422
+  },
+  {
+    "state_dim": 32,
+    "variant": "FullMVN",
+    "seed": 1,
+    "train_seconds": 26.75899133295752,
+    "natural_size": 1056,
+    "encoder_free_size": 1088,
+    "post_rmse": 0.6783413290977478,
+    "obs_rmse": 2.051663398742676
+  },
+  {
+    "state_dim": 32,
+    "variant": "FullMVN",
+    "seed": 2,
+    "train_seconds": 27.751262042031158,
+    "natural_size": 1056,
+    "encoder_free_size": 1088,
+    "post_rmse": 0.6648337841033936,
+    "obs_rmse": 2.040477752685547
+  },
+  {
+    "state_dim": 32,
+    "variant": "LoRaMVN-r1",
+    "seed": 0,
+    "train_seconds": 30.713740916980896,
+    "natural_size": 1056,
+    "encoder_free_size": 96,
+    "post_rmse": 0.6427266597747803,
+    "obs_rmse": 1.777220606803894
+  },
+  {
+    "state_dim": 32,
+    "variant": "LoRaMVN-r1",
+    "seed": 1,
+    "train_seconds": 30.77484191703843,
+    "natural_size": 1056,
+    "encoder_free_size": 96,
+    "post_rmse": 0.6420771479606628,
+    "obs_rmse": 1.7541546821594238
+  },
+  {
+    "state_dim": 32,
+    "variant": "LoRaMVN-r1",
+    "seed": 2,
+    "train_seconds": 30.799056707997806,
+    "natural_size": 1056,
+    "encoder_free_size": 96,
+    "post_rmse": 0.63884437084198,
+    "obs_rmse": 1.756137728691101
+  },
+  {
+    "state_dim": 32,
+    "variant": "LoRaMVN-r2",
+    "seed": 0,
+    "train_seconds": 31.665981458034366,
+    "natural_size": 1056,
+    "encoder_free_size": 128,
+    "post_rmse": 0.6403079628944397,
+    "obs_rmse": 1.7887842655181885
+  },
+  {
+    "state_dim": 32,
+    "variant": "LoRaMVN-r2",
+    "seed": 1,
+    "train_seconds": 31.59383083402645,
+    "natural_size": 1056,
+    "encoder_free_size": 128,
+    "post_rmse": 0.635678231716156,
+    "obs_rmse": 1.746428370475769
+  },
+  {
+    "state_dim": 32,
+    "variant": "LoRaMVN-r2",
+    "seed": 2,
+    "train_seconds": 31.670512709009927,
+    "natural_size": 1056,
+    "encoder_free_size": 128,
+    "post_rmse": 0.6321026682853699,
+    "obs_rmse": 1.7431830167770386
+  },
+  {
+    "state_dim": 32,
+    "variant": "LoRaMVN-r4",
+    "seed": 0,
+    "train_seconds": 32.06093483400764,
+    "natural_size": 1056,
+    "encoder_free_size": 192,
+    "post_rmse": 0.6293699145317078,
+    "obs_rmse": 1.7881721258163452
+  },
+  {
+    "state_dim": 32,
+    "variant": "LoRaMVN-r4",
+    "seed": 1,
+    "train_seconds": 29.897515832970385,
+    "natural_size": 1056,
+    "encoder_free_size": 192,
+    "post_rmse": 0.649535596370697,
+    "obs_rmse": 1.8190443515777588
+  },
+  {
+    "state_dim": 32,
+    "variant": "LoRaMVN-r4",
+    "seed": 2,
+    "train_seconds": 31.367084332974628,
+    "natural_size": 1056,
+    "encoder_free_size": 192,
+    "post_rmse": 0.6236640214920044,
+    "obs_rmse": 1.722848653793335
+  }
+]
