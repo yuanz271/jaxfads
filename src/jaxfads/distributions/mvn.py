@@ -311,33 +311,57 @@ class MVN(Approx):
     def free_to_canon(self, free: Array) -> MVNParam:
         """See base class.
 
+        The free-form vector is interpreted as ``[loc, prec_chol_free]`` where
+        ``prec_chol_free`` parameterizes the **precision** Cholesky factor via
+        ``constrain_positive`` on the diagonal.  The covariance Cholesky is
+        obtained by inverting.
+
         Parameters
         ----------
         free : Array
             Flat unconstrained parameters.
 
-            - ``structure='full'``: ``[loc, chol_free_flat]`` with ``chol_free``
-              reshaped to ``(D, D)``.
-            - ``structure='diag'``: ``[loc, chol_diag_free]`` with
-              ``chol_diag_free`` shape ``(D,)``.
+            - ``structure='full'``: ``[loc, prec_chol_free_flat]`` with
+              ``prec_chol_free`` reshaped to ``(D, D)``.
+            - ``structure='diag'``: ``[loc, prec_diag_free]`` with
+              ``prec_diag_free`` shape ``(D,)``.
         """
         loc, chol_free = self._layout.split_free(free)
+        d = self._layout.dim
 
         if self._layout.is_full:
-            chol = _constrain_chol_full(chol_free)
+            # free -> precision Cholesky -> invert -> covariance Cholesky
+            prec_chol = _constrain_chol_full(chol_free)
+            prec = prec_chol @ prec_chol.T
+            cov = _damping_inv(prec)
+            cov = 0.5 * (cov + cov.T)
+            chol = jnp.linalg.cholesky(cov + _EPS * jnp.eye(d, dtype=cov.dtype))
         else:
-            chol = _constrain_chol_diag(chol_free)
+            # free -> precision diagonal -> invert -> covariance Cholesky
+            prec_diag = constrain_positive(chol_free)
+            var = 1.0 / jnp.maximum(prec_diag, _EPS)
+            chol = jnp.diag(jnp.sqrt(var))
 
         return MVNParam(loc=loc, chol=chol)
 
     def canon_to_free(self, canon: MVNParam) -> Array:
         """See base class."""
+        d = self._layout.dim
+
         if self._layout.is_full:
-            chol_free = _unconstrain_chol_full(canon.chol)
+            # covariance Cholesky -> precision -> precision Cholesky -> unconstrain
+            cov = canon.chol @ canon.chol.T
+            prec = _damping_inv(cov)
+            prec = 0.5 * (prec + prec.T)
+            prec_chol = jnp.linalg.cholesky(prec + _EPS * jnp.eye(d, dtype=prec.dtype))
+            chol_free = _unconstrain_chol_full(prec_chol)
             return jnp.concatenate((canon.loc, chol_free.ravel()))
 
-        chol_diag_free = _unconstrain_chol_diag(canon.chol)
-        return jnp.concatenate((canon.loc, chol_diag_free))
+        # diagonal: covariance Cholesky -> precision diagonal -> unconstrain
+        var = jnp.diag(canon.chol) ** 2
+        prec_diag = 1.0 / jnp.maximum(var, _EPS)
+        prec_free = unconstrain_positive(prec_diag)
+        return jnp.concatenate((canon.loc, prec_free))
 
     # ---------------------------------------------------------------------
     # canon ↔ moment

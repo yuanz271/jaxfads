@@ -83,9 +83,11 @@ def test_free_canon_roundtrip(structure, dim):
     free_rt = mvn.canon_to_free(canon)
     canon_rt = mvn.free_to_canon(free_rt)
 
-    # Roundtrip should preserve the constrained representation
-    chex.assert_trees_all_close(canon.loc, canon_rt.loc, atol=1e-6)
-    chex.assert_trees_all_close(canon.chol, canon_rt.chol, atol=1e-6)
+    # Roundtrip should preserve the constrained representation.
+    # Tolerance is relaxed because the precision parameterization involves
+    # two matrix inversions per roundtrip leg, accumulating float32 error.
+    chex.assert_trees_all_close(canon.loc, canon_rt.loc, atol=1e-4)
+    chex.assert_trees_all_close(canon.chol, canon_rt.chol, atol=1e-4)
 
 
 @pytest.mark.parametrize("structure", ["full", "diag"])
