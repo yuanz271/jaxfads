@@ -224,6 +224,13 @@ class MVN(Approx):
         For ``structure='full'``, returns ``[h, J_flat]`` (size D + D²).
         """
         d = self._layout.dim
+        # h is emitted independently of J.  Unlike the old LoRaMVN
+        # parameterization (h = K^T b, J = K^T K) which coupled the
+        # linear and quadratic terms, the unified design keeps h free.
+        # The diagonal baseline ``diag(softplus(d_free))`` guarantees
+        # J is always positive-definite (even when L ≈ 0), so a large
+        # h cannot produce an unbounded posterior mean — the baseline
+        # precision prevents ``J^{-1} h`` from blowing up.
         h = free[:d]
         d_free = free[d : 2 * d]
         diag_prec = constrain_positive(d_free)
@@ -231,7 +238,7 @@ class MVN(Approx):
         if self._layout.is_diag:
             return jnp.concatenate((h, diag_prec))
 
-        # full structure: J = diag(prec) + L @ L^T
+        # full: J = diag(prec) + L @ L^T
         J = jnp.diag(diag_prec)
         if self._rank > 0:
             L = jnp.reshape(free[2 * d :], (d, self._rank))
