@@ -215,15 +215,20 @@ def test_encoder_free_hooks_lora_mvn_produces_psd_precision_update():
     assert quad >= -1e-5
 
 
-def test_encoder_free_hooks_lora_mvn_zero_is_noop_update():
+def test_encoder_free_hooks_lora_mvn_zero_matches_full_baseline():
+    """At free=0, LoRaMVN should produce the same baseline as FullMVN."""
     dim, rank = 5, 2
-    approx = LoRaMVN(dim=dim, rank=rank)
+    lora = LoRaMVN(dim=dim, rank=rank)
+    full = MVN(dim=dim, structure="full")
 
-    free = jnp.zeros((approx.free_size(),))
-    natural = approx.free_to_natural(free)
+    lora_nat = lora.free_to_natural(jnp.zeros((lora.free_size(),)))
+    full_nat = full.free_to_natural(jnp.zeros((full.free_size(),)))
 
-    chex.assert_shape(natural, (approx.param_size(),))
-    chex.assert_trees_all_close(natural, jnp.zeros_like(natural), atol=1e-8)
+    chex.assert_shape(lora_nat, (lora.param_size(),))
+    # h should be zero (no mean shift at free=0)
+    chex.assert_trees_all_close(lora_nat[:dim], jnp.zeros(dim), atol=1e-8)
+    # J should match FullMVN baseline (isotropic precision)
+    chex.assert_trees_all_close(lora_nat[dim:], full_nat[dim:], atol=1e-6)
 
 
 def test_registry_lookup():

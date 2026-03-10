@@ -439,12 +439,16 @@ class LoRaMVN(MVN):
     The paper's low-rank pseudo-observation potential is parameterized by a
     vector ``b`` and a matrix ``K`` (rank ``r``):
 
-    - quadratic update: ``J = Kᵀ K`` (PSD, rank ≤ r)
+    - quadratic update: ``J = Kᵀ K + base_prec · I`` (PSD, rank ≤ r + isotropic)
     - linear update: ``h = Kᵀ b``
 
-    This construction ensures the linear term is consistent with the quadratic
-    term and avoids producing arbitrarily large posterior means when the
-    precision update is small.
+    The isotropic baseline ``base_prec = ln(2)²`` matches the FullMVN
+    precision at ``free=0`` (arising from ``softplus(0) = ln(2)`` in the
+    precision-Cholesky parameterization).  This ensures:
+
+    - At ``free=0`` the update is non-trivial (same as FullMVN baseline).
+    - After masking to zero in natural space, missing observations still
+      contribute no information.
 
     The encoder emits ``free = [b, K_flat]`` with size ``r + r·D``. This is
     mapped to a full MVN natural update ``[h, J_flat]`` of size ``D + D²``.
@@ -479,7 +483,11 @@ class LoRaMVN(MVN):
         K = scale * nn.soft_sign(K_raw)
 
         h = K.T @ b
-        J = K.T @ K
+        # Isotropic baseline precision matching FullMVN at free=0:
+        # softplus(0) = ln(2), precision Cholesky diagonal = ln(2),
+        # so baseline precision = ln(2)² ≈ 0.4805.
+        base_prec = jnp.log(2.0) ** 2
+        J = K.T @ K + base_prec * jnp.eye(d, dtype=K.dtype)
 
         J = 0.5 * (J + J.T)
         return jnp.concatenate((h, J.ravel()))
