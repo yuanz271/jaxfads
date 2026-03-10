@@ -1,9 +1,9 @@
-"""High-D oscillator benchmark for DiagMVN / LoRaMVN / FullMVN.
+"""High-D oscillator benchmark for MVN rank variants.
 
 This benchmark scales latent dimension and compares:
-- MVN(structure="diag")
-- LoRaMVN(rank=r)
-- MVN(structure="full")
+- MVN(dim, rank=0)        — diagonal
+- MVN(dim, rank=r)        — low-rank + diagonal
+- MVN(dim, rank=dim)      — full rank
 
 Outputs raw/summary JSON + CSV.
 """

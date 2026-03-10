@@ -1,7 +1,8 @@
-"""Benchmark DiagMVN, LoRaMVN, and FullMVN on the VDP synthetic task.
+"""Benchmark MVN rank variants on the VDP synthetic task.
 
-This script runs a small controlled benchmark and writes raw + aggregated
-results to JSON/CSV.
+This script runs a small controlled benchmark comparing MVN(rank=0),
+MVN(rank=r), and MVN(rank=dim) and writes raw + aggregated results to
+JSON/CSV.
 """
 
 from __future__ import annotations
@@ -9,6 +10,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import sys
 import time
 from pathlib import Path
 
@@ -22,10 +24,9 @@ from jaxfads import XFADS, configure_logging
 from jaxfads.observations import GLM  # noqa: F401 (register GLM)
 from jaxfads.trainer import train
 
-import sys
-
+# Import helpers from the VDP example (sibling directory).
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "examples"))
-from vdp_example import evaluate, simulate_vdp
+from vdp_example import evaluate, simulate_vdp  # noqa: E402
 
 
 def _build_data(*, n_trials: int, n_steps: int, dt: float, mu: float, obs_dim: int):
