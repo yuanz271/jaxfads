@@ -47,7 +47,7 @@ def test_poisson_eloglik_shape_and_finite():
     conf = _poisson_conf(state_dim, observation_dim)
     observation = GLM(conf, key)
 
-    approx = MVN(dim=state_dim)
+    approx = MVN(dim=state_dim, rank=state_dim)
     mp = approx.pack(jnp.zeros(state_dim), jnp.eye(state_dim))
     y = jnp.ones((observation_dim,))
 
@@ -64,7 +64,7 @@ def test_gaussian_eloglik_shape_and_finite():
     conf = _gaussian_conf(state_dim, observation_dim)
     observation = GLM(conf, key)
 
-    approx = MVN(dim=state_dim)
+    approx = MVN(dim=state_dim, rank=state_dim)
     mp = approx.pack(jnp.zeros(state_dim), jnp.eye(state_dim))
     y = jnp.zeros((observation_dim,))
 

@@ -73,7 +73,8 @@ def model_conf():
             "mode": "smooth",
             "observation_dim": 10,
             "state_dim": 2,
-            "state_map": "MockStateMap", "stepper": "DiscreteStepper",
+            "state_map": "MockStateMap",
+            "stepper": "DiscreteStepper",
             "approx": "MVN",
             "approx_kwargs": {},
             "mc_size": 1,
@@ -88,7 +89,8 @@ def model_conf():
                     "depth": 1,
                     "input_dim": 1,
                     "context_dim": 0,
-                    "state_noise": 1.0, "system_type": "discrete",
+                    "state_noise": 1.0,
+                    "system_type": "discrete",
                 }
             ),
             "enc_conf": OmegaConf.create(
@@ -130,14 +132,15 @@ def test_train(model_conf, trainer_config, sample_data):
 
 
 def test_train_lora_rank1_end_to_end(trainer_config, sample_data):
-    """LoRaMVN rank-1 should train and run end-to-end without NaNs."""
+    """MVN rank-1 should train and run end-to-end without NaNs."""
     model_conf = OmegaConf.create(
         {
             "mode": "smooth",
             "observation_dim": 10,
             "state_dim": 2,
-            "state_map": "MockStateMap", "stepper": "DiscreteStepper",
-            "approx": "LoRaMVN",
+            "state_map": "MockStateMap",
+            "stepper": "DiscreteStepper",
+            "approx": "MVN",
             "approx_kwargs": {"rank": 1},
             "mc_size": 2,
             "seed": 0,
@@ -228,7 +231,9 @@ def test_train_freeze_paths_can_freeze_arbitrary_leaves(
     chex.assert_trees_all_close(prior_trained, prior0, atol=0.0)
 
 
-def test_train_freeze_paths_invalid_path_raises(model_conf, trainer_config, sample_data):
+def test_train_freeze_paths_invalid_path_raises(
+    model_conf, trainer_config, sample_data
+):
     model = XFADS(model_conf, jrnd.key(0))
     trainer_config.max_epoch = 1
     trainer_config.batch_size = 64

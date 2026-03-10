@@ -30,7 +30,7 @@ from __future__ import annotations
 
 from typing import Literal, NamedTuple
 
-from jax import Array, nn
+from jax import Array
 from jax import numpy as jnp
 from tensorflow_probability.substrates.jax import distributions as tfd
 
@@ -148,56 +148,52 @@ def _unconstrain_chol_diag(chol: Array) -> Array:
 class MVN(Approx):
     """Multivariate normal approximation.
 
-    This class supports both:
+    A single ``rank`` parameter controls both the encoder precision
+    parameterization and the internal exponential-family layout:
 
-    - ``structure='full'``: full-covariance Gaussian exponential family
-      (moment size ``D + D²``)
-    - ``structure='diag'``: diagonal Gaussian exponential family
-      (moment size ``2D``)
+    - ``rank=0``: diagonal EF layout — ``param_size = 2D``,
+      ``free_size = 2D`` (fast path).
+    - ``rank>0``: full EF layout — ``param_size = D + D²``,
+      ``free_size = 2D + D·rank``.
+
+    Encoder precision parameterization
+    -----------------------------------
+    The encoder's ``free_to_natural`` maps free parameters to an additive
+    natural update whose precision part is::
+
+        J = diag(softplus(d_free)) + L @ Lᵀ
+
+    where ``d_free`` is a ``(D,)`` baseline precision vector and ``L`` is a
+    ``(D, rank)`` low-rank factor.
 
     Parameters
     ----------
     dim : int
         State dimensionality.
-    structure : {'full', 'diag'}
-        Which Gaussian exponential-family sufficient-stat layout to use.
-
-    Natural layout
-    --------------
-    ``structure='full'`` stores flat natural parameters as ``[h, J_flat]``:
-
-    - ``h`` has shape ``(D,)``
-    - ``J`` has shape ``(D, D)`` and is precision-like
-
-    ``structure='diag'`` stores flat natural parameters as ``[h, j]``:
-
-    - ``h`` has shape ``(D,)``
-    - ``j`` has shape ``(D,)`` and is the diagonal precision-like term
-
-    Moment layout
-    ------------
-    ``structure='full'`` stores flat moment parameters as ``[m, M2_flat]``:
-
-    - ``m = E[z]`` has shape ``(D,)``
-    - ``M2 = E[-½ zzᵀ]`` has shape ``(D, D)``
-
-    ``structure='diag'`` stores flat moment parameters as ``[m, t2]``:
-
-    - ``m = E[z]`` has shape ``(D,)``
-    - ``t2 = E[-½ (z ⊙ z)]`` has shape ``(D,)``
+    rank : int
+        Rank of the off-diagonal precision factor ``L``.
+        ``rank=0``: diagonal-only precision (efficient ``2D`` param layout).
+        ``rank=D``: full-rank precision.
 
     Notes
     -----
     `unpack(moment)` always returns a full covariance matrix, even for
-    ``structure='diag'``.
+    ``rank=0``.
     """
 
-    def __init__(self, dim: int, *, structure: Literal["full", "diag"] = "full"):
+    def __init__(self, dim: int, rank: int):
         dim = int(dim)
-        if structure not in ("full", "diag"):
-            raise ValueError("structure must be one of {'full', 'diag'}")
+        rank = int(rank)
+        if dim <= 0:
+            raise ValueError(f"dim must be positive, got {dim}")
+        if not 0 <= rank <= dim:
+            raise ValueError(
+                f"rank must satisfy 0 <= rank <= dim, got rank={rank}, dim={dim}"
+            )
 
+        structure: Literal["full", "diag"] = "diag" if rank == 0 else "full"
         self._layout = _Layout(dim=dim, structure=structure)
+        self._rank = rank
 
     # ---------------------------------------------------------------------
     # sizes
@@ -206,6 +202,51 @@ class MVN(Approx):
     def param_size(self) -> int:
         """See base class."""
         return self._layout.param_size()
+
+    def free_size(self) -> int:
+        """Return encoder free-form output size.
+
+        For ``structure='diag'`` (rank=0): ``2D`` (h + diag precision free).
+        For ``structure='full'``: ``2D + D·rank`` (h + diag precision free + L).
+        """
+        d = self._layout.dim
+        return 2 * d + d * self._rank
+
+    def free_to_natural(self, free: Array) -> Array:
+        """Convert encoder free-form output to additive natural update.
+
+        Encoder outputs are mapped to precision via::
+
+            J = diag(softplus(d_free)) + L @ Lᵀ
+
+        where ``d_free`` parameterizes the diagonal baseline and ``L`` is
+        a ``(D, rank)`` low-rank factor.
+
+        For ``structure='diag'``, returns ``[h, softplus(d_free)]`` (size 2D).
+        For ``structure='full'``, returns ``[h, J_flat]`` (size D + D²).
+        """
+        d = self._layout.dim
+        # h is emitted independently of J.  Unlike the old LoRaMVN
+        # parameterization (h = K^T b, J = K^T K) which coupled the
+        # linear and quadratic terms, the unified design keeps h free.
+        # The diagonal baseline ``diag(softplus(d_free))`` guarantees
+        # J is always positive-definite (even when L ≈ 0), so a large
+        # h cannot produce an unbounded posterior mean — the baseline
+        # precision prevents ``J^{-1} h`` from blowing up.
+        h = free[:d]
+        d_free = free[d : 2 * d]
+        diag_prec = constrain_positive(d_free)
+
+        if self._layout.is_diag:
+            return jnp.concatenate((h, diag_prec))
+
+        # full: J = diag(prec) + L @ L^T
+        J = jnp.diag(diag_prec)
+        if self._rank > 0:
+            L = jnp.reshape(free[2 * d :], (d, self._rank))
+            J = J + L @ L.T
+            J = 0.5 * (J + J.T)
+        return jnp.concatenate((h, J.ravel()))
 
     # ---------------------------------------------------------------------
     # helpers
@@ -311,33 +352,57 @@ class MVN(Approx):
     def free_to_canon(self, free: Array) -> MVNParam:
         """See base class.
 
+        The free-form vector is interpreted as ``[loc, prec_chol_free]`` where
+        ``prec_chol_free`` parameterizes the **precision** Cholesky factor via
+        ``constrain_positive`` on the diagonal.  The covariance Cholesky is
+        obtained by inverting.
+
         Parameters
         ----------
         free : Array
             Flat unconstrained parameters.
 
-            - ``structure='full'``: ``[loc, chol_free_flat]`` with ``chol_free``
-              reshaped to ``(D, D)``.
-            - ``structure='diag'``: ``[loc, chol_diag_free]`` with
-              ``chol_diag_free`` shape ``(D,)``.
+            - ``structure='full'``: ``[loc, prec_chol_free_flat]`` with
+              ``prec_chol_free`` reshaped to ``(D, D)``.
+            - ``structure='diag'``: ``[loc, prec_diag_free]`` with
+              ``prec_diag_free`` shape ``(D,)``.
         """
         loc, chol_free = self._layout.split_free(free)
+        d = self._layout.dim
 
         if self._layout.is_full:
-            chol = _constrain_chol_full(chol_free)
+            # free -> precision Cholesky -> invert -> covariance Cholesky
+            prec_chol = _constrain_chol_full(chol_free)
+            prec = prec_chol @ prec_chol.T
+            cov = _damping_inv(prec)
+            cov = 0.5 * (cov + cov.T)
+            chol = jnp.linalg.cholesky(cov + _EPS * jnp.eye(d, dtype=cov.dtype))
         else:
-            chol = _constrain_chol_diag(chol_free)
+            # free -> precision diagonal -> invert -> covariance Cholesky
+            prec_diag = constrain_positive(chol_free)
+            var = 1.0 / jnp.maximum(prec_diag, _EPS)
+            chol = jnp.diag(jnp.sqrt(var))
 
         return MVNParam(loc=loc, chol=chol)
 
     def canon_to_free(self, canon: MVNParam) -> Array:
         """See base class."""
+        d = self._layout.dim
+
         if self._layout.is_full:
-            chol_free = _unconstrain_chol_full(canon.chol)
+            # covariance Cholesky -> precision -> precision Cholesky -> unconstrain
+            cov = canon.chol @ canon.chol.T
+            prec = _damping_inv(cov)
+            prec = 0.5 * (prec + prec.T)
+            prec_chol = jnp.linalg.cholesky(prec + _EPS * jnp.eye(d, dtype=prec.dtype))
+            chol_free = _unconstrain_chol_full(prec_chol)
             return jnp.concatenate((canon.loc, chol_free.ravel()))
 
-        chol_diag_free = _unconstrain_chol_diag(canon.chol)
-        return jnp.concatenate((canon.loc, chol_diag_free))
+        # diagonal: covariance Cholesky -> precision diagonal -> unconstrain
+        var = jnp.diag(canon.chol) ** 2
+        prec_diag = 1.0 / jnp.maximum(var, _EPS)
+        prec_free = unconstrain_positive(prec_diag)
+        return jnp.concatenate((canon.loc, prec_free))
 
     # ---------------------------------------------------------------------
     # canon ↔ moment
@@ -403,59 +468,3 @@ class MVN(Approx):
         """
         _, Q = self.unpack(noise)
         return self.pack(z, Q)
-
-
-class LoRaMVN(MVN):
-    """MVN approximation with low-rank encoder updates.
-
-    This class behaves like a full-covariance :class:`MVN` for all distribution
-    operations (moment/natural conversions, sampling, KL, etc.), but exposes a
-    *compact* encoder free-form representation.
-
-    The paper's low-rank pseudo-observation potential is parameterized by a
-    vector ``b`` and a matrix ``K`` (rank ``r``):
-
-    - quadratic update: ``J = Kᵀ K`` (PSD, rank ≤ r)
-    - linear update: ``h = Kᵀ b``
-
-    This construction ensures the linear term is consistent with the quadratic
-    term and avoids producing arbitrarily large posterior means when the
-    precision update is small.
-
-    The encoder emits ``free = [b, K_flat]`` with size ``r + r·D``. This is
-    mapped to a full MVN natural update ``[h, J_flat]`` of size ``D + D²``.
-
-    Notes
-    -----
-    This is MVN-specific: the low-rank ``Kᵀ K`` construction relies on the
-    Gaussian quadratic sufficient statistics.
-    """
-
-    def __init__(self, dim: int, *, rank: int):
-        rank = int(rank)
-        if rank <= 0:
-            raise ValueError("rank must be a positive integer")
-
-        super().__init__(dim=dim, structure="full")
-        self._rank = rank
-
-    def free_size(self) -> int:
-        d = self._layout.dim
-        return self._rank + self._rank * d
-
-    def free_to_natural(self, free: Array) -> Array:
-        d = self._layout.dim
-        b_raw = free[: self._rank]
-        K_raw = jnp.reshape(free[self._rank :], (self._rank, d))
-
-        # Use a smooth, less-saturating bound than tanh to improve gradient
-        # flow while still keeping updates numerically controlled.
-        scale = 5.0
-        b = scale * nn.soft_sign(b_raw)
-        K = scale * nn.soft_sign(K_raw)
-
-        h = K.T @ b
-        J = K.T @ K
-
-        J = 0.5 * (J + J.T)
-        return jnp.concatenate((h, J.ravel()))

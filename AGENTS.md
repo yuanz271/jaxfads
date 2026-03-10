@@ -113,29 +113,16 @@ uv run pytest
   - `uv run prek install` (one-time)
   - `uv run prek run --all-files`
 
-#### Pre-commit checklist (before any `git commit`)
+#### Pre-commit quick checks
 
-- [ ] Review `git status` and `git diff`
-- [ ] Update docs per the documentation hard gates above
-- [ ] Ensure todos are updated (and closed if complete)
-- [ ] Ensure commit is run as an isolated command (no chained commands)
-- [ ] Ask for confirmation before running `git commit`
-- [ ] Run quick checks when applicable:
-  - `uv run prek install` (one-time)
-  - `uv run prek run --all-files`
-  - `uv run pytest` (when code changes under `src/`)
+- `uv run prek run --all-files` (lint + format)
+- `uv run pytest` (when code changes under `src/`)
 
-## Documentation conventions
+#### Docs to consider updating
 
-- When preparing a commit that changes **behavior, APIs, configuration schemas, or examples**, update the relevant documentation in the same PR/commit series.
-- At minimum, consider whether updates are needed for:
-  - `README.md`
-  - `AGENTS.md`
-  - `docs/*.md`
-  - `examples/*` comments/config snippets
+- `README.md`, `AGENTS.md`, `docs/*.md`, `examples/*` comments/config snippets
 
-## Testing conventions
+#### Testing notes
 
-- Run tests (`uv run pytest`) when code changes under `src/`.
 - Avoid long-running examples (e.g. `examples/vdp_example.py`) unless explicitly
   requested.

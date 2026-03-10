@@ -303,7 +303,10 @@ class XFADS(ConfModule):
             ``approx_kwargs``.
         """
         cls = Approx.get_subclass(self.conf.approx)
-        return cls(dim=self.conf.state_dim, **self.conf.approx_kwargs)
+        kwargs = dict(self.conf.approx_kwargs)
+        # Default rank to state_dim (full rank) when not specified.
+        kwargs.setdefault("rank", self.conf.state_dim)
+        return cls(dim=self.conf.state_dim, **kwargs)
 
     def prior_natural(self) -> Array:
         """
@@ -396,6 +399,7 @@ class XFADS(ConfModule):
         >>> natural, moment, pred = model(t, y_batch, u_batch, c_batch, key=key)
         """
         approx = self.approx
+
         def _free_to_natural(free_flat: Array) -> Array:
             return approx.free_to_natural(free_flat)
 

@@ -103,6 +103,7 @@ class MLPStateMap(StateMap):
     """
 
     net: enn.Sequential
+
     def __init__(self, conf, key):
         self.conf = conf
         self.net = make_mlp(
@@ -502,9 +503,9 @@ def main() -> None:
         observation_dim=obs_dim,
         state_dim=state_dim,
         approx="MVN",
-        # Explicit for tutorial purposes. Use {"structure": "diag"} for a
-        # diagonal exponential-family Gaussian approximation.
-        approx_kwargs={"structure": "full"},
+        # Explicit for tutorial purposes. Use {"rank": 0} for a diagonal
+        # Gaussian approximation, or {"rank": r} for low-rank.
+        approx_kwargs={},
         seed=0,
         n_steps=T,
         fb_penalty=0.0,
@@ -680,7 +681,7 @@ def main() -> None:
     conf3 = OmegaConf.create(
         {
             **shared_conf,
-            "approx": "LoRaMVN",
+            "approx": "MVN",
             "approx_kwargs": {"rank": 1},
             "state_map": "FunctionStateMap",
             "stepper": "RK4Stepper",
@@ -703,7 +704,7 @@ def main() -> None:
 
     key, k = jr.split(key)
     r3 = evaluate(
-        "LoRaMVN",
+        "MVN",
         trained3,
         latent_states,
         observations,

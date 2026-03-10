@@ -47,7 +47,8 @@ def model_conf():
             "mode": "smooth",
             "observation_dim": 10,
             "state_dim": 2,
-            "state_map": "MockStateMap", "stepper": "DiscreteStepper",
+            "state_map": "MockStateMap",
+            "stepper": "DiscreteStepper",
             "approx": "MVN",
             "approx_kwargs": {},
             "mc_size": 1,
@@ -62,7 +63,8 @@ def model_conf():
                     "depth": 1,
                     "input_dim": 1,
                     "context_dim": 0,
-                    "state_noise": 1.0, "system_type": "discrete",
+                    "state_noise": 1.0,
+                    "system_type": "discrete",
                 }
             ),
             "enc_conf": OmegaConf.create(
