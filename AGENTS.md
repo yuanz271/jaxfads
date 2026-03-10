@@ -55,18 +55,17 @@ jaxfads/
 
 ### MVN approximation
 
-`MVN(dim, structure=...)` supports two exponential-family layouts:
+`MVN(dim, rank)` — a single `rank` parameter controls the exponential-family
+layout and encoder precision parameterization:
 
-- `structure="full"`:
-  - natural size `D + D²`
-  - moment size `D + D²` with `T₂(z) = -½ zzᵀ`
-- `structure="diag"`:
-  - natural size `2D`
-  - moment size `2D` with `T₂(z) = -½ (z ⊙ z)`
+- `rank=0`: diagonal EF layout — `param_size = 2D`, `free_size = 2D`
+- `rank>0`: full EF layout — `param_size = D + D²`, `free_size = 2D + D·rank`
+
+Encoder precision: `J = diag(softplus(d)) + L @ Lᵀ` for all ranks.
 
 Invariant for callers:
 - `MVN.unpack(moment)` returns `(mean, cov)` where `cov` is **always** a full
-  `(D, D)` covariance matrix (diagonal-valued in diag mode).
+  `(D, D)` covariance matrix (diagonal-valued when rank=0).
 
 ### Config invariants (avoiding duplication)
 

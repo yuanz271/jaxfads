@@ -24,8 +24,8 @@ conf = OmegaConf.create(
         "n_steps": 100,
         "seed": 0,
         "mc_size": 4,
-        "approx": "MVN",  # or "LoRaMVN"
-        "approx_kwargs": {"structure": "full"},
+        "approx": "MVN",
+        "approx_kwargs": {},  # rank defaults to state_dim (full); use {"rank": r} for low-rank
         "state_map": "OUStateMap",
         "stepper": "EulerStepper",
         "observation_model": "GLM",
@@ -88,8 +88,7 @@ natural_params, moment_params, predictions = trained(
 | `stepper` | `DiscreteStepper` | `dyn_conf.system_type="discrete"` and map already returns `z_{t+1}`. |
 | `stepper` | `EulerStepper` | Continuous-time map, faster/rougher integration. |
 | `stepper` | `RK4Stepper` | Continuous-time map, better local accuracy than Euler. |
-| `approx` | `MVN` | Standard dense Gaussian approximation. |
-| `approx` | `LoRaMVN` | Compact low-rank encoder updates. |
+| `approx` | `MVN` | Gaussian approximation. Use `approx_kwargs={"rank": r}` for low-rank. |
 
 ## Common Pitfalls
 

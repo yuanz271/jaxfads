@@ -134,8 +134,8 @@ Code indexing convention:
 - **Beta (backward encoder)**: `β_t = S2S(β_{t+1}, α_t)` — GRU running
   backward in time over alpha outputs, captures future information
 
-**Low-rank structure** (Eq 19, optional in this codebase): Under
-`LoRaMVN`, encoders can emit compact low-rank updates:
+**Low-rank structure** (Eq 19, optional in this codebase): With
+`MVN(dim, rank=r)` where `r < dim`, encoders emit compact low-rank updates:
 
 ```
 α_t = [a_t; A_t A_tᵀ]     where A_t ∈ ℝ^{L×r_α}

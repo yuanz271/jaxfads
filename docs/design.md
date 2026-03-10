@@ -206,8 +206,8 @@ alpha = _free_to_natural(encoder(y))
 
 ## MVN Subclass
 
-`MVN(dim, structure=...)` implements either a full-covariance or diagonal
-multivariate normal exponential family:
+`MVN(dim, rank)` implements a multivariate normal exponential family where
+`rank` controls the encoder precision structure and the internal EF layout:
 
 ### MVNParam NamedTuple
 
@@ -251,7 +251,7 @@ parameters in the flat moment layout.
 
 ### Diagonal MVN variant
 
-`MVN(..., structure="diag")` uses diagonal sufficient statistics:
+`MVN(dim, rank=0)` uses diagonal sufficient statistics:
 
 - `T(z) = [z, -½ (z ⊙ z)]`
 

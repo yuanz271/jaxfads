@@ -4,7 +4,7 @@ Three cases:
 
 1. **MLPStateMap** — trainable MLP learns continuous-time dynamics, stepped with RK4.
 2. **OUStateMap** — built-in tracking prior drift.
-3. **LoRaMVN + FunctionStateMap** — low-rank pseudo-observation encoder updates
+3. **Low-rank MVN + FunctionStateMap** — low-rank pseudo-observation encoder updates
    (paper Eq. 19–21), using a declarative function-backed Van der Pol map.
 
 All use Factor Analysis readout initialisation. Evaluation uses Procrustes
@@ -672,10 +672,10 @@ def main() -> None:
     )
 
     # ===================================================================
-    # Case 3: LoRaMVN encoder updates + declarative FunctionStateMap
+    # Case 3: Low-rank encoder updates + declarative FunctionStateMap
     # ===================================================================
     print("\n" + "=" * 60)
-    print("Case 3: LoRaMVN + FunctionStateMap")
+    print("Case 3: Low-rank MVN + FunctionStateMap")
     print("=" * 60)
 
     conf3 = OmegaConf.create(
@@ -737,7 +737,7 @@ def main() -> None:
         out_dir,
     )
 
-    # Save / load roundtrip (covers LoRaMVN + injected encoder free size)
+    # Save / load roundtrip (covers low-rank MVN + injected encoder free size)
     with TemporaryDirectory() as tmp:
         path = Path(tmp) / "model.zip"
         XFADS.save(trained3, path)
@@ -754,7 +754,7 @@ def main() -> None:
     print(f"Summary  (Procrustes-aligned; obs noise σ = {sigma_obs})")
     print("=" * 74)
     header = (
-        f"{'Metric':<30s} {'MLPStateMap':>14s} {'OUStateMap':>14s} {'LoRaMVN':>14s}"
+        f"{'Metric':<30s} {'MLPStateMap':>14s} {'OUStateMap':>14s} {'LowRank':>14s}"
     )
     print(header)
     print("-" * len(header))
