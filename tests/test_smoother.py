@@ -186,8 +186,8 @@ def test_top_level_dims_override_subconfig_dims():
     assert jnp.isfinite(prior_mom).all()
 
 
-def test_lora_mvn_smoke_constructor_and_forward_pass():
-    """XFADS should run end-to-end with LoRaMVN compact encoder outputs."""
+def test_low_rank_mvn_smoke_constructor_and_forward_pass():
+    """XFADS should run end-to-end with low-rank MVN encoder outputs."""
     T = 5
     y_size = 4
     z_size = 3
