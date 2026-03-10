@@ -22,6 +22,9 @@ from jaxfads import XFADS, configure_logging
 from jaxfads.observations import GLM  # noqa: F401 (register GLM)
 from jaxfads.trainer import train
 
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "examples"))
 from vdp_example import evaluate, simulate_vdp
 
 
@@ -32,8 +35,10 @@ def _build_data(*, n_trials: int, n_steps: int, dt: float, mu: float, obs_dim: i
     c_true = 0.7 * jr.normal(k_C, (obs_dim, latent.shape[-1]))
     b_true = 0.1 * jr.normal(k_b, (obs_dim,))
     sigma_obs = 0.3
-    obs = latent @ c_true.T + b_true + sigma_obs * jr.normal(
-        k_y, (n_trials, n_steps, obs_dim)
+    obs = (
+        latent @ c_true.T
+        + b_true
+        + sigma_obs * jr.normal(k_y, (n_trials, n_steps, obs_dim))
     )
 
     times = jnp.broadcast_to(jnp.arange(n_steps), (n_trials, n_steps))
@@ -48,7 +53,9 @@ def _variant_rows(rank_list: list[int]):
         dict(name="FullMVN", approx="MVN", approx_kwargs={"structure": "full"}),
     ]
     for r in rank_list:
-        rows.append(dict(name=f"LoRaMVN-r{r}", approx="LoRaMVN", approx_kwargs={"rank": r}))
+        rows.append(
+            dict(name=f"LoRaMVN-r{r}", approx="LoRaMVN", approx_kwargs={"rank": r})
+        )
     return rows
 
 
@@ -69,7 +76,7 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--seeds", type=str, default="0,1")
     parser.add_argument("--lora-ranks", type=str, default="1")
-    parser.add_argument("--out-dir", type=str, default="examples/benchmarks")
+    parser.add_argument("--out-dir", type=str, default="benchmarks/results/vdp_smoke")
     parser.add_argument("--freeze-state-noise", action="store_true")
     args = parser.parse_args()
 
@@ -155,7 +162,9 @@ def main() -> None:
             model = XFADS(conf, jr.key(seed)).initialize(*data)
 
             t0 = time.perf_counter()
-            trained = train(model, data, conf=OmegaConf.create({**trainer_conf, "seed": seed}))
+            trained = train(
+                model, data, conf=OmegaConf.create({**trainer_conf, "seed": seed})
+            )
             dt_train = time.perf_counter() - t0
 
             _, eval_key = jr.split(jr.key(seed))

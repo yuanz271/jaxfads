@@ -1,0 +1,41 @@
+[
+  {
+    "variant": "DiagMVN",
+    "seed": 0,
+    "train_seconds": 3.225785624992568,
+    "natural_size": 4,
+    "encoder_free_size": 4,
+    "post_rmse": 1.3661994934082031,
+    "c_rmse": 1.1575851440429688,
+    "b_rmse": 0.7465695142745972,
+    "obs_rmse": 1.4372447729110718,
+    "flow_nrmse": 0.0,
+    "flow_angle": 0.00021561521862167865
+  },
+  {
+    "variant": "FullMVN",
+    "seed": 0,
+    "train_seconds": 3.701455000031274,
+    "natural_size": 6,
+    "encoder_free_size": 6,
+    "post_rmse": 1.2616950273513794,
+    "c_rmse": 2.8098092079162598,
+    "b_rmse": 1.7664891481399536,
+    "obs_rmse": 1.3805543184280396,
+    "flow_nrmse": 0.0,
+    "flow_angle": 0.00021561521862167865
+  },
+  {
+    "variant": "LoRaMVN-r1",
+    "seed": 0,
+    "train_seconds": 3.2934609170188196,
+    "natural_size": 6,
+    "encoder_free_size": 3,
+    "post_rmse": 1.3780359029769897,
+    "c_rmse": 9.369199752807617,
+    "b_rmse": 6.843169212341309,
+    "obs_rmse": 1.8012819290161133,
+    "flow_nrmse": 0.0,
+    "flow_angle": 0.00021561521862167865
+  }
+]

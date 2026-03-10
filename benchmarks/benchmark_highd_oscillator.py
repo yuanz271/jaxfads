@@ -52,7 +52,9 @@ def rk4_step(z, dt):
     return z + (dt / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
 
 
-def simulate_oscillator_bank(key, *, n_trials: int, n_steps: int, state_dim: int, dt: float):
+def simulate_oscillator_bank(
+    key, *, n_trials: int, n_steps: int, state_dim: int, dt: float
+):
     if state_dim % 2 != 0:
         raise ValueError("state_dim must be even for oscillator-bank construction")
 
@@ -117,7 +119,7 @@ def main() -> None:
     p.add_argument("--dt", type=float, default=0.03)
     p.add_argument("--max-epoch", type=int, default=40)
     p.add_argument("--batch-size", type=int, default=32)
-    p.add_argument("--out-dir", type=str, default="examples/benchmarks/highd_oscillator")
+    p.add_argument("--out-dir", type=str, default="benchmarks/results/highd_oscillator")
     p.add_argument("--freeze-state-noise", action="store_true")
     args = p.parse_args()
 
@@ -147,11 +149,15 @@ def main() -> None:
         c_true = 0.6 * jr.normal(k_c, (args.obs_dim, dim))
         b_true = 0.1 * jr.normal(k_b, (args.obs_dim,))
         sigma_obs = 0.3
-        obs = latent @ c_true.T + b_true + sigma_obs * jr.normal(
-            k_y, (args.n_trials, args.n_steps, args.obs_dim)
+        obs = (
+            latent @ c_true.T
+            + b_true
+            + sigma_obs * jr.normal(k_y, (args.n_trials, args.n_steps, args.obs_dim))
         )
 
-        times = jnp.broadcast_to(jnp.arange(args.n_steps), (args.n_trials, args.n_steps))
+        times = jnp.broadcast_to(
+            jnp.arange(args.n_steps), (args.n_trials, args.n_steps)
+        )
         controls = jnp.zeros((args.n_trials, args.n_steps, 0))
         covariates = jnp.zeros((args.n_trials, args.n_steps, 0))
         data = (times, obs, controls, covariates)
@@ -248,7 +254,9 @@ def main() -> None:
         groups.setdefault((row["state_dim"], row["variant"]), []).append(row)
 
     summary_rows: list[dict] = []
-    for (dim, variant), rows in sorted(groups.items(), key=lambda x: (x[0][0], x[0][1])):
+    for (dim, variant), rows in sorted(
+        groups.items(), key=lambda x: (x[0][0], x[0][1])
+    ):
         summary_rows.append(
             {
                 "state_dim": dim,

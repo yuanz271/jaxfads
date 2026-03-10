@@ -1,0 +1,44 @@
+[
+  {
+    "variant": "DiagMVN",
+    "n_runs": 1,
+    "natural_size": 4,
+    "encoder_free_size": 4,
+    "train_seconds_mean": 3.225785624992568,
+    "train_seconds_std": 0.0,
+    "post_rmse_mean": 1.3661994934082031,
+    "post_rmse_std": 0.0,
+    "obs_rmse_mean": 1.4372447729110718,
+    "obs_rmse_std": 0.0,
+    "flow_nrmse_mean": 0.0,
+    "flow_nrmse_std": 0.0
+  },
+  {
+    "variant": "FullMVN",
+    "n_runs": 1,
+    "natural_size": 6,
+    "encoder_free_size": 6,
+    "train_seconds_mean": 3.701455000031274,
+    "train_seconds_std": 0.0,
+    "post_rmse_mean": 1.2616950273513794,
+    "post_rmse_std": 0.0,
+    "obs_rmse_mean": 1.3805543184280396,
+    "obs_rmse_std": 0.0,
+    "flow_nrmse_mean": 0.0,
+    "flow_nrmse_std": 0.0
+  },
+  {
+    "variant": "LoRaMVN-r1",
+    "n_runs": 1,
+    "natural_size": 6,
+    "encoder_free_size": 3,
+    "train_seconds_mean": 3.2934609170188196,
+    "train_seconds_std": 0.0,
+    "post_rmse_mean": 1.3780359029769897,
+    "post_rmse_std": 0.0,
+    "obs_rmse_mean": 1.8012819290161133,
+    "obs_rmse_std": 0.0,
+    "flow_nrmse_mean": 0.0,
+    "flow_nrmse_std": 0.0
+  }
+]
