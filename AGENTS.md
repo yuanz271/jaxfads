@@ -47,6 +47,19 @@ jaxfads/
 
 ## Core Design Notes
 
+### Mathematical priority for contributors/agents
+
+When implementing or reviewing changes in this repo:
+
+- Do **not** over-index on exotic edge cases by default.
+- Prioritize, in order:
+  1. **Mathematical correctness** (objective, parameter transforms, inference equations)
+  2. **Mathematical consistency** across modules (Approx/encoders/core/trainer contracts)
+  3. **Numerical stability** (well-conditioned transforms, finite outputs, stable parameterization)
+- Prefer simple, theoretically consistent formulations before adding special-case logic.
+- Add edge-case handling when it is required by a concrete failure, test, or user requirement.
+
+
 ### Exponential-family parameter forms
 
 - **Natural parameters** (η): flat vectors for additive filtering updates.
