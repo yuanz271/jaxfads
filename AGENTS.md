@@ -87,41 +87,15 @@ Invariant for callers:
     e.g. `["noise_free"]`)
 - No built-in covariance-based noise regularization is applied by default.
 
-## Commands
+## Python rules
 
-```bash
-uv sync
+Python-specific development rules, tooling, and workflows are defined in:
 
-# Lint
-uv run ruff check .
+- `PYTHON.md`
 
-# Format
-uv run ruff format .
-
-# Tests
-uv run pytest
-```
-
-## Dependency / workflow notes
-
-- `jaxtyping` is a runtime dependency used for type annotations (e.g. the
-  `PyTree` type in `src/jaxfads/base.py`).
-- `prek` (dev dependency) is used to run the pre-commit hooks defined in
-  `.pre-commit-config.yaml` (currently `ruff-format` and `ruff`).
-  Use:
-  - `uv run prek install` (one-time)
-  - `uv run prek run --all-files`
-
-#### Pre-commit quick checks
-
-- `uv run prek run --all-files` (lint + format)
-- `uv run pytest` (when code changes under `src/`)
+Use `PYTHON.md` as the source of truth for Python commands, lint/format/test
+workflows, and related conventions.
 
 #### Docs to consider updating
 
-- `README.md`, `AGENTS.md`, `docs/*.md`, `examples/*` comments/config snippets
-
-#### Testing notes
-
-- Avoid long-running examples (e.g. `examples/vdp_example.py`) unless explicitly
-  requested.
+- `README.md`, `AGENTS.md`, `PYTHON.md`, `docs/*.md`, `examples/*` comments/config snippets
