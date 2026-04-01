@@ -38,12 +38,12 @@ jaxfads/
 | Task | Location | Notes |
 |------|----------|-------|
 | Main model class | `src/jaxfads/smoother.py` | `XFADS` |
-| Filtering primitives | `src/jaxfads/core.py` | `filter()`, `smooth()`, `causal()`, `expected_predictive_moment()` |
+| Filtering primitives | `src/jaxfads/core.py` | `filter()`, `smooth()`, `causal()`, `nofilt()`, `expected_predictive_moment()` |
 | Approx posterior families | `src/jaxfads/distributions/` | currently `MVN` |
 | Observation models | `src/jaxfads/observations.py` | `GLM`, `Poisson`, `Gaussian` |
-| Encoders | `src/jaxfads/encoders.py` | `AlphaEncoder`, `BetaEncoder` |
+| Encoders | `src/jaxfads/encoders.py` | `AlphaEncoder`, `BetaEncoder`; user-defined for NOFILT |
 | Training | `src/jaxfads/trainer.py` | `train()`, `batch_loss()`, `DEFAULT_TRAINER_CONFIG` |
-| Abstract interfaces | `src/jaxfads/base.py` | `Approx`, `StateMap`, `Stepper`, `Observation` |
+| Abstract interfaces | `src/jaxfads/base.py` | `Approx`, `StateMap`, `Stepper`, `Observation`, `Encoder` |
 
 ## Core Design Notes
 
@@ -88,6 +88,7 @@ Invariant for callers:
   Encoders are Approx-agnostic and only require:
   - `param_size` (natural-parameter size; injected by `XFADS`)
   - `free_size` (encoder free-form size; injected by `XFADS`)
+  - `state_dim` (latent dimensionality; injected by `XFADS`)
   - `observation_dim` (injected by `XFADS`)
   - encoder hyperparameters (`width`, `depth`, `dropout`)
 

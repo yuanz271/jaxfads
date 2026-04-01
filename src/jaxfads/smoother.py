@@ -207,7 +207,7 @@ class XFADS(ConfModule):
         free_size = int(self.approx.free_size())
         param_size = int(self.approx.param_size())
 
-        is_nofilt_mode = str(self.conf.mode).lower() == str(Mode.NOFILT)
+        is_nofilt_mode = str(self.conf.mode) == str(Mode.NOFILT)
         enc_free_size = int(self.conf.state_dim) if is_nofilt_mode else free_size
 
         enc_conf = OmegaConf.merge(
@@ -467,11 +467,14 @@ class XFADS(ConfModule):
                 smooth_batch = vmap(partial(core.smooth, self))
                 return smooth_batch(keys, t, a, b, u, c)
             case Mode.NOFILT:
-                batch_roll_encode = vmap_with_key(vmap_with_key(self.alpha_encoder))
-
+                if not hasattr(approx, "pack"):
+                    raise NotImplementedError(
+                        "NOFILT mode currently requires an Approx with pack() "
+                        "(e.g. MVN)."
+                    )
                 mask_y = jnp.all(jnp.isfinite(y), axis=2, keepdims=True)
                 y_clean = jnp.where(mask_y, y, 0)
-                z_hat = batch_roll_encode(y_clean, key=alpha_key)
+                z_hat = batch_alpha_encode(y_clean, key=alpha_key)
 
                 eps = float(self.conf.get("nofilt_eps", 1e-6))
 
