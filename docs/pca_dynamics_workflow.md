@@ -160,3 +160,79 @@ equals the MSE gradient on PCA coordinates
 ([proof](pca_dynamics_equivalence.md)). With finite $\sigma^2$, the XFADS
 estimate is strictly richer because dynamics also receive gradient through
 the posterior's dependence on $f$.
+
+## Alternative: NOFILT mode
+
+The workflow above uses `mode="smooth"` with small observation noise so the
+encoder learns posteriors near PCA coordinates while filtering still runs.
+An alternative is `mode="nofilt"`, which **bypasses filtering entirely**: the
+posterior at each timestep is set directly by a user-defined encoder, and
+dynamics are trained purely through the KL term.
+
+### When to use NOFILT
+
+- You have a **pretrained** dimensionality reduction (PCA, autoencoder, etc.)
+  and want to fit dynamics to its output without the filtering recursion
+  influencing the latent trajectory.
+- The encoder is non-trainable — its output defines the latent coordinates.
+
+### Defining a custom encoder
+
+In NOFILT mode you provide your own `Encoder` subclass. The encoder maps a
+single observation to a point estimate of the latent state:
+
+```python
+import jax.numpy as jnp
+from jax import Array
+from jaxfads.base import Encoder
+
+class PCAEncoder(Encoder):
+    """Project observations to PCA coordinates."""
+    weight: Array   # (obs_dim, state_dim) — PCA loadings
+    bias: Array     # (obs_dim,) — observation mean
+
+    def __init__(self, conf, key=None):
+        self.conf = conf
+        # Load your pretrained PCA parameters here
+        self.weight = ...  # C_pca
+        self.bias = ...    # mean_y
+
+    def __call__(self, y: Array, *, key=None) -> Array:
+        return (y - self.bias) @ self.weight
+```
+
+### Configuration
+
+```python
+conf = OmegaConf.create(
+    {
+        "mode": "nofilt",
+        "state_dim": state_dim,
+        "observation_dim": obs_dim,
+        "nofilt_eps": 1e-6,   # tight MVN variance wrapping point estimates
+        "enc_conf": {
+            "alpha_encoder": "PCAEncoder",
+        },
+        # ... dynamics and observation config as before ...
+    }
+)
+```
+
+Key differences from the `smooth` workflow:
+- `mode: "nofilt"` — no filtering recursion.
+- `enc_conf.alpha_encoder` — name of your custom `Encoder` subclass.
+- `nofilt_eps` — the point estimate is wrapped as `MVN(z_hat, eps * I)` for
+  framework compatibility (sampling, KL computation).
+- No beta encoder is constructed.
+- The encoder is typically frozen via `freeze_paths: ["alpha_encoder"]`.
+
+### How it works
+
+1. Your encoder maps each observation to a point estimate `z_hat`.
+2. XFADS wraps it as a tight MVN: `q(z_t) = N(z_hat, eps * I)`.
+3. Dynamics predictions `p(z_t | z_{t-1})` are computed in parallel (no
+   sequential filtering).
+4. The ELBO's KL term `KL(q_t || p_pred_t)` trains the dynamics to predict
+   the next encoder output.
+5. The observation log-likelihood term still contributes if the readout is
+   trainable.

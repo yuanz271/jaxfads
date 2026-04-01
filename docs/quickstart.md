@@ -18,7 +18,7 @@ from jaxfads.observations import GLM  # noqa: F401
 
 conf = OmegaConf.create(
     {
-        "mode": "smooth",  # "filter" | "smooth" | "causal"
+        "mode": "smooth",  # "filter" | "smooth" | "causal" | "nofilt"
         "state_dim": 4,
         "observation_dim": 10,
         "n_steps": 100,
@@ -85,6 +85,7 @@ natural_params, moment_params, predictions = trained(
 | `mode` | `filter` | Need alpha-only filtering natural parameters. |
 | `mode` | `smooth` | Default offline smoothing-style inference (`alpha + beta`). |
 | `mode` | `causal` | Need Eq. 29-style causal recursion with smoothing reconstruction. |
+| `mode` | `nofilt` | Posterior set by custom encoder (e.g. pretrained DR); no filtering recursion. |
 | `stepper` | `DiscreteStepper` | `dyn_conf.system_type="discrete"` and map already returns `z_{t+1}`. |
 | `stepper` | `EulerStepper` | Continuous-time map, faster/rougher integration. |
 | `stepper` | `RK4Stepper` | Continuous-time map, better local accuracy than Euler. |
