@@ -25,6 +25,7 @@ __all__ = [
     "filter",
     "smooth",
     "causal",
+    "nofilt",
 ]
 
 
@@ -127,6 +128,7 @@ class Mode(StrEnum):
     FILTER = auto()
     SMOOTH = auto()
     CAUSAL = auto()
+    NOFILT = auto()
 
 
 def _site_filter(
@@ -276,6 +278,39 @@ def causal(
     check_nature, _, moment_p = filter(model, key, _t, alpha, u, c)
     nature = check_nature + beta
     moment = jax.vmap(model.approx.natural_to_moment)(nature)
+    return nature, moment, moment_p
+
+
+def nofilt(
+    model,
+    key: Array,
+    _t: Array,
+    alpha: Array,
+    u: Array,
+    c: Array,
+) -> tuple[Array, Array, Array]:
+    """Non-filter mode: posterior from encoder only, no filtering recursion.
+
+    Posterior natural parameters are set directly by encoder output ``alpha``.
+    Predictive moments are computed in parallel for ELBO KL terms.
+    """
+    approx = model.approx
+    noise = approx.canon_to_moment(approx.free_to_canon(model.noise_free))
+
+    nature = alpha
+    moment = jax.vmap(approx.natural_to_moment)(nature)
+
+    expected_moment_fn = partial(
+        expected_predictive_moment,
+        f=model.transition,
+        noise=noise,
+        approx=approx,
+        mc_size=model.conf.mc_size,
+    )
+    keys = jrnd.split(key, nature.shape[0] - 1)
+    moment_p_rest = jax.vmap(expected_moment_fn)(keys, moment[:-1], u[:-1], c[:-1])
+    moment_p = jnp.vstack((moment[0:1], moment_p_rest))
+
     return nature, moment, moment_p
 
 

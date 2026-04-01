@@ -22,12 +22,11 @@ from jax import Array, lax, vmap
 from jax import random as jrnd
 from omegaconf import DictConfig
 
-from gearax.modules import ConfModule
-
+from .base import Encoder
 from .nn import make_mlp
 
 
-class AlphaEncoder(ConfModule):
+class AlphaEncoder(Encoder):
     """Alpha encoder for observation-driven information updates in XFADS.
 
     The alpha encoder is a feedforward neural network that converts raw
@@ -76,7 +75,7 @@ class AlphaEncoder(ConfModule):
         return self.layer(y, key=key)
 
 
-class BetaEncoder(ConfModule):
+class BetaEncoder(Encoder):
     """Beta encoder for temporal dependency modeling in XFADS.
 
     The beta encoder is a GRU that processes sequences of alpha updates in
@@ -130,3 +129,5 @@ class BetaEncoder(ConfModule):
             hs = self.dropout(hs, key=key)
 
         return vmap(self.output)(hs)
+
+

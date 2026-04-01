@@ -7,7 +7,7 @@ from jax import numpy as jnp
 from omegaconf import OmegaConf, DictConfig
 import equinox as eqx
 import pytest
-from jaxfads.base import StateMap
+from jaxfads.base import StateMap, Encoder
 from jaxfads.smoother import XFADS
 
 
@@ -23,6 +23,18 @@ class Mock(StateMap):
     @override
     def eval(self, z: Array, u: Array, c: Array, *, key: Array | None = None) -> Array:
         return z
+
+
+class IdentityEncoder(Encoder):
+    """Test encoder: returns first state_dim components of y."""
+
+    def __init__(self, conf: DictConfig, key: Array | None = None):
+        del key
+        self.conf = conf
+
+    def __call__(self, y: Array, *, key: Array | None = None) -> Array:
+        del key
+        return y[: int(self.conf.state_dim)]
 
 
 def test_constructor():
@@ -423,7 +435,7 @@ def test_invalid_mode_error_lists_filter_smooth_causal():
     c = jnp.zeros((1, T, 0))
 
     model = model.initialize(times, y, u, c)
-    with pytest.raises(ValueError, match="filter, smooth, causal"):
+    with pytest.raises(ValueError, match="filter, smooth, causal, nofilt"):
         model(times, y, u, c, key=jr.key(2))
 
 
@@ -485,5 +497,67 @@ def test_filter_mode_skips_beta_encoder():
     model = model.initialize(times, y, u, c)
     _, post_mom, prior_mom = model(times, y, u, c, key=jr.key(2))
 
+    assert jnp.isfinite(post_mom).all()
+    assert jnp.isfinite(prior_mom).all()
+
+
+def test_xfads_nofilt_mode():
+    """XFADS should run end-to-end with mode='nofilt' and custom Encoder."""
+    T = 5
+    y_size = 6
+    z_size = 2
+
+    model_conf = OmegaConf.create(
+        dict(
+            mode="nofilt",
+            observation_dim=y_size,
+            state_dim=z_size,
+            state_map="Mock",
+            stepper="DiscreteStepper",
+            approx="MVN",
+            approx_kwargs={},
+            mc_size=2,
+            seed=0,
+            n_steps=T,
+            fb_penalty=0,
+            noise_penalty=0,
+            dropout=0.0,
+            nofilt_eps=1e-6,
+            dyn_conf=OmegaConf.create(
+                dict(
+                    input_dim=0,
+                    context_dim=0,
+                    state_noise=1.0,
+                    system_type="discrete",
+                )
+            ),
+            enc_conf=OmegaConf.create(
+                dict(alpha_encoder="IdentityEncoder", width=8, depth=1, dropout=0.0)
+            ),
+            obs_conf=OmegaConf.create(
+                dict(
+                    model="GLM",
+                    likelihood="Gaussian",
+                    cov=[1e-3] * y_size,
+                    norm_readout=False,
+                    readout_init="fa",
+                    readout_init_conf=dict(obs_noise_var=0.0),
+                )
+            ),
+        )
+    )
+
+    model = XFADS(model_conf, jr.key(0))
+    assert model.beta_encoder is None
+
+    times = jnp.broadcast_to(jnp.arange(T), (1, T))
+    y = jr.normal(jr.key(1), (1, T, y_size))
+    u = jnp.zeros((1, T, 0))
+    c = jnp.zeros((1, T, 0))
+
+    model = model.initialize(times, y, u, c)
+    nature, post_mom, prior_mom = model(times, y, u, c, key=jr.key(2))
+
+    assert jnp.isfinite(nature).all()
     assert jnp.isfinite(post_mom).all()
     assert jnp.isfinite(prior_mom).all()

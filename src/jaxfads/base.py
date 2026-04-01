@@ -382,4 +382,30 @@ class Observation(SubclassRegistryMixin, ConfModule):
         ...
 
 
-__all__ = ["Approx", "StateMap", "Stepper", "Observation"]
+class Encoder(SubclassRegistryMixin, ConfModule):
+    """Abstract base class for observation encoders.
+
+    Subclasses are auto-registered and can be looked up via
+    ``Encoder.get_subclass(name)``.
+    """
+
+    @abstractmethod
+    def __call__(self, y: Array, *, key: Array | None = None) -> Array:
+        """Encode a single observation vector.
+
+        Parameters
+        ----------
+        y : Array, shape (observation_dim,)
+            Observation vector.
+        key : Array or None
+            Optional PRNG key for stochastic encoders.
+
+        Returns
+        -------
+        Array
+            Encoded representation. Shape depends on subclass.
+        """
+        ...
+
+
+__all__ = ["Approx", "StateMap", "Stepper", "Observation", "Encoder"]

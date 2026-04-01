@@ -3,6 +3,7 @@ from jax import numpy as jnp
 from jax import random as jrnd
 from omegaconf import OmegaConf
 
+from jaxfads.base import Encoder
 from jaxfads.encoders import AlphaEncoder, BetaEncoder
 from conftest import make_approx
 
@@ -74,3 +75,37 @@ def test_beta_encoder_supports_param_and_free_size_contract():
     out = encoder(a)
     chex.assert_shape(out, (4, int(conf.free_size)))
     chex.assert_tree_all_finite(out)
+
+
+def test_custom_encoder_subclass_shape():
+    class SliceEncoder(Encoder):
+        def __init__(self, conf, key=None):
+            del key
+            self.conf = conf
+
+        def __call__(self, y, *, key=None):
+            del key
+            return y[: int(self.conf.state_dim)]
+
+    conf = OmegaConf.create(dict(observation_dim=5, state_dim=2))
+    enc = SliceEncoder(conf)
+    y = jnp.arange(5.0)
+    out = enc(y)
+    chex.assert_shape(out, (2,))
+    chex.assert_tree_all_finite(out)
+
+
+def test_custom_encoder_registry_lookup():
+    class ScaleEncoder(Encoder):
+        def __init__(self, conf, key=None):
+            del key
+            self.conf = conf
+
+        def __call__(self, y, *, key=None):
+            del key
+            return 2.0 * y[: int(self.conf.state_dim)]
+
+    conf = OmegaConf.create(dict(observation_dim=4, state_dim=3))
+    cls = Encoder.get_subclass("ScaleEncoder")
+    out = cls(conf)(jnp.ones((4,)))
+    chex.assert_trees_all_close(out, 2.0 * jnp.ones((3,)), atol=1e-6)
