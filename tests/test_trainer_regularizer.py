@@ -3,24 +3,12 @@ import jax.numpy as jnp
 import chex
 import pytest
 import equinox as eqx
-from jax import Array
 from omegaconf import OmegaConf
 
-from jaxfads.base import StateMap
 from jaxfads.smoother import XFADS
 from jaxfads.trainer import batch_loss
 import jaxfads.observations  # noqa: F401 — register GLM subclass
-
-
-class MockStateMap(StateMap):
-    layer: eqx.Module | None
-
-    def __init__(self, conf, key: Array):
-        self.conf = conf
-        self.layer = None
-
-    def eval(self, z: Array, u: Array, c: Array, *, key=None) -> Array:
-        return z
+from conftest import MockStateMap  # noqa: F401 - class registration side-effect
 
 
 @pytest.fixture

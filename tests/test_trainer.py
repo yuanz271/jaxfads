@@ -1,27 +1,13 @@
 import pytest
 import jax
-from jax import Array, numpy as jnp, random as jrnd
-import equinox as eqx
+from jax import numpy as jnp, random as jrnd
 import chex
 from omegaconf import OmegaConf
 
 from jaxfads.trainer import train
 from jaxfads.smoother import XFADS
-from jaxfads.base import StateMap
 import jaxfads.observations  # noqa: F401 — register GLM subclass
-
-
-class MockStateMap(StateMap):
-    """Mock dynamics for testing — pure deterministic identity."""
-
-    layer: eqx.Module | None
-
-    def __init__(self, conf, key):
-        self.conf = conf
-        self.layer = None
-
-    def eval(self, z, u, c, *, key=None) -> Array:
-        return z
+from conftest import MockStateMap  # noqa: F401 - class registration side-effect
 
 
 @pytest.fixture

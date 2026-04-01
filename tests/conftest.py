@@ -1,6 +1,8 @@
 import pytest
+import equinox as eqx
+from jax import Array
 
-from jaxfads.base import Approx
+from jaxfads.base import Approx, StateMap
 from jaxfads.distributions import MVN
 
 _STATE_DIM = 2
@@ -36,3 +38,16 @@ def make_approx(dim: int, approx_name: str = "MVN", **kwargs) -> Approx:
 def make_noise(approx: Approx, state_dim: int, cov: float = 1.0):
     """Create noise transition params (flat) for test use."""
     return approx.canon_to_moment(approx.free_to_canon(approx.free_from_kw(scale=cov)))
+
+
+class MockStateMap(StateMap):
+    """Mock dynamics — identity transition. Shared across test modules."""
+
+    layer: eqx.Module | None
+
+    def __init__(self, conf, key: Array = None):
+        self.conf = conf
+        self.layer = None
+
+    def eval(self, z: Array, u: Array, c: Array, *, key: Array | None = None) -> Array:
+        return z
