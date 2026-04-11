@@ -129,5 +129,3 @@ class BetaEncoder(Encoder):
             hs = self.dropout(hs, key=key)
 
         return vmap(self.output)(hs)
-
-

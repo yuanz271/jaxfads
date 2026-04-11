@@ -184,11 +184,14 @@ def test_top_level_dims_override_subconfig_dims():
     assert jnp.isfinite(prior_mom).all()
 
 
-@pytest.mark.parametrize("mode,approx_kwargs", [
-    ("smooth", {"rank": 2}),
-    ("causal", {}),
-    ("filter", {}),
-])
+@pytest.mark.parametrize(
+    "mode,approx_kwargs",
+    [
+        ("smooth", {"rank": 2}),
+        ("causal", {}),
+        ("filter", {}),
+    ],
+)
 def test_mode_smoke_forward_pass(mode, approx_kwargs):
     """XFADS should run end-to-end for each standard inference mode."""
     T = 5

@@ -118,9 +118,11 @@ def generate_pca_data(seed=0, n_trials=64, T=50, state_dim=2, obs_dim=10):
     y_centered = y_flat - b_pca
     _, _, vt = np.linalg.svd(y_centered, full_matrices=False)
     c_pca = vt[:state_dim].T.astype(np.float32)
-    z_pca = ((y.reshape(-1, obs_dim) - b_pca) @ c_pca).reshape(
-        n_trials, T, state_dim
-    ).astype(np.float32)
+    z_pca = (
+        ((y.reshape(-1, obs_dim) - b_pca) @ c_pca)
+        .reshape(n_trials, T, state_dim)
+        .astype(np.float32)
+    )
 
     return z_pca, y, c_pca, b_pca.astype(np.float32)
 
@@ -263,9 +265,7 @@ def nofilt_training_comparison():
     rmse_ols = float(np.sqrt(np.mean(np.sum((z_next_np - pred_ols) ** 2, axis=-1))))
 
     pred_xfads = np.einsum("ij,ntj->nti", w_learned, z_prev_np)
-    rmse_xfads = float(
-        np.sqrt(np.mean(np.sum((z_next_np - pred_xfads) ** 2, axis=-1)))
-    )
+    rmse_xfads = float(np.sqrt(np.mean(np.sum((z_next_np - pred_xfads) ** 2, axis=-1))))
 
     print(f"Identity pred RMSE: {rmse_identity:.6f}")
     print(f"OLS pred RMSE:      {rmse_ols:.6f}")
