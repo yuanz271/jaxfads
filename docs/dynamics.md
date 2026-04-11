@@ -47,6 +47,7 @@ class MyStateMap(StateMap):
 
 ## Built-in StateMap
 
+- `IdentityStateMap`: discrete random-walk mean map `z_{t+1} = z_t`
 - `OUStateMap`: continuous OU drift map `dz/dt = -theta * z`
 - `FunctionStateMap`: wraps a non-trainable callable
 
@@ -91,7 +92,23 @@ dyn_conf:
   context_dim: 0
 ```
 
-## Configuration Example (Discrete)
+## Configuration Example (Identity / random-walk baseline)
+
+```yaml
+state_map: IdentityStateMap
+stepper: DiscreteStepper
+
+dyn_conf:
+  system_type: discrete
+  state_noise: 1.0
+  input_dim: 0
+  context_dim: 0
+```
+
+Use this as the weakest built-in dynamics prior when you want
+`z_{t+1} \approx z_t + noise`.
+
+## Configuration Example (Discrete custom map)
 
 ```yaml
 state_map: MyStateMap

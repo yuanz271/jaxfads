@@ -98,3 +98,11 @@ Dynamics receive gradient through **two paths**:
 
 The latent trajectory is **dynamics-smoothed** rather than raw PCA, yielding
 a more robust dynamics estimate.
+
+## NOFILT mode
+
+The `nofilt` inference mode implements the $\sigma^2 \to 0$ limiting case
+directly: the posterior is set by a user-provided encoder (bypassing
+filtering), and dynamics are trained via the KL term alone. See the
+[workflow guide](pca_dynamics_workflow.md#alternative-nofilt-mode) for
+configuration details.

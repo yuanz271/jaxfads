@@ -18,7 +18,7 @@ from jaxfads.observations import GLM  # noqa: F401
 
 conf = OmegaConf.create(
     {
-        "mode": "smooth",  # "filter" | "smooth" | "causal"
+        "mode": "smooth",  # "filter" | "smooth" | "causal" | "nofilt"
         "state_dim": 4,
         "observation_dim": 10,
         "n_steps": 100,
@@ -28,7 +28,6 @@ conf = OmegaConf.create(
         "approx_kwargs": {},  # rank defaults to state_dim (full); use {"rank": r} for low-rank
         "state_map": "OUStateMap",
         "stepper": "EulerStepper",
-        "observation_model": "GLM",
         "dyn_conf": {
             "system_type": "continuous",
             "theta": 2.0,
@@ -43,9 +42,11 @@ conf = OmegaConf.create(
             "dropout": 0.0,
         },
         "obs_conf": {
-            "observation_likelihood": "Gaussian",
-            "observation_likelihood_kwargs": {"variance": 1.0},
-            "readout_structure": "linear",
+            "model": "GLM",
+            "likelihood": "Gaussian",
+            "cov": [1.0] * 10,
+            "norm_readout": False,
+            "readout_init": "fa",
             "readout_init_conf": {"obs_noise_var": 1.0},
         },
     }
@@ -85,6 +86,8 @@ natural_params, moment_params, predictions = trained(
 | `mode` | `filter` | Need alpha-only filtering natural parameters. |
 | `mode` | `smooth` | Default offline smoothing-style inference (`alpha + beta`). |
 | `mode` | `causal` | Need Eq. 29-style causal recursion with smoothing reconstruction. |
+| `mode` | `nofilt` | Posterior set by custom encoder (e.g. pretrained DR); no filtering recursion. |
+| `state_map` | `IdentityStateMap` | Need a null/random-walk dynamics prior `z_{t+1}=z_t+noise`. |
 | `stepper` | `DiscreteStepper` | `dyn_conf.system_type="discrete"` and map already returns `z_{t+1}`. |
 | `stepper` | `EulerStepper` | Continuous-time map, faster/rougher integration. |
 | `stepper` | `RK4Stepper` | Continuous-time map, better local accuracy than Euler. |
@@ -104,3 +107,4 @@ natural_params, moment_params, predictions = trained(
 - [Training Configuration](training.md)
 - [Algorithm Overview](algorithm.md)
 - [Paper Parity Review](paper_parity_2403_01371.md)
+- [Learning Dynamics from PCA Coordinates](pca_dynamics_workflow.md)

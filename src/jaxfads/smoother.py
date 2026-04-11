@@ -24,7 +24,7 @@ from .core import Mode
 from .base import Approx
 from .base import StateMap, Stepper
 from .nn import DataMasker
-from .base import Observation
+from .base import Observation, Encoder
 from .util import vmap_with_key
 from .logging import get_logger
 
@@ -122,7 +122,7 @@ class XFADS(ConfModule):
     # backward: StateMap | None
     observation: Observation
     alpha_encoder: Callable
-    beta_encoder: Callable
+    beta_encoder: Callable | None
     masker: DataMasker
     unconstrained_prior_natural: Any
     noise_free: Any
@@ -207,20 +207,29 @@ class XFADS(ConfModule):
         free_size = int(self.approx.free_size())
         param_size = int(self.approx.param_size())
 
+        is_nofilt_mode = str(self.conf.mode) == str(Mode.NOFILT)
+        enc_free_size = int(self.conf.state_dim) if is_nofilt_mode else free_size
+
         enc_conf = OmegaConf.merge(
             self.conf.enc_conf,
             {
                 "observation_dim": self.conf.observation_dim,
+                "state_dim": self.conf.state_dim,
                 "param_size": param_size,
-                "free_size": free_size,
+                "free_size": enc_free_size,
             },
         )
 
         key, ky = jrnd.split(key)
-        self.alpha_encoder = encoders.AlphaEncoder(enc_conf, ky)
+        encoder_name = enc_conf.get("alpha_encoder", "AlphaEncoder")
+        encoder_cls = Encoder.get_subclass(encoder_name)
+        self.alpha_encoder = encoder_cls(enc_conf, ky)
 
-        key, ky = jrnd.split(key)
-        self.beta_encoder = encoders.BetaEncoder(enc_conf, ky)
+        if is_nofilt_mode:
+            self.beta_encoder = None
+        else:
+            key, ky = jrnd.split(key)
+            self.beta_encoder = encoders.BetaEncoder(enc_conf, ky)
 
         # if "s" in static_params:
         #     self.state_map.set_static()
@@ -256,7 +265,7 @@ class XFADS(ConfModule):
         Delegates initialization to the observation model.
         """
         observation = self.observation.initialize(t, y, u, c)
-        return eqx.tree_at(lambda model: model.observation, self, observation)
+        return eqx.tree_at(lambda m: m.observation, self, observation)
 
     @classmethod
     def load(cls, path: str | Path):
@@ -405,7 +414,9 @@ class XFADS(ConfModule):
 
         batch_free_to_natural = vmap(vmap(_free_to_natural))
         batch_alpha_encode = vmap_with_key(vmap_with_key(self.alpha_encoder))
-        batch_beta_encode = vmap_with_key(self.beta_encoder)
+        batch_beta_encode = (
+            None if self.beta_encoder is None else vmap_with_key(self.beta_encoder)
+        )
 
         def batch_encode_alpha(y: Array, key) -> Array:
             # handling missing values
@@ -425,6 +436,8 @@ class XFADS(ConfModule):
             return a
 
         def batch_encode_beta(a: Array, key) -> Array:
+            if batch_beta_encode is None:
+                raise ValueError("beta_encoder is required for non-NOFILT modes")
             key, beta_key = jrnd.split(key)
             b_free = batch_beta_encode(a, key=beta_key)
             b = batch_free_to_natural(b_free)
@@ -436,23 +449,48 @@ class XFADS(ConfModule):
             return b
 
         alpha_key, beta_key, rest_key = jrnd.split(key, 3)
-        a = batch_encode_alpha(y, alpha_key)
         keys = jrnd.split(rest_key, jnp.size(t, 0))
 
         match self.conf.mode:
             case Mode.FILTER:
+                a = batch_encode_alpha(y, alpha_key)
                 smooth_batch = vmap(partial(core.filter, self))
                 return smooth_batch(keys, t, a, u, c)
             case Mode.CAUSAL:
+                a = batch_encode_alpha(y, alpha_key)
                 b = batch_encode_beta(a, beta_key)
                 smooth_batch = vmap(partial(core.causal, self))
                 return smooth_batch(keys, t, a, b, u, c)
             case Mode.SMOOTH:
+                a = batch_encode_alpha(y, alpha_key)
                 b = batch_encode_beta(a, beta_key)
                 smooth_batch = vmap(partial(core.smooth, self))
                 return smooth_batch(keys, t, a, b, u, c)
+            case Mode.NOFILT:
+                if not hasattr(approx, "pack"):
+                    raise NotImplementedError(
+                        "NOFILT mode currently requires an Approx with pack() "
+                        "(e.g. MVN)."
+                    )
+                mask_y = jnp.all(jnp.isfinite(y), axis=2, keepdims=True)
+                y_clean = jnp.where(mask_y, y, 0)
+                z_hat = batch_alpha_encode(y_clean, key=alpha_key)
+
+                eps = float(self.conf.get("nofilt_eps", 1e-6))
+
+                def _pack_point(z):
+                    cov = eps * jnp.eye(self.conf.state_dim)
+                    mom = approx.pack(z, cov)
+                    return approx.moment_to_natural(mom)
+
+                a_roll = vmap(vmap(_pack_point))(z_hat)
+                prior_nat = self.prior_natural()
+                a_roll = jnp.where(mask_y, a_roll, prior_nat)
+
+                nofilt_batch = vmap(partial(core.nofilt, self))
+                return nofilt_batch(keys, t, a_roll, u, c)
             case _:
                 raise ValueError(
                     f"Unsupported mode: {self.conf.mode}. Expected one of "
-                    f"{Mode.FILTER!s}, {Mode.SMOOTH!s}, {Mode.CAUSAL!s}."
+                    f"{Mode.FILTER!s}, {Mode.SMOOTH!s}, {Mode.CAUSAL!s}, {Mode.NOFILT!s}."
                 )
