@@ -236,3 +236,23 @@ Key differences from the `smooth` workflow:
    the next encoder output.
 5. The observation log-likelihood term still contributes if the readout is
    trainable.
+
+### Identity baseline
+
+For PCA / NOFILT experiments, `IdentityStateMap` is a good null-dynamics
+baseline:
+
+```python
+"state_map": "IdentityStateMap",
+"stepper": "DiscreteStepper",
+"dyn_conf": {
+    "system_type": "discrete",
+    "state_noise": 1.0,
+    "input_dim": 0,
+    "context_dim": 0,
+},
+```
+
+This corresponds to the random-walk prior `z_{t+1} = z_t + noise`. Use it to
+check whether a learned dynamics model improves over simple persistence in PCA
+coordinates.

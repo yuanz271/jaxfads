@@ -5,11 +5,13 @@ Importing this package registers built-in subclasses via
 
 Built-ins
 ---------
+- `IdentityStateMap`: discrete random-walk mean map
 - `OUStateMap`: zero-mean Ornstein–Uhlenbeck drift map
 - `FunctionStateMap`: wrapper around plain Python functions/methods/partials
 """
 
 from .function import FunctionStateMap
+from .identity import IdentityStateMap
 from .ou import OUStateMap
 
-__all__ = ["OUStateMap", "FunctionStateMap"]
+__all__ = ["IdentityStateMap", "OUStateMap", "FunctionStateMap"]

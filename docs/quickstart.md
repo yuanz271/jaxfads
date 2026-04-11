@@ -86,6 +86,7 @@ natural_params, moment_params, predictions = trained(
 | `mode` | `smooth` | Default offline smoothing-style inference (`alpha + beta`). |
 | `mode` | `causal` | Need Eq. 29-style causal recursion with smoothing reconstruction. |
 | `mode` | `nofilt` | Posterior set by custom encoder (e.g. pretrained DR); no filtering recursion. |
+| `state_map` | `IdentityStateMap` | Need a null/random-walk dynamics prior `z_{t+1}=z_t+noise`. |
 | `stepper` | `DiscreteStepper` | `dyn_conf.system_type="discrete"` and map already returns `z_{t+1}`. |
 | `stepper` | `EulerStepper` | Continuous-time map, faster/rougher integration. |
 | `stepper` | `RK4Stepper` | Continuous-time map, better local accuracy than Euler. |

@@ -254,6 +254,11 @@ def nofilt_training_comparison():
     z_prev_np = np.asarray(z_pca[:, :-1])
     z_next_np = np.asarray(z_pca[:, 1:])
 
+    pred_identity = z_prev_np
+    rmse_identity = float(
+        np.sqrt(np.mean(np.sum((z_next_np - pred_identity) ** 2, axis=-1)))
+    )
+
     pred_ols = np.einsum("ij,ntj->nti", np.asarray(a_ols), z_prev_np)
     rmse_ols = float(np.sqrt(np.mean(np.sum((z_next_np - pred_ols) ** 2, axis=-1))))
 
@@ -262,8 +267,9 @@ def nofilt_training_comparison():
         np.sqrt(np.mean(np.sum((z_next_np - pred_xfads) ** 2, axis=-1)))
     )
 
-    print(f"OLS pred RMSE:    {rmse_ols:.6f}")
-    print(f"XFADS pred RMSE:  {rmse_xfads:.6f}")
+    print(f"Identity pred RMSE: {rmse_identity:.6f}")
+    print(f"OLS pred RMSE:      {rmse_ols:.6f}")
+    print(f"XFADS pred RMSE:    {rmse_xfads:.6f}")
     print(f"||W_xfads - A_ols||_F: {w_dist:.6f}")
     print(f"\nA_ols:\n{np.asarray(a_ols)}")
     print(f"W_learned:\n{w_learned}")
