@@ -28,7 +28,6 @@ conf = OmegaConf.create(
         "approx_kwargs": {},  # rank defaults to state_dim (full); use {"rank": r} for low-rank
         "state_map": "OUStateMap",
         "stepper": "EulerStepper",
-        "observation_model": "GLM",
         "dyn_conf": {
             "system_type": "continuous",
             "theta": 2.0,
@@ -43,9 +42,11 @@ conf = OmegaConf.create(
             "dropout": 0.0,
         },
         "obs_conf": {
-            "observation_likelihood": "Gaussian",
-            "observation_likelihood_kwargs": {"variance": 1.0},
-            "readout_structure": "linear",
+            "model": "GLM",
+            "likelihood": "Gaussian",
+            "cov": [1.0] * 10,
+            "norm_readout": False,
+            "readout_init": "fa",
             "readout_init_conf": {"obs_noise_var": 1.0},
         },
     }
