@@ -98,6 +98,53 @@ def test_constructor():
         eqx.tree_equal(model, loaded_model)
 
 
+def test_constructor_accepts_dynamics_and_integrator_keys():
+    """XFADS should accept the new dynamics/integrator config names."""
+    T = 12
+    y_size = 8
+    z_size = 2
+
+    model_conf = OmegaConf.create(
+        dict(
+            mode="smooth",
+            observation_dim=y_size,
+            state_dim=z_size,
+            dynamics="MockStateMap",
+            integrator="IdentityIntegrator",
+            approx="MVN",
+            approx_kwargs={"rank": 0},
+            mc_size=2,
+            seed=0,
+            n_steps=T,
+            fb_penalty=0,
+            noise_penalty=0,
+            dropout=0.0,
+            dyn_conf=OmegaConf.create(
+                dict(
+                    input_dim=0,
+                    context_dim=0,
+                    state_noise=1.0,
+                    system_type="discrete",
+                )
+            ),
+            enc_conf=OmegaConf.create(dict(width=8, depth=1, dropout=0.0)),
+            obs_conf=OmegaConf.create(
+                dict(
+                    model="GLM",
+                    emission_noise=1.0,
+                    norm_readout=False,
+                    dropout=0.0,
+                    likelihood="Poisson",
+                )
+            ),
+        )
+    )
+
+    model = XFADS(model_conf, jr.key(0))
+    assert model.dynamics is model.state_map
+    assert model.integrator is model.stepper
+
+
 def test_top_level_dims_override_subconfig_dims():
     """Top-level state/observation dims must override any sub-config values."""
     T = 7

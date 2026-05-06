@@ -282,9 +282,9 @@ class Approx(SubclassRegistryMixin, ABC):
         ...
 
 
-class StateMap(SubclassRegistryMixin, ConfModule):  # pyright: ignore[reportImplicitAbstractClass]
+class Dynamics(SubclassRegistryMixin, ConfModule):  # pyright: ignore[reportImplicitAbstractClass]
     """
-    Abstract base class for latent-state map modules in XFADS.
+    Abstract base class for latent-state dynamics modules in XFADS.
 
     Concrete subclasses implement ``eval(z, u, c)``.
     Interpretation is controlled by ``dyn_conf.system_type``:
@@ -296,7 +296,7 @@ class StateMap(SubclassRegistryMixin, ConfModule):  # pyright: ignore[reportImpl
     @abstractmethod
     def eval(self, z: Array, u: Array, c: Array, *, key=None) -> Array:
         """
-        Evaluate the latent-state map.
+        Evaluate the latent-state dynamics.
 
         Parameters
         ----------
@@ -329,8 +329,8 @@ class StateMap(SubclassRegistryMixin, ConfModule):  # pyright: ignore[reportImpl
         return self.eval(*args, **kwargs)
 
 
-class Stepper(SubclassRegistryMixin, ABC):
-    """Abstract base class for state-evolution steppers in XFADS."""
+class Integrator(SubclassRegistryMixin, ABC):
+    """Abstract base class for state-evolution integrators in XFADS."""
 
     @abstractmethod
     def step(
@@ -338,11 +338,11 @@ class Stepper(SubclassRegistryMixin, ABC):
         z: Array,
         u: Array,
         c: Array,
-        state_map: StateMap,
+        dynamics: Dynamics,
         *,
         key=None,
     ) -> Array:
-        """Advance state by one step using ``state_map``."""
+        """Advance state by one step using ``dynamics``."""
         ...
 
 
@@ -408,4 +408,16 @@ class Encoder(SubclassRegistryMixin, ConfModule):
         ...
 
 
-__all__ = ["Approx", "StateMap", "Stepper", "Observation", "Encoder"]
+# Backward-compatible aliases.
+StateMap = Dynamics
+Stepper = Integrator
+
+__all__ = [
+    "Approx",
+    "Dynamics",
+    "Integrator",
+    "StateMap",
+    "Stepper",
+    "Observation",
+    "Encoder",
+]

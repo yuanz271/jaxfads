@@ -20,11 +20,11 @@ from gearax.modules import ConfModule, load_model, save_model
 from omegaconf import OmegaConf
 
 from . import core, distributions, encoders, observations, state_maps, steppers  # noqa: F401 — side-effect registers subclasses
-from .core import Mode
 from .base import Approx
-from .base import StateMap, Stepper
+from .base import Dynamics, Integrator
+from .base import Encoder, Observation
+from .core import Mode
 from .nn import DataMasker
-from .base import Observation, Encoder
 from .util import vmap_with_key
 from .logging import get_logger
 
@@ -117,8 +117,10 @@ class XFADS(ConfModule):
     >>> natural, mean, prediction = model(t, y, u, c, key=key)
     """
 
-    state_map: StateMap
-    stepper: Stepper
+    state_map: Dynamics
+    stepper: Integrator
+    dynamics: Dynamics
+    integrator: Integrator
     # backward: StateMap | None
     observation: Observation
     alpha_encoder: Callable
@@ -150,18 +152,18 @@ class XFADS(ConfModule):
 
         seed = self.conf.seed
         dropout = self.conf.dropout
-        state_map_name = self.conf.state_map
-        stepper_name = self.conf.stepper
+        dynamics_name = getattr(self.conf, "dynamics", None) or self.conf.state_map
+        integrator_name = getattr(self.conf, "integrator", None) or self.conf.stepper
 
         key = jrnd.key(seed)
 
         logger.info(
-            "XFADS init: mode=%s approx=%s approx_kwargs=%s state_map=%s stepper=%s observation_model=%s state_dim=%s obs_dim=%s mc_size=%s dropout=%s seed=%s",
+            "XFADS init: mode=%s approx=%s approx_kwargs=%s dynamics=%s integrator=%s observation_model=%s state_dim=%s obs_dim=%s mc_size=%s dropout=%s seed=%s",
             str(self.conf.mode),
             str(self.conf.approx),
             str(dict(self.conf.approx_kwargs)),
-            str(state_map_name),
-            str(stepper_name),
+            str(dynamics_name),
+            str(integrator_name),
             str(self.conf.obs_conf.model),
             str(self.conf.state_dim),
             str(self.conf.observation_dim),
@@ -183,8 +185,10 @@ class XFADS(ConfModule):
         )
 
         key, ky = jrnd.split(key)
-        self.state_map = StateMap.get_subclass(state_map_name)(dyn_conf, key=ky)
-        self.stepper = Stepper.get_subclass(stepper_name)(dyn_conf)
+        self.state_map = Dynamics.get_subclass(dynamics_name)(dyn_conf, key=ky)
+        self.stepper = Integrator.get_subclass(integrator_name)(dyn_conf)
+        self.dynamics = self.state_map
+        self.integrator = self.stepper
 
         self.noise_free = self.approx.free_from_kw(scale=dyn_conf.state_noise)
 
