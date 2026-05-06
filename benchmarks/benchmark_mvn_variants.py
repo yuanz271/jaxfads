@@ -113,7 +113,7 @@ def main() -> None:
         dyn_conf=dict(
             input_dim=0,
             context_dim=0,
-            fn_path="vdp_example:vdp_state_map",
+            fn_path="vdp_example:vdp_dynamics",
             fn_kwargs={"mu": args.mu},
             dt=args.dt,
                 state_noise=0.1,

@@ -314,7 +314,7 @@ def nofilt(
     return nature, moment, moment_p
 
 
-# NOTE: _bismooth() requires model.backward (a callable reverse state map) which is
+# NOTE: _bismooth() requires model.backward (a callable reverse dynamics) which is
 # not yet implemented on XFADS.  Do not call until backward dynamics are added.
 def _bismooth(
     model,

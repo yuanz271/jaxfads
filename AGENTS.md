@@ -17,7 +17,7 @@ jaxfads/
 │   ├── base.py                  # ABCs + subclass registries (Approx/Dynamics/Integrator/Observation)
 │   ├── smoother.py              # XFADS orchestrator
 │   ├── core.py                  # filtering/smoothing primitives
-│   ├── state_maps/              # built-in latent state maps (e.g. OU, function wrapper)
+│   ├── dynamics/                # built-in latent dynamics (e.g. OU, functional wrapper)
 │   ├── integrators.py              # Euler/RK4/discrete integrators
 │   ├── vi.py                    # ELBO
 │   ├── observations.py          # GLM observation model + Poisson/Gaussian likelihoods

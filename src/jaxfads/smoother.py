@@ -236,7 +236,7 @@ class XFADS(ConfModule):
         self.unconstrained_prior_natural = self.approx.free_from_kw(scale=1.0)
 
     def transition(self, z: Array, u: Array, c: Array, *, key=None) -> Array:
-        """One-step latent transition composed from state map and stepper."""
+        """One-step latent transition composed from dynamics and integrator."""
         return self.integrator.step(z, u, c, self.dynamics, key=key)
 
     def initialize(self, t, y, u, c):

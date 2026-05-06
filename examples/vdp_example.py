@@ -2,7 +2,7 @@
 
 Three cases:
 
-1. **MLPDynamics** — trainable MLP learns continuous-time dynamics, stepped with RK4.
+1. **MLPDynamics** — trainable MLP learns continuous-time dynamics, integrated with RK4.
 2. **OU** — built-in tracking prior drift.
 3. **Low-rank MVN + Functional** — low-rank pseudo-observation encoder updates
    (paper Eq. 19–21), using a declarative function-backed Van der Pol map.
@@ -81,7 +81,7 @@ def simulate_vdp(
 # ---------------------------------------------------------------------------
 
 
-def vdp_state_map(
+def vdp_dynamics(
     z: jax.Array,
     u: jax.Array,
     c: jax.Array,
@@ -89,7 +89,7 @@ def vdp_state_map(
     mu: float,
     key: jax.Array | None = None,
 ) -> jax.Array:
-    """Functional-compatible Van der Pol continuous-time map."""
+    """Functional Van der Pol continuous-time dynamics."""
     del u, c, key
     return vdp_rhs(z, mu)
 
@@ -160,20 +160,20 @@ def _model_rhs(model, grid_pts, alignment=None):
     Parameters
     ----------
     model : XFADS
-        Trained model whose ``state_map`` implements ``eval(z, u, c, key=...)``.
+        Trained model whose ``dynamics`` implements ``eval(z, u, c, key=...)``.
     grid_pts : Array, shape (M, D)
         Points at which to evaluate the derivative (in true coordinates).
     alignment : AffineAlignment, optional
         If provided, grid points are mapped into latent space before
         evaluation, and the resulting derivatives are mapped back.
     """
-    input_dim = int(model.state_map.conf.input_dim)
-    context_dim = int(model.state_map.conf.context_dim)
+    input_dim = int(model.dynamics.conf.input_dim)
+    context_dim = int(model.dynamics.conf.context_dim)
     u0 = jnp.zeros((input_dim,), dtype=grid_pts.dtype)
     c0 = jnp.zeros((context_dim,), dtype=grid_pts.dtype)
 
     def rhs_fn(z):
-        return model.state_map.eval(z, u0, c0, key=None)
+        return model.dynamics.eval(z, u0, c0, key=None)
 
     if alignment is not None:
         A_inv = jnp.linalg.inv(alignment.A)
@@ -190,7 +190,7 @@ def flow_metrics(model, *, mu, xlim, vlim, data_pts, grid=25, alignment=None):
     Parameters
     ----------
     model : XFADS
-        Trained model whose state map supports ``eval()``.
+        Trained model whose dynamics supports ``eval()``.
     mu : float
         Van der Pol parameter for the ground-truth RHS.
     xlim, vlim : tuple[float, float]
@@ -283,7 +283,7 @@ def evaluate(
     align_flow : bool, default=True
         Whether to pass the Procrustes alignment to flow-field
         evaluation.  Set ``False`` when the dynamics operate in the
-        true coordinate system (e.g. ``vdp_state_map``).
+        true coordinate system (e.g. ``vdp_dynamics``).
 
     Returns dict with metric values, aligned means, covariances, and
     the Procrustes alignment.

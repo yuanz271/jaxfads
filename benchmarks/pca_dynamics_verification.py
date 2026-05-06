@@ -249,7 +249,7 @@ def nofilt_training_comparison():
 
     trained = train(model, data, conf=trainer_conf)
 
-    w_learned = np.asarray(trained.state_map.W)
+    w_learned = np.asarray(trained.dynamics.W)
     w_dist = float(np.linalg.norm(w_learned - np.asarray(a_ols), ord="fro"))
 
     z_prev_np = np.asarray(z_pca[:, :-1])

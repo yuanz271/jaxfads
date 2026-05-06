@@ -26,7 +26,7 @@ class CallableObject:
         return z + u + c
 
 
-_TEST_FN_MODULE = "tests_state_map_fns"
+_TEST_FN_MODULE = "tests_dynamics_fns"
 _mod = types.ModuleType(_TEST_FN_MODULE)
 _mod.plain_fn = plain_fn
 _mod.key_fn = key_fn

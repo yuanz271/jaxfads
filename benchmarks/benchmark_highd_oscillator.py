@@ -27,7 +27,7 @@ from jaxfads.observations import GLM  # noqa: F401 (register GLM)
 from jaxfads.trainer import train
 
 
-def oscillator_bank_state_map(z, u, c, *, omega=1.2, gamma=0.15, beta=0.02):
+def oscillator_bank_dynamics(z, u, c, *, omega=1.2, gamma=0.15, beta=0.02):
     """Continuous-time oscillator bank RHS in R^(2K).
 
     For each pair (x, v):
@@ -45,10 +45,10 @@ def oscillator_bank_state_map(z, u, c, *, omega=1.2, gamma=0.15, beta=0.02):
 
 
 def rk4_step(z, dt):
-    k1 = oscillator_bank_state_map(z, None, None)
-    k2 = oscillator_bank_state_map(z + 0.5 * dt * k1, None, None)
-    k3 = oscillator_bank_state_map(z + 0.5 * dt * k2, None, None)
-    k4 = oscillator_bank_state_map(z + dt * k3, None, None)
+    k1 = oscillator_bank_dynamics(z, None, None)
+    k2 = oscillator_bank_dynamics(z + 0.5 * dt * k1, None, None)
+    k3 = oscillator_bank_dynamics(z + 0.5 * dt * k2, None, None)
+    k4 = oscillator_bank_dynamics(z + dt * k3, None, None)
     return z + (dt / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
 
 
@@ -187,7 +187,7 @@ def main() -> None:
                         "dyn_conf": {
                             "input_dim": 0,
                             "context_dim": 0,
-                            "fn_path": "benchmark_highd_oscillator:oscillator_bank_state_map",
+                            "fn_path": "benchmark_highd_oscillator:oscillator_bank_dynamics",
                             "fn_kwargs": {},
                             "dt": args.dt,
                                             "state_noise": 0.1,

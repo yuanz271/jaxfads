@@ -25,7 +25,7 @@ All dependencies—including `gearax` (pinned to a specific commit)—are resolv
 ## Documentation
 
 - [Quickstart](docs/quickstart.md)
-- [Writing Custom State Maps and Steppers](docs/dynamics.md)
+- [Writing Custom Dynamics and Integrators](docs/dynamics.md)
 - [Training Configuration](docs/training.md)
 - [Algorithm Overview](docs/algorithm.md)
 - [API and Architecture Design](docs/design.md)

@@ -57,7 +57,7 @@ It intentionally rejects arbitrary callable objects.
 Set callable import path under `dyn_conf.fn_path` (`module:function`) and
 optional kwargs under `dyn_conf.fn_kwargs`.
 When running an example/script directly, use `__main__:symbol_name` for
-`fn_path` (for example `__main__:vdp_state_map`).
+`fn_path` (for example `__main__:vdp_dynamics`).
 
 Example:
 

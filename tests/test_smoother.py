@@ -85,7 +85,7 @@ def test_constructor():
 
     model = XFADS(model_conf, jr.key(seed))
 
-    # Verify noise is on the model, not on state-map module
+    # Verify noise is on the model, not on the dynamics module
     assert model.noise_free is not None
     assert not hasattr(model.dynamics, "noise_free")
 
