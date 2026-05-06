@@ -4,14 +4,14 @@ from jax import numpy as jnp
 from jax import random as jr
 from omegaconf import OmegaConf
 
-import jaxfads.state_maps  # noqa: F401  (register built-in StateMap)
-import jaxfads.steppers  # noqa: F401  (register built-in Stepper)
-from jaxfads.base import StateMap, Stepper
+import jaxfads.dynamics  # noqa: F401  (register built-in Dynamics)
+import jaxfads.integrators  # noqa: F401  (register built-in Integrator)
+from jaxfads.base import Dynamics, Integrator
 
 
-def test_ou_state_map_registry_and_euler_step():
-    map_cls = StateMap.get_subclass("OUStateMap")
-    stepper_cls = Stepper.get_subclass("EulerStepper")
+def test_ou_dynamics_registry_and_euler_integrator():
+    dynamics_cls = Dynamics.get_subclass("OUDynamics")
+    integrator_cls = Integrator.get_subclass("EulerIntegrator")
 
     theta = 2.0
     dt = 0.1
@@ -29,21 +29,21 @@ def test_ou_state_map_registry_and_euler_step():
         )
     )
 
-    state_map = map_cls(conf, key=jr.key(0))
-    stepper = stepper_cls(conf)
+    dynamics = dynamics_cls(conf, key=jr.key(0))
+    integrator = integrator_cls(conf)
 
     z = jr.normal(jr.key(1), (state_dim,))
-    out = stepper.step(z, jnp.zeros((0,)), jnp.zeros((0,)), state_map)
+    out = integrator.step(z, jnp.zeros((0,)), jnp.zeros((0,)), dynamics)
 
-    expected = (1.0 - state_map.theta * dt) * z
+    expected = (1.0 - dynamics.theta * dt) * z
     chex.assert_trees_all_close(out, expected, atol=1e-6)
     chex.assert_shape(out, (state_dim,))
     chex.assert_tree_all_finite(out)
 
 
-def test_identity_state_map_registry_and_discrete_step():
-    map_cls = StateMap.get_subclass("IdentityStateMap")
-    stepper_cls = Stepper.get_subclass("DiscreteStepper")
+def test_identity_dynamics_registry_and_identity_integrator():
+    dynamics_cls = Dynamics.get_subclass("IdentityDynamics")
+    integrator_cls = Integrator.get_subclass("IdentityIntegrator")
 
     state_dim = 4
     conf = OmegaConf.create(
@@ -56,18 +56,18 @@ def test_identity_state_map_registry_and_discrete_step():
         )
     )
 
-    state_map = map_cls(conf, key=jr.key(0))
-    stepper = stepper_cls(conf)
+    dynamics = dynamics_cls(conf, key=jr.key(0))
+    integrator = integrator_cls(conf)
 
     z = jr.normal(jr.key(1), (state_dim,))
-    out = stepper.step(z, jnp.zeros((0,)), jnp.zeros((0,)), state_map)
+    out = integrator.step(z, jnp.zeros((0,)), jnp.zeros((0,)), dynamics)
 
     chex.assert_trees_all_close(out, z, atol=1e-6)
     chex.assert_shape(out, (state_dim,))
     chex.assert_tree_all_finite(out)
 
 
-def test_identity_state_map_rejects_continuous_system_type():
+def test_identity_dynamics_rejects_continuous_system_type():
     conf = OmegaConf.create(
         dict(
             state_dim=2,
@@ -79,6 +79,6 @@ def test_identity_state_map_rejects_continuous_system_type():
     )
 
     with pytest.raises(
-        ValueError, match="IdentityStateMap requires dyn_conf.system_type='discrete'."
+        ValueError, match="IdentityDynamics requires dyn_conf.system_type='discrete'."
     ):
-        StateMap.get_subclass("IdentityStateMap")(conf, key=jr.key(0))
+        Dynamics.get_subclass("IdentityDynamics")(conf, key=jr.key(0))

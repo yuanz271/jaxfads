@@ -8,7 +8,7 @@ from omegaconf import OmegaConf
 from jaxfads.smoother import XFADS
 from jaxfads.trainer import batch_loss
 import jaxfads.observations  # noqa: F401 — register GLM subclass
-from conftest import MockStateMap  # noqa: F401 - class registration side-effect
+from conftest import MockDynamics  # noqa: F401 - class registration side-effect
 
 
 @pytest.fixture
@@ -35,8 +35,8 @@ def model_conf():
             "mode": "smooth",
             "observation_dim": 10,
             "state_dim": 2,
-            "state_map": "MockStateMap",
-            "stepper": "DiscreteStepper",
+            "dynamics": "MockDynamics",
+            "integrator": "IdentityIntegrator",
             "approx": "MVN",
             "approx_kwargs": {},
             "mc_size": 1,

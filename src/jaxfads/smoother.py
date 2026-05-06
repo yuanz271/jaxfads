@@ -19,7 +19,7 @@ from jax import random as jrnd
 from gearax.modules import ConfModule, load_model, save_model
 from omegaconf import OmegaConf
 
-from . import core, distributions, encoders, observations, state_maps, steppers  # noqa: F401 — side-effect registers subclasses
+from . import core, distributions, dynamics, encoders, integrators, observations  # noqa: F401 — side-effect registers subclasses
 from .base import Approx
 from .base import Dynamics, Integrator
 from .base import Encoder, Observation
@@ -50,17 +50,17 @@ class XFADS(ConfModule):
         - mc_size: Number of Monte Carlo samples
         - approx: Exponential family approximation name (e.g. 'MVN')
         - approx_kwargs: Keyword arguments for approx instantiation
-        - state_map: State-map model type
-        - stepper: Stepper type
+        - dynamics: Dynamics model type
+        - integrator: Integrator type
         - obs_conf: Observation model config
         - mode: Inference mode ('filter', 'smooth', 'causal')
 
     Attributes
     ----------
-    state_map : StateMap
-        State-map model for latent dynamics.
-    stepper : Stepper
-        Numerical stepper used to evolve latent state.
+    dynamics : Dynamics
+        Dynamics model for latent evolution.
+    integrator : Integrator
+        Numerical integrator used to evolve latent state.
     observation : ObservationModel
         Observation model with likelihood and readout.
     alpha_encoder : AlphaEncoder
@@ -95,8 +95,8 @@ class XFADS(ConfModule):
     ...     'mc_size': 100,
     ...     'approx': 'MVN',
     ...     'approx_kwargs': {},
-    ...     'state_map': 'OUStateMap',
-    ...     'stepper': 'EulerStepper',
+    ...     'dynamics': 'OUDynamics',
+    ...     'integrator': 'EulerIntegrator',
     ...     'obs_conf': {
     ...         'model': 'GLM',
     ...         'likelihood': 'Poisson',
@@ -117,11 +117,8 @@ class XFADS(ConfModule):
     >>> natural, mean, prediction = model(t, y, u, c, key=key)
     """
 
-    state_map: Dynamics
-    stepper: Integrator
     dynamics: Dynamics
     integrator: Integrator
-    # backward: StateMap | None
     observation: Observation
     alpha_encoder: Callable
     beta_encoder: Callable | None
@@ -152,8 +149,8 @@ class XFADS(ConfModule):
 
         seed = self.conf.seed
         dropout = self.conf.dropout
-        dynamics_name = getattr(self.conf, "dynamics", None) or self.conf.state_map
-        integrator_name = getattr(self.conf, "integrator", None) or self.conf.stepper
+        dynamics_name = self.conf.dynamics
+        integrator_name = self.conf.integrator
 
         key = jrnd.key(seed)
 
@@ -185,10 +182,8 @@ class XFADS(ConfModule):
         )
 
         key, ky = jrnd.split(key)
-        self.state_map = Dynamics.get_subclass(dynamics_name)(dyn_conf, key=ky)
-        self.stepper = Integrator.get_subclass(integrator_name)(dyn_conf)
-        self.dynamics = self.state_map
-        self.integrator = self.stepper
+        self.dynamics = Dynamics.get_subclass(dynamics_name)(dyn_conf, key=ky)
+        self.integrator = Integrator.get_subclass(integrator_name)(dyn_conf)
 
         self.noise_free = self.approx.free_from_kw(scale=dyn_conf.state_noise)
 
@@ -236,13 +231,13 @@ class XFADS(ConfModule):
             self.beta_encoder = encoders.BetaEncoder(enc_conf, ky)
 
         # if "s" in static_params:
-        #     self.state_map.set_static()
+        #     self.dynamics.set_static()
 
         self.unconstrained_prior_natural = self.approx.free_from_kw(scale=1.0)
 
     def transition(self, z: Array, u: Array, c: Array, *, key=None) -> Array:
         """One-step latent transition composed from state map and stepper."""
-        return self.stepper.step(z, u, c, self.state_map, key=key)
+        return self.integrator.step(z, u, c, self.dynamics, key=key)
 
     def initialize(self, t, y, u, c):
         """

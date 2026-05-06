@@ -408,16 +408,10 @@ class Encoder(SubclassRegistryMixin, ConfModule):
         ...
 
 
-# Backward-compatible aliases.
-StateMap = Dynamics
-Stepper = Integrator
-
 __all__ = [
     "Approx",
     "Dynamics",
     "Integrator",
-    "StateMap",
-    "Stepper",
     "Observation",
     "Encoder",
 ]

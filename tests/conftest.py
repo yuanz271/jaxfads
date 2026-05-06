@@ -2,7 +2,7 @@ import pytest
 import equinox as eqx
 from jax import Array
 
-from jaxfads.base import Approx, StateMap
+from jaxfads.base import Approx, Dynamics
 from jaxfads.distributions import MVN
 
 _STATE_DIM = 2
@@ -40,7 +40,7 @@ def make_noise(approx: Approx, state_dim: int, cov: float = 1.0):
     return approx.canon_to_moment(approx.free_to_canon(approx.free_from_kw(scale=cov)))
 
 
-class MockStateMap(StateMap):
+class MockDynamics(Dynamics):
     """Mock dynamics — identity transition. Shared across test modules."""
 
     layer: eqx.Module | None

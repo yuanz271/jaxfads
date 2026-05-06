@@ -41,8 +41,8 @@ conf = OmegaConf.create(
         "mc_size": 4,
         "approx": "MVN",
         "approx_kwargs": {},
-        "state_map": "OUStateMap",       # or any dynamics model
-        "stepper": "EulerStepper",
+        "dynamics": "OUDynamics",       # or any dynamics model
+        "integrator": "EulerIntegrator",
         "dropout": 0.0,
         "dyn_conf": {
             "system_type": "continuous",
@@ -118,7 +118,7 @@ This freezes:
 - `observation.likelihood` — observation noise $\sigma^2$
 
 Trainable parameters are then only:
-- dynamics (`state_map`)
+- dynamics (`dynamics`)
 - state noise (`noise_free`)
 - encoders (`alpha_encoder`, `beta_encoder`)
 - prior (`unconstrained_prior_natural`)
@@ -239,12 +239,12 @@ Key differences from the `smooth` workflow:
 
 ### Identity baseline
 
-For PCA / NOFILT experiments, `IdentityStateMap` is a good null-dynamics
-baseline:
+For PCA / NOFILT experiments, `IdentityIntegrator` is a good no-op
+integrator for discrete-time dynamics:
 
 ```python
-"state_map": "IdentityStateMap",
-"stepper": "DiscreteStepper",
+"dynamics": "IdentityDynamics",
+"integrator": "IdentityIntegrator",
 "dyn_conf": {
     "system_type": "discrete",
     "state_noise": 1.0,

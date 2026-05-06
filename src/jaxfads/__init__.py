@@ -5,56 +5,28 @@ A JAX-based library for Bayesian state-space modeling using variational inferenc
 with exponential family approximations. XFADS implements flexible nonlinear
 dynamical systems with neural network parameterizations for dynamics,
 observations, and variational approximations.
-
-Notes
------
-XFADS provides a unified framework for Bayesian state-space modeling with:
-- Neural network parameterizations for dynamics and observations
-- Variational inference with exponential family approximations
-- Support for various observation models (Poisson, Gaussian)
-- Efficient JAX-based implementation with automatic differentiation
-
-Examples
---------
->>> import jax.random as jrnd
->>> from omegaconf import DictConfig
->>>
->>> # Create model configuration
->>> conf = DictConfig({
-...     'state_dim': 10,
-...     'observation_dim': 50,
-...     'mc_size': 100,
-...     'approx': 'MVN',
-...     'approx_kwargs': {},
-...     'state_map': 'OUStateMap',
-...     'stepper': 'EulerStepper',
-...     'obs_conf': {
-...         'model': 'GLM',
-...         'likelihood': 'Poisson',
-...         'cov': [1.0] * 50,
-...         'norm_readout': False,
-...     },
-...     'dyn_conf': {
-...         'system_type': 'continuous',
-...         'dt': 0.04,
-...         'theta': 2.0,
-...         'state_noise': 1.0,
-...         'input_dim': 1,
-...         'context_dim': 1,
-...     },
-... })
->>>
->>> # Initialize model
->>> key = jrnd.key(42)
->>> model = XFADS(conf, key)
 """
 
+from __future__ import annotations
+
+import sys
+
+from . import dynamics as _dynamics
+from . import integrators as _integrators
+from .dynamics import function as _dynamics_function
+from .dynamics import identity as _dynamics_identity
+from .dynamics import ou as _dynamics_ou
 from .logging import configure_logging
 from .smoother import XFADS
 from .trainer import train
 
-__all__ = [
-    "XFADS",
-    "train",
-    "configure_logging",
-]
+# Legacy import-path aliases. New public paths are `jaxfads.dynamics` and
+# `jaxfads.integrators`; older `state_maps` / `steppers` imports remain usable
+# during the deprecation window.
+sys.modules.setdefault(__name__ + ".state_maps", _dynamics)
+sys.modules.setdefault(__name__ + ".state_maps.identity", _dynamics_identity)
+sys.modules.setdefault(__name__ + ".state_maps.ou", _dynamics_ou)
+sys.modules.setdefault(__name__ + ".state_maps.function", _dynamics_function)
+sys.modules.setdefault(__name__ + ".steppers", _integrators)
+
+__all__ = ["XFADS", "train", "configure_logging"]

@@ -9,7 +9,7 @@ from jax import numpy as jnp
 from jax import random as jr
 from omegaconf import OmegaConf
 
-from jaxfads.state_maps import FunctionStateMap
+from jaxfads.dynamics import FunctionDynamics
 
 
 def plain_fn(z, u, c):
@@ -38,7 +38,7 @@ def test_function_state_map_accepts_plain_function():
     conf = OmegaConf.create(
         dict(system_type="discrete", fn_path=f"{_TEST_FN_MODULE}:plain_fn")
     )
-    sm = FunctionStateMap(conf, key=jr.key(0))
+    sm = FunctionDynamics(conf, key=jr.key(0))
 
     z = jnp.array([1.0, 2.0])
     u = jnp.array([0.5, 0.5])
@@ -55,7 +55,7 @@ def test_function_state_map_accepts_partial_and_key_callable():
             fn_kwargs=dict(gain=2.0),
         )
     )
-    sm = FunctionStateMap(conf, key=jr.key(0))
+    sm = FunctionDynamics(conf, key=jr.key(0))
 
     z = jnp.array([1.0, 2.0])
     u = jnp.array([0.5, 0.5])
@@ -72,7 +72,7 @@ def test_function_state_map_rejects_callable_object():
         )
     )
     try:
-        FunctionStateMap(conf, key=jr.key(0))
+        FunctionDynamics(conf, key=jr.key(0))
         raise AssertionError("Expected callable object rejection.")
     except TypeError:
         pass
@@ -82,7 +82,7 @@ def test_function_state_map_jit_smoke():
     conf = OmegaConf.create(
         dict(system_type="discrete", fn_path=f"{_TEST_FN_MODULE}:plain_fn")
     )
-    sm = FunctionStateMap(conf, key=jr.key(0))
+    sm = FunctionDynamics(conf, key=jr.key(0))
     z = jnp.array([1.0, 2.0])
     u = jnp.array([0.5, 0.5])
     c = jnp.array([0.1, 0.2])

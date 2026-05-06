@@ -7,7 +7,7 @@ from omegaconf import OmegaConf
 from jaxfads.trainer import train
 from jaxfads.smoother import XFADS
 import jaxfads.observations  # noqa: F401 — register GLM subclass
-from conftest import MockStateMap  # noqa: F401 - class registration side-effect
+from conftest import MockDynamics  # noqa: F401 - class registration side-effect
 
 
 @pytest.fixture
@@ -59,8 +59,8 @@ def model_conf():
             "mode": "smooth",
             "observation_dim": 10,
             "state_dim": 2,
-            "state_map": "MockStateMap",
-            "stepper": "DiscreteStepper",
+            "dynamics": "MockDynamics",
+            "integrator": "IdentityIntegrator",
             "approx": "MVN",
             "approx_kwargs": {},
             "mc_size": 1,
@@ -113,8 +113,8 @@ def test_train(model_conf, trainer_config, sample_data):
     # Basic checks that we got a model back
     assert trained_model is not None
     assert hasattr(trained_model, "conf")
-    assert hasattr(trained_model, "state_map")
-    assert hasattr(trained_model, "stepper")
+    assert hasattr(trained_model, "dynamics")
+    assert hasattr(trained_model, "integrator")
 
 
 def test_train_lora_rank1_end_to_end(trainer_config, sample_data):
@@ -124,8 +124,8 @@ def test_train_lora_rank1_end_to_end(trainer_config, sample_data):
             "mode": "smooth",
             "observation_dim": 10,
             "state_dim": 2,
-            "state_map": "MockStateMap",
-            "stepper": "DiscreteStepper",
+            "dynamics": "MockDynamics",
+            "integrator": "IdentityIntegrator",
             "approx": "MVN",
             "approx_kwargs": {"rank": 1},
             "mc_size": 2,

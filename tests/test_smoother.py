@@ -8,7 +8,7 @@ import equinox as eqx
 import pytest
 from jaxfads.base import Encoder
 from jaxfads.smoother import XFADS
-from conftest import MockStateMap  # noqa: F401 - class registration side-effect
+from conftest import MockDynamics  # noqa: F401 - class registration side-effect
 
 
 class IdentityEncoder(Encoder):
@@ -43,8 +43,8 @@ def test_constructor():
             mode="smooth",
             observation_dim=y_size,
             state_dim=z_size,
-            state_map="MockStateMap",
-            stepper="DiscreteStepper",
+            dynamics="MockDynamics",
+            integrator="IdentityIntegrator",
             approx="MVN",
             approx_kwargs={},
             mc_size=mc_size,
@@ -88,7 +88,7 @@ def test_constructor():
 
     # Verify noise is on the model, not on state-map module
     assert model.noise_free is not None
-    assert not hasattr(model.state_map, "noise_free")
+    assert not hasattr(model.dynamics, "noise_free")
 
     with TemporaryDirectory() as tmp_dir:
         path = Path(tmp_dir) / "model.zip"
@@ -109,7 +109,7 @@ def test_constructor_accepts_dynamics_and_integrator_keys():
             mode="smooth",
             observation_dim=y_size,
             state_dim=z_size,
-            dynamics="MockStateMap",
+            dynamics="MockDynamics",
             integrator="IdentityIntegrator",
             approx="MVN",
             approx_kwargs={"rank": 0},
@@ -141,8 +141,8 @@ def test_constructor_accepts_dynamics_and_integrator_keys():
     )
 
     model = XFADS(model_conf, jr.key(0))
-    assert model.dynamics is model.state_map
-    assert model.integrator is model.stepper
+    assert model.dynamics is not None
+    assert model.integrator is model.integrator
 
 
 def test_top_level_dims_override_subconfig_dims():
@@ -161,8 +161,8 @@ def test_top_level_dims_override_subconfig_dims():
             mode="smooth",
             observation_dim=y_size,
             state_dim=z_size,
-            state_map="MockStateMap",
-            stepper="DiscreteStepper",
+            dynamics="MockDynamics",
+            integrator="IdentityIntegrator",
             approx="MVN",
             approx_kwargs={},
             mc_size=2,
@@ -207,8 +207,8 @@ def test_top_level_dims_override_subconfig_dims():
     model = XFADS(model_conf, jr.key(seed))
 
     # Ensure merged sub-configs reflect the top-level dims.
-    assert int(model.state_map.conf.state_dim) == z_size
-    assert int(model.state_map.conf.observation_dim) == y_size
+    assert int(model.dynamics.conf.state_dim) == z_size
+    assert int(model.dynamics.conf.observation_dim) == y_size
     assert int(model.observation.conf.state_dim) == z_size
     assert int(model.observation.conf.observation_dim) == y_size
 
@@ -250,8 +250,8 @@ def test_mode_smoke_forward_pass(mode, approx_kwargs):
             mode=mode,
             observation_dim=y_size,
             state_dim=z_size,
-            state_map="MockStateMap",
-            stepper="DiscreteStepper",
+            dynamics="MockDynamics",
+            integrator="IdentityIntegrator",
             approx="MVN",
             approx_kwargs=approx_kwargs,
             mc_size=2,
@@ -312,8 +312,8 @@ def test_invalid_mode_error_lists_filter_smooth_causal():
             mode="unknown",
             observation_dim=y_size,
             state_dim=z_size,
-            state_map="MockStateMap",
-            stepper="DiscreteStepper",
+            dynamics="MockDynamics",
+            integrator="IdentityIntegrator",
             approx="MVN",
             approx_kwargs={},
             mc_size=2,
@@ -365,8 +365,8 @@ def test_filter_mode_skips_beta_encoder():
             mode="filter",
             observation_dim=y_size,
             state_dim=z_size,
-            state_map="MockStateMap",
-            stepper="DiscreteStepper",
+            dynamics="MockDynamics",
+            integrator="IdentityIntegrator",
             approx="MVN",
             approx_kwargs={},
             mc_size=2,
@@ -427,8 +427,8 @@ def test_xfads_nofilt_mode():
             mode="nofilt",
             observation_dim=y_size,
             state_dim=z_size,
-            state_map="MockStateMap",
-            stepper="DiscreteStepper",
+            dynamics="MockDynamics",
+            integrator="IdentityIntegrator",
             approx="MVN",
             approx_kwargs={},
             mc_size=2,

@@ -1,7 +1,7 @@
-# Writing Custom State Maps and Steppers
+# Writing Custom Dynamics and Integrators
 
 This guide explains how latent dynamics are defined in XFADS after the
-`StateMap + Stepper` refactor.
+`Dynamics + Integrator` refactor.
 
 See also: [Quickstart](quickstart.md), [Training](training.md),
 [Algorithm](algorithm.md).
@@ -11,27 +11,30 @@ See also: [Quickstart](quickstart.md), [Training](training.md),
 XFADS composes latent transition updates as:
 
 ```
-z_{t+1} = Stepper(StateMap, z_t, u_t, c_t)
+z_{t+1} = Integrator(Dynamics, z_t, u_t, c_t)
 ```
 
-- `StateMap` defines the system map.
-- `Stepper` defines how one-step updates are produced.
+- `Dynamics` defines the system map.
+- `Integrator` defines how one-step updates are produced.
 - Process noise remains owned by `XFADS` (`dyn_conf.state_noise`).
+
+For discrete-time systems, use an `IdentityIntegrator` (no-op integrator) and
+let `Dynamics.eval(...)` return `z_{t+1}` directly.
 
 ## System Types
 
 Set `dyn_conf.system_type` to choose semantics:
 
-- `continuous`: `StateMap.eval(...)` returns `dz/dt`.
-- `discrete`: `StateMap.eval(...)` returns `z_{t+1}` directly.
+- `continuous`: `Dynamics.eval(...)` returns `dz/dt`.
+- `discrete`: `Dynamics.eval(...)` returns `z_{t+1}` directly.
 
-## Minimal StateMap Example
+## Minimal Dynamics Example
 
 ```python
-from jaxfads.base import StateMap
+from jaxfads.base import Dynamics
 
 
-class MyStateMap(StateMap):
+class MyDynamics(Dynamics):
     def __init__(self, conf, key):
         self.conf = conf
 
@@ -39,19 +42,19 @@ class MyStateMap(StateMap):
         return z
 ```
 
-## Built-in Steppers
+## Built-in Integrators
 
-- `EulerStepper` (continuous, requires `dyn_conf.dt`)
-- `RK4Stepper` (continuous, requires `dyn_conf.dt`)
-- `DiscreteStepper` (discrete, no `dt`)
+- `IdentityIntegrator` (discrete, no `dt`)
+- `EulerIntegrator` (continuous, requires `dyn_conf.dt`)
+- `RK4Integrator` (continuous, requires `dyn_conf.dt`)
 
-## Built-in StateMap
+## Built-in Dynamics
 
-- `IdentityStateMap`: discrete random-walk mean map `z_{t+1} = z_t`
-- `OUStateMap`: continuous OU drift map `dz/dt = -theta * z`
-- `FunctionStateMap`: wraps a non-trainable callable
+- `IdentityDynamics`: discrete random-walk mean map `z_{t+1} = z_t`
+- `OUDynamics`: continuous OU drift map `dz/dt = -theta * z`
+- `FunctionDynamics`: wraps a non-trainable callable
 
-`FunctionStateMap` only accepts:
+`FunctionDynamics` only accepts:
 - plain Python functions (including lambdas bound to module-level names)
 - bound methods
 - `functools.partial` of the above
@@ -65,8 +68,8 @@ When running an example/script directly, use `__main__:symbol_name` for
 Example:
 
 ```yaml
-state_map: FunctionStateMap
-stepper: DiscreteStepper
+dynamics: FunctionDynamics
+integrator: IdentityIntegrator
 
 dyn_conf:
   system_type: discrete
@@ -80,8 +83,8 @@ dyn_conf:
 ## Configuration Example (Continuous)
 
 ```yaml
-state_map: OUStateMap
-stepper: EulerStepper
+dynamics: OUDynamics
+integrator: EulerIntegrator
 
 dyn_conf:
   system_type: continuous
@@ -95,8 +98,8 @@ dyn_conf:
 ## Configuration Example (Identity / random-walk baseline)
 
 ```yaml
-state_map: IdentityStateMap
-stepper: DiscreteStepper
+dynamics: IdentityDynamics
+integrator: IdentityIntegrator
 
 dyn_conf:
   system_type: discrete
@@ -111,8 +114,8 @@ Use this as the weakest built-in dynamics prior when you want
 ## Configuration Example (Discrete custom map)
 
 ```yaml
-state_map: MyStateMap
-stepper: DiscreteStepper
+dynamics: MyDynamics
+integrator: IdentityIntegrator
 
 dyn_conf:
   system_type: discrete
@@ -123,5 +126,5 @@ dyn_conf:
 
 ## Registration
 
-Both `StateMap` and `Stepper` subclasses are registered by class name.
+Both `Dynamics` and `Integrator` subclasses are registered by class name.
 Ensure custom modules are imported before constructing `XFADS`.

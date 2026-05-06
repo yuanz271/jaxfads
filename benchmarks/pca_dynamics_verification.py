@@ -20,7 +20,7 @@ from omegaconf import OmegaConf
 import tensorflow_probability.substrates.jax.distributions as tfp
 
 from jaxfads import XFADS
-from jaxfads.base import Encoder, Observation, Approx, StateMap
+from jaxfads.base import Encoder, Observation, Approx, Dynamics
 from jaxfads.distributions import MVN
 from jaxfads.trainer import train
 
@@ -72,7 +72,7 @@ class PCAObservation(Observation):
         return self
 
 
-class LinearStateMap(StateMap):
+class LinearDynamics(Dynamics):
     """Learnable linear discrete map: z_t = W @ z_{t-1}."""
 
     W: jax.Array
@@ -191,8 +191,8 @@ def nofilt_training_comparison():
             "mc_size": 8,
             "approx": "MVN",
             "approx_kwargs": {},
-            "state_map": "LinearStateMap",
-            "stepper": "DiscreteStepper",
+            "dynamics": "LinearDynamics",
+            "integrator": "IdentityIntegrator",
             "dropout": 0.0,
             "nofilt_eps": 1e-6,
             "dyn_conf": {
