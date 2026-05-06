@@ -5,8 +5,13 @@ Preferred import path for built-in dynamics classes.
 
 from __future__ import annotations
 
-from .function import FunctionDynamics
+import sys
+
+from . import functional as _functional
+from .functional import FunctionalDynamics, FunctionDynamics
 from .identity import IdentityDynamics
 from .ou import OUDynamics
 
-__all__ = ["IdentityDynamics", "OUDynamics", "FunctionDynamics"]
+sys.modules.setdefault(__name__ + ".function", _functional)
+
+__all__ = ["IdentityDynamics", "OUDynamics", "FunctionalDynamics", "FunctionDynamics"]

@@ -1,4 +1,4 @@
-"""Function-backed non-trainable dynamics."""
+"""Functional non-trainable dynamics."""
 
 from __future__ import annotations
 
@@ -41,25 +41,25 @@ def _accepts_key_kwarg(fn: Callable[..., Any]) -> bool:
 def _resolve_from_path(fn_path: str) -> Callable[..., Array]:
     if ":" not in fn_path:
         raise ValueError(
-            "FunctionDynamics expects dyn_conf.fn_path in 'module:function' format."
+            "FunctionalDynamics expects dyn_conf.fn_path in 'module:function' format."
         )
     module_name, symbol_name = fn_path.split(":", 1)
     if not module_name or not symbol_name:
         raise ValueError(
-            "FunctionDynamics expects dyn_conf.fn_path in 'module:function' format."
+            "FunctionalDynamics expects dyn_conf.fn_path in 'module:function' format."
         )
     module = importlib.import_module(module_name)
     try:
         fn = getattr(module, symbol_name)
     except AttributeError as e:
         raise ValueError(
-            f"FunctionDynamics could not find symbol '{symbol_name}' in module "
+            f"FunctionalDynamics could not find symbol '{symbol_name}' in module "
             f"'{module_name}'."
         ) from e
     return fn
 
 
-class FunctionDynamics(Dynamics):
+class FunctionalDynamics(Dynamics):
     """Wrap a plain Python function/method/partial as a non-trainable map."""
 
     fn: Callable[..., Array]
@@ -71,7 +71,7 @@ class FunctionDynamics(Dynamics):
         fn_path = getattr(conf, "fn_path", None)
         if fn_path is None:
             raise ValueError(
-                "FunctionDynamics requires `dyn_conf.fn_path` "
+                "FunctionalDynamics requires `dyn_conf.fn_path` "
                 "(format: 'module:function')."
             )
         fn = _resolve_from_path(str(fn_path))
@@ -80,7 +80,7 @@ class FunctionDynamics(Dynamics):
             fn = functools.partial(fn, **dict(fn_kwargs))
         if not _is_plain_function_or_method(fn):
             raise TypeError(
-                "FunctionDynamics expects a plain Python function, method, "
+                "FunctionalDynamics expects a plain Python function, method, "
                 "or functools.partial of one."
             )
         self.fn = fn
@@ -92,4 +92,8 @@ class FunctionDynamics(Dynamics):
         return self.fn(z, u, c)
 
 
-__all__ = ["FunctionDynamics"]
+# Backward-compatible alias.
+FunctionDynamics = FunctionalDynamics
+Dynamics._subclasses["FunctionDynamics"] = FunctionalDynamics
+
+__all__ = ["FunctionalDynamics", "FunctionDynamics"]

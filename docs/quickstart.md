@@ -95,7 +95,7 @@ natural_params, moment_params, predictions = trained(
 
 ## Common Pitfalls
 
-1. `FunctionDynamics` import path must be importable:
+1. `FunctionalDynamics` import path must be importable:
    use `dyn_conf.fn_path="module:function"`.
 1. If running a script directly, use `__main__:symbol_name` in `fn_path`.
 1. `batch_size` must be divisible by the number of JAX devices.

@@ -102,7 +102,7 @@ def main() -> None:
         mode="smooth",
         observation_dim=args.obs_dim,
         state_dim=args.state_dim,
-        dynamics="FunctionDynamics",
+        dynamics="FunctionalDynamics",
         integrator="RK4Integrator",
         seed=0,
         n_steps=args.n_steps,

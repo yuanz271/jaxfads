@@ -174,7 +174,7 @@ def main() -> None:
                         "mode": "smooth",
                         "observation_dim": args.obs_dim,
                         "state_dim": dim,
-                        "dynamics": "FunctionDynamics",
+                        "dynamics": "FunctionalDynamics",
                         "integrator": "RK4Integrator",
                         "approx": approx_name,
                         "approx_kwargs": approx_kwargs,

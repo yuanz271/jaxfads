@@ -4,7 +4,7 @@ Three cases:
 
 1. **MLPDynamics** — trainable MLP learns continuous-time dynamics, stepped with RK4.
 2. **OUDynamics** — built-in tracking prior drift.
-3. **Low-rank MVN + FunctionDynamics** — low-rank pseudo-observation encoder updates
+3. **Low-rank MVN + FunctionalDynamics** — low-rank pseudo-observation encoder updates
    (paper Eq. 19–21), using a declarative function-backed Van der Pol map.
 
 All use Factor Analysis readout initialisation. Evaluation uses Procrustes
@@ -89,7 +89,7 @@ def vdp_state_map(
     mu: float,
     key: jax.Array | None = None,
 ) -> jax.Array:
-    """FunctionDynamics-compatible Van der Pol continuous-time map."""
+    """FunctionalDynamics-compatible Van der Pol continuous-time map."""
     del u, c, key
     return vdp_rhs(z, mu)
 
@@ -672,10 +672,10 @@ def main() -> None:
     )
 
     # ===================================================================
-    # Case 3: Low-rank encoder updates + declarative FunctionDynamics
+    # Case 3: Low-rank encoder updates + declarative FunctionalDynamics
     # ===================================================================
     print("\n" + "=" * 60)
-    print("Case 3: Low-rank MVN + FunctionDynamics")
+    print("Case 3: Low-rank MVN + FunctionalDynamics")
     print("=" * 60)
 
     conf3 = OmegaConf.create(
@@ -683,7 +683,7 @@ def main() -> None:
             **shared_conf,
             "approx": "MVN",
             "approx_kwargs": {"rank": 1},
-            "dynamics": "FunctionDynamics",
+            "dynamics": "FunctionalDynamics",
             "integrator": "RK4Integrator",
             "mc_size": 4,
             "dyn_conf": dict(

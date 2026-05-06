@@ -52,9 +52,9 @@ class MyDynamics(Dynamics):
 
 - `IdentityDynamics`: discrete random-walk mean map `z_{t+1} = z_t`
 - `OUDynamics`: continuous OU drift map `dz/dt = -theta * z`
-- `FunctionDynamics`: wraps a non-trainable callable
+- `FunctionalDynamics`: wraps a non-trainable callable
 
-`FunctionDynamics` only accepts:
+`FunctionalDynamics` only accepts:
 - plain Python functions (including lambdas bound to module-level names)
 - bound methods
 - `functools.partial` of the above
@@ -68,7 +68,7 @@ When running an example/script directly, use `__main__:symbol_name` for
 Example:
 
 ```yaml
-dynamics: FunctionDynamics
+dynamics: FunctionalDynamics
 integrator: IdentityIntegrator
 
 dyn_conf:
