@@ -7,7 +7,7 @@ from jax import Array
 from ..base import Dynamics
 
 
-class IdentityDynamics(Dynamics):
+class Identity(Dynamics):
     """Discrete random-walk mean dynamics: ``z_{t+1} = z_t + noise``.
 
     This dynamics contributes the deterministic identity mean map
@@ -24,9 +24,7 @@ class IdentityDynamics(Dynamics):
         del key
         self.conf = conf
         if str(conf.system_type) != "discrete":
-            raise ValueError(
-                "IdentityDynamics requires dyn_conf.system_type='discrete'."
-            )
+            raise ValueError("Identity requires dyn_conf.system_type='discrete'.")
 
     def eval(self, z: Array, u: Array, c: Array, *, key=None) -> Array:
         """Discrete identity mean map: ``f(z_t) = z_t``."""
@@ -34,4 +32,7 @@ class IdentityDynamics(Dynamics):
         return z
 
 
-__all__ = ["IdentityDynamics"]
+IdentityDynamics = Identity
+Dynamics._subclasses["IdentityDynamics"] = Identity
+
+__all__ = ["Identity", "IdentityDynamics"]

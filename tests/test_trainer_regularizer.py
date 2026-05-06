@@ -36,7 +36,7 @@ def model_conf():
             "observation_dim": 10,
             "state_dim": 2,
             "dynamics": "MockDynamics",
-            "integrator": "IdentityIntegrator",
+            "integrator": "Identity",
             "approx": "MVN",
             "approx_kwargs": {},
             "mc_size": 1,

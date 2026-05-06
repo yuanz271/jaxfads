@@ -95,8 +95,8 @@ class XFADS(ConfModule):
     ...     'mc_size': 100,
     ...     'approx': 'MVN',
     ...     'approx_kwargs': {},
-    ...     'dynamics': 'OUDynamics',
-    ...     'integrator': 'EulerIntegrator',
+    ...     'dynamics': 'OU',
+    ...     'integrator': 'Euler',
     ...     'obs_conf': {
     ...         'model': 'GLM',
     ...         'likelihood': 'Poisson',

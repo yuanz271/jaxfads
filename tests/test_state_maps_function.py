@@ -9,7 +9,7 @@ from jax import numpy as jnp
 from jax import random as jr
 from omegaconf import OmegaConf
 
-from jaxfads.dynamics import FunctionalDynamics
+from jaxfads.dynamics import Functional
 
 
 def plain_fn(z, u, c):
@@ -34,11 +34,11 @@ _mod.CallableObject = CallableObject
 sys.modules[_TEST_FN_MODULE] = _mod
 
 
-def test_function_state_map_accepts_plain_function():
+def test_functional_accepts_plain_function():
     conf = OmegaConf.create(
         dict(system_type="discrete", fn_path=f"{_TEST_FN_MODULE}:plain_fn")
     )
-    sm = FunctionalDynamics(conf, key=jr.key(0))
+    sm = Functional(conf, key=jr.key(0))
 
     z = jnp.array([1.0, 2.0])
     u = jnp.array([0.5, 0.5])
@@ -47,7 +47,7 @@ def test_function_state_map_accepts_plain_function():
     chex.assert_trees_all_close(out, z + u - c, atol=1e-7)
 
 
-def test_function_state_map_accepts_partial_and_key_callable():
+def test_functional_accepts_partial_and_key_callable():
     conf = OmegaConf.create(
         dict(
             system_type="continuous",
@@ -55,7 +55,7 @@ def test_function_state_map_accepts_partial_and_key_callable():
             fn_kwargs=dict(gain=2.0),
         )
     )
-    sm = FunctionalDynamics(conf, key=jr.key(0))
+    sm = Functional(conf, key=jr.key(0))
 
     z = jnp.array([1.0, 2.0])
     u = jnp.array([0.5, 0.5])
@@ -64,7 +64,7 @@ def test_function_state_map_accepts_partial_and_key_callable():
     chex.assert_trees_all_close(out, z + 2.0 * u + c, atol=1e-7)
 
 
-def test_function_state_map_rejects_callable_object():
+def test_functional_rejects_callable_object():
     conf = OmegaConf.create(
         dict(
             system_type="discrete",
@@ -72,17 +72,17 @@ def test_function_state_map_rejects_callable_object():
         )
     )
     try:
-        FunctionalDynamics(conf, key=jr.key(0))
+        Functional(conf, key=jr.key(0))
         raise AssertionError("Expected callable object rejection.")
     except TypeError:
         pass
 
 
-def test_function_state_map_jit_smoke():
+def test_functional_jit_smoke():
     conf = OmegaConf.create(
         dict(system_type="discrete", fn_path=f"{_TEST_FN_MODULE}:plain_fn")
     )
-    sm = FunctionalDynamics(conf, key=jr.key(0))
+    sm = Functional(conf, key=jr.key(0))
     z = jnp.array([1.0, 2.0])
     u = jnp.array([0.5, 0.5])
     c = jnp.array([0.1, 0.2])

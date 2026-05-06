@@ -30,7 +30,7 @@ from jaxfads.vi import elbo
 # -----------------------------------------------------------------------------
 
 
-class _IdentityDynamics(Dynamics):
+class _Identity(Dynamics):
     def __init__(self, state_dim: int):
         self.conf = SimpleNamespace(state_dim=state_dim)
 
@@ -45,8 +45,8 @@ class _DummyModel:
     def __init__(self, approx, state_dim: int, mc_size: int = 1, cov: float = 1.0):
         self.approx = approx
         self.conf = SimpleNamespace(mc_size=mc_size)
-        self.transition = _IdentityDynamics(state_dim)
-        self.backward = _IdentityDynamics(state_dim)
+        self.transition = _Identity(state_dim)
+        self.backward = _Identity(state_dim)
         self.noise_free = approx.free_from_kw(scale=cov)
 
     def prior_natural(self):

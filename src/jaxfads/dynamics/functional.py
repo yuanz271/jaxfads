@@ -41,25 +41,24 @@ def _accepts_key_kwarg(fn: Callable[..., Any]) -> bool:
 def _resolve_from_path(fn_path: str) -> Callable[..., Array]:
     if ":" not in fn_path:
         raise ValueError(
-            "FunctionalDynamics expects dyn_conf.fn_path in 'module:function' format."
+            "Functional expects dyn_conf.fn_path in 'module:function' format."
         )
     module_name, symbol_name = fn_path.split(":", 1)
     if not module_name or not symbol_name:
         raise ValueError(
-            "FunctionalDynamics expects dyn_conf.fn_path in 'module:function' format."
+            "Functional expects dyn_conf.fn_path in 'module:function' format."
         )
     module = importlib.import_module(module_name)
     try:
         fn = getattr(module, symbol_name)
     except AttributeError as e:
         raise ValueError(
-            f"FunctionalDynamics could not find symbol '{symbol_name}' in module "
-            f"'{module_name}'."
+            f"Functional could not find symbol '{symbol_name}' in module '{module_name}'."
         ) from e
     return fn
 
 
-class FunctionalDynamics(Dynamics):
+class Functional(Dynamics):
     """Wrap a plain Python function/method/partial as a non-trainable map."""
 
     fn: Callable[..., Array]
@@ -71,7 +70,7 @@ class FunctionalDynamics(Dynamics):
         fn_path = getattr(conf, "fn_path", None)
         if fn_path is None:
             raise ValueError(
-                "FunctionalDynamics requires `dyn_conf.fn_path` "
+                "Functional requires `dyn_conf.fn_path` "
                 "(format: 'module:function')."
             )
         fn = _resolve_from_path(str(fn_path))
@@ -80,7 +79,7 @@ class FunctionalDynamics(Dynamics):
             fn = functools.partial(fn, **dict(fn_kwargs))
         if not _is_plain_function_or_method(fn):
             raise TypeError(
-                "FunctionalDynamics expects a plain Python function, method, "
+                "Functional expects a plain Python function, method, "
                 "or functools.partial of one."
             )
         self.fn = fn
@@ -93,7 +92,7 @@ class FunctionalDynamics(Dynamics):
 
 
 # Backward-compatible alias.
-FunctionDynamics = FunctionalDynamics
-Dynamics._subclasses["FunctionDynamics"] = FunctionalDynamics
+FunctionDynamics = Functional
+Dynamics._subclasses["FunctionDynamics"] = Functional
 
-__all__ = ["FunctionalDynamics", "FunctionDynamics"]
+__all__ = ["Functional", "FunctionDynamics"]

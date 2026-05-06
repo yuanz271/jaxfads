@@ -192,7 +192,7 @@ def nofilt_training_comparison():
             "approx": "MVN",
             "approx_kwargs": {},
             "dynamics": "LinearDynamics",
-            "integrator": "IdentityIntegrator",
+            "integrator": "Identity",
             "dropout": 0.0,
             "nofilt_eps": 1e-6,
             "dyn_conf": {

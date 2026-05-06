@@ -18,7 +18,7 @@ z_{t+1} = Integrator(Dynamics, z_t, u_t, c_t)
 - `Integrator` defines how one-step updates are produced.
 - Process noise remains owned by `XFADS` (`dyn_conf.state_noise`).
 
-For discrete-time systems, use an `IdentityIntegrator` (no-op integrator) and
+For discrete-time systems, use an `Identity` (no-op integrator) and
 let `Dynamics.eval(...)` return `z_{t+1}` directly.
 
 ## System Types
@@ -44,17 +44,17 @@ class MyDynamics(Dynamics):
 
 ## Built-in Integrators
 
-- `IdentityIntegrator` (discrete, no `dt`)
-- `EulerIntegrator` (continuous, requires `dyn_conf.dt`)
-- `RK4Integrator` (continuous, requires `dyn_conf.dt`)
+- `Identity` (discrete, no `dt`)
+- `Euler` (continuous, requires `dyn_conf.dt`)
+- `RK4` (continuous, requires `dyn_conf.dt`)
 
 ## Built-in Dynamics
 
-- `IdentityDynamics`: discrete random-walk mean map `z_{t+1} = z_t`
-- `OUDynamics`: continuous OU drift map `dz/dt = -theta * z`
-- `FunctionalDynamics`: wraps a non-trainable callable
+- `Identity`: discrete random-walk mean map `z_{t+1} = z_t`
+- `OU`: continuous OU drift map `dz/dt = -theta * z`
+- `Functional`: wraps a non-trainable callable
 
-`FunctionalDynamics` only accepts:
+`Functional` only accepts:
 - plain Python functions (including lambdas bound to module-level names)
 - bound methods
 - `functools.partial` of the above
@@ -68,8 +68,8 @@ When running an example/script directly, use `__main__:symbol_name` for
 Example:
 
 ```yaml
-dynamics: FunctionalDynamics
-integrator: IdentityIntegrator
+dynamics: Functional
+integrator: Identity
 
 dyn_conf:
   system_type: discrete
@@ -83,8 +83,8 @@ dyn_conf:
 ## Configuration Example (Continuous)
 
 ```yaml
-dynamics: OUDynamics
-integrator: EulerIntegrator
+dynamics: OU
+integrator: Euler
 
 dyn_conf:
   system_type: continuous
@@ -98,8 +98,8 @@ dyn_conf:
 ## Configuration Example (Identity / random-walk baseline)
 
 ```yaml
-dynamics: IdentityDynamics
-integrator: IdentityIntegrator
+dynamics: Identity
+integrator: Identity
 
 dyn_conf:
   system_type: discrete
@@ -115,7 +115,7 @@ Use this as the weakest built-in dynamics prior when you want
 
 ```yaml
 dynamics: MyDynamics
-integrator: IdentityIntegrator
+integrator: Identity
 
 dyn_conf:
   system_type: discrete

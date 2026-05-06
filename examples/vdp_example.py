@@ -3,8 +3,8 @@
 Three cases:
 
 1. **MLPDynamics** — trainable MLP learns continuous-time dynamics, stepped with RK4.
-2. **OUDynamics** — built-in tracking prior drift.
-3. **Low-rank MVN + FunctionalDynamics** — low-rank pseudo-observation encoder updates
+2. **OU** — built-in tracking prior drift.
+3. **Low-rank MVN + Functional** — low-rank pseudo-observation encoder updates
    (paper Eq. 19–21), using a declarative function-backed Van der Pol map.
 
 All use Factor Analysis readout initialisation. Evaluation uses Procrustes
@@ -89,7 +89,7 @@ def vdp_state_map(
     mu: float,
     key: jax.Array | None = None,
 ) -> jax.Array:
-    """FunctionalDynamics-compatible Van der Pol continuous-time map."""
+    """Functional-compatible Van der Pol continuous-time map."""
     del u, c, key
     return vdp_rhs(z, mu)
 
@@ -555,7 +555,7 @@ def main() -> None:
         {
             **shared_conf,
             "dynamics": "MLPDynamics",
-            "integrator": "RK4Integrator",
+            "integrator": "RK4",
             "mc_size": 4,
             "dyn_conf": dict(
                 input_dim=0,
@@ -609,17 +609,17 @@ def main() -> None:
     )
 
     # ===================================================================
-    # Case 2: OUDynamics (diffusion-style tracking prior)
+    # Case 2: OU (diffusion-style tracking prior)
     # ===================================================================
     print("\n" + "=" * 60)
-    print("Case 2: OUDynamics (diffusion-style tracking prior)")
+    print("Case 2: OU (diffusion-style tracking prior)")
     print("=" * 60)
 
     conf2 = OmegaConf.create(
         {
             **shared_conf,
-            "dynamics": "OUDynamics",
-            "integrator": "EulerIntegrator",
+            "dynamics": "OU",
+            "integrator": "Euler",
             "mc_size": 4,
             "dyn_conf": dict(
                 input_dim=0,
@@ -638,7 +638,7 @@ def main() -> None:
 
     key, k = jr.split(key)
     r2 = evaluate(
-        "OUDynamics",
+        "OU",
         trained2,
         latent_states,
         observations,
@@ -672,10 +672,10 @@ def main() -> None:
     )
 
     # ===================================================================
-    # Case 3: Low-rank encoder updates + declarative FunctionalDynamics
+    # Case 3: Low-rank encoder updates + declarative Functional
     # ===================================================================
     print("\n" + "=" * 60)
-    print("Case 3: Low-rank MVN + FunctionalDynamics")
+    print("Case 3: Low-rank MVN + Functional")
     print("=" * 60)
 
     conf3 = OmegaConf.create(
@@ -683,8 +683,8 @@ def main() -> None:
             **shared_conf,
             "approx": "MVN",
             "approx_kwargs": {"rank": 1},
-            "dynamics": "FunctionalDynamics",
-            "integrator": "RK4Integrator",
+            "dynamics": "Functional",
+            "integrator": "RK4",
             "mc_size": 4,
             "dyn_conf": dict(
                 input_dim=0,
@@ -754,7 +754,7 @@ def main() -> None:
     print(f"Summary  (Procrustes-aligned; obs noise σ = {sigma_obs})")
     print("=" * 74)
     header = (
-        f"{'Metric':<30s} {'MLPDynamics':>14s} {'OUDynamics':>14s} {'LowRank':>14s}"
+        f"{'Metric':<30s} {'MLPDynamics':>14s} {'OU':>14s} {'LowRank':>14s}"
     )
     print(header)
     print("-" * len(header))

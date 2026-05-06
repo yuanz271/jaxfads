@@ -26,8 +26,8 @@ conf = OmegaConf.create(
         "mc_size": 4,
         "approx": "MVN",
         "approx_kwargs": {},  # rank defaults to state_dim (full); use {"rank": r} for low-rank
-        "dynamics": "OUDynamics",
-        "integrator": "EulerIntegrator",
+        "dynamics": "OU",
+        "integrator": "Euler",
         "dyn_conf": {
             "system_type": "continuous",
             "theta": 2.0,
@@ -87,15 +87,15 @@ natural_params, moment_params, predictions = trained(
 | `mode` | `smooth` | Default offline smoothing-style inference (`alpha + beta`). |
 | `mode` | `causal` | Need Eq. 29-style causal recursion with smoothing reconstruction. |
 | `mode` | `nofilt` | Posterior set by custom encoder (e.g. pretrained DR); no filtering recursion. |
-| `dynamics` | `IdentityDynamics` | Need a null/random-walk dynamics prior `z_{t+1}=z_t+noise`. |
-| `integrator` | `IdentityIntegrator` | Discrete-time map already returns `z_{t+1}`. |
-| `integrator` | `EulerIntegrator` | Continuous-time map, faster/rougher integration. |
-| `integrator` | `RK4Integrator` | Continuous-time map, better local accuracy than Euler. |
+| `dynamics` | `Identity` | Need a null/random-walk dynamics prior `z_{t+1}=z_t+noise`. |
+| `integrator` | `Identity` | Discrete-time map already returns `z_{t+1}`. |
+| `integrator` | `Euler` | Continuous-time map, faster/rougher integration. |
+| `integrator` | `RK4` | Continuous-time map, better local accuracy than Euler. |
 | `approx` | `MVN` | Gaussian approximation. Use `approx_kwargs={"rank": r}` for low-rank. |
 
 ## Common Pitfalls
 
-1. `FunctionalDynamics` import path must be importable:
+1. `Functional` import path must be importable:
    use `dyn_conf.fn_path="module:function"`.
 1. If running a script directly, use `__main__:symbol_name` in `fn_path`.
 1. `batch_size` must be divisible by the number of JAX devices.

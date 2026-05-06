@@ -41,8 +41,8 @@ conf = OmegaConf.create(
         "mc_size": 4,
         "approx": "MVN",
         "approx_kwargs": {},
-        "dynamics": "OUDynamics",       # or any dynamics model
-        "integrator": "EulerIntegrator",
+        "dynamics": "OU",       # or any dynamics model
+        "integrator": "Euler",
         "dropout": 0.0,
         "dyn_conf": {
             "system_type": "continuous",
@@ -239,12 +239,12 @@ Key differences from the `smooth` workflow:
 
 ### Identity baseline
 
-For PCA / NOFILT experiments, `IdentityIntegrator` is a good no-op
+For PCA / NOFILT experiments, `Identity` is a good no-op
 integrator for discrete-time dynamics:
 
 ```python
-"dynamics": "IdentityDynamics",
-"integrator": "IdentityIntegrator",
+"dynamics": "Identity",
+"integrator": "Identity",
 "dyn_conf": {
     "system_type": "discrete",
     "state_noise": 1.0,

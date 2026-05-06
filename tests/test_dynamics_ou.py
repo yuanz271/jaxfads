@@ -10,8 +10,8 @@ from jaxfads.base import Dynamics, Integrator
 
 
 def test_ou_dynamics_registry_and_euler_integrator():
-    dynamics_cls = Dynamics.get_subclass("OUDynamics")
-    integrator_cls = Integrator.get_subclass("EulerIntegrator")
+    dynamics_cls = Dynamics.get_subclass("OU")
+    integrator_cls = Integrator.get_subclass("Euler")
 
     theta = 2.0
     dt = 0.1
@@ -42,8 +42,8 @@ def test_ou_dynamics_registry_and_euler_integrator():
 
 
 def test_identity_dynamics_registry_and_identity_integrator():
-    dynamics_cls = Dynamics.get_subclass("IdentityDynamics")
-    integrator_cls = Integrator.get_subclass("IdentityIntegrator")
+    dynamics_cls = Dynamics.get_subclass("Identity")
+    integrator_cls = Integrator.get_subclass("Identity")
 
     state_dim = 4
     conf = OmegaConf.create(
@@ -79,6 +79,6 @@ def test_identity_dynamics_rejects_continuous_system_type():
     )
 
     with pytest.raises(
-        ValueError, match="IdentityDynamics requires dyn_conf.system_type='discrete'."
+        ValueError, match="Identity requires dyn_conf.system_type='discrete'."
     ):
-        Dynamics.get_subclass("IdentityDynamics")(conf, key=jr.key(0))
+        Dynamics.get_subclass("Identity")(conf, key=jr.key(0))

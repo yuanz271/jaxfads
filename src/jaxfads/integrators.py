@@ -16,18 +16,16 @@ def _has_attr(conf, name: str) -> bool:
         return False
 
 
-class EulerIntegrator(Integrator):
+class Euler(Integrator):
     """Forward-Euler integrator for continuous-time dynamics."""
 
     dt: float
 
     def __init__(self, conf):
         if str(conf.system_type) != "continuous":
-            raise ValueError(
-                "EulerIntegrator requires dyn_conf.system_type='continuous'."
-            )
+            raise ValueError("Euler requires dyn_conf.system_type='continuous'.")
         if not _has_attr(conf, "dt"):
-            raise ValueError("EulerIntegrator requires dyn_conf.dt.")
+            raise ValueError("Euler requires dyn_conf.dt.")
         self.dt = float(conf.dt)
 
     def step(
@@ -42,18 +40,16 @@ class EulerIntegrator(Integrator):
         return z + self.dt * dynamics.eval(z, u, c, key=key)
 
 
-class RK4Integrator(Integrator):
+class RK4(Integrator):
     """Classical fourth-order Runge-Kutta integrator for continuous-time dynamics."""
 
     dt: float
 
     def __init__(self, conf):
         if str(conf.system_type) != "continuous":
-            raise ValueError(
-                "RK4Integrator requires dyn_conf.system_type='continuous'."
-            )
+            raise ValueError("RK4 requires dyn_conf.system_type='continuous'.")
         if not _has_attr(conf, "dt"):
-            raise ValueError("RK4Integrator requires dyn_conf.dt.")
+            raise ValueError("RK4 requires dyn_conf.dt.")
         self.dt = float(conf.dt)
 
     def step(
@@ -73,16 +69,14 @@ class RK4Integrator(Integrator):
         return z + (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
 
 
-class IdentityIntegrator(Integrator):
+class Identity(Integrator):
     """Pass-through integrator for discrete-time dynamics."""
 
     def __init__(self, conf):
         if str(conf.system_type) != "discrete":
-            raise ValueError(
-                "IdentityIntegrator requires dyn_conf.system_type='discrete'."
-            )
+            raise ValueError("Identity requires dyn_conf.system_type='discrete'.")
         if _has_attr(conf, "dt"):
-            raise ValueError("IdentityIntegrator must not receive dyn_conf.dt.")
+            raise ValueError("Identity must not receive dyn_conf.dt.")
 
     def step(
         self,
@@ -96,4 +90,12 @@ class IdentityIntegrator(Integrator):
         return dynamics.eval(z, u, c, key=key)
 
 
-__all__ = ["EulerIntegrator", "RK4Integrator", "IdentityIntegrator"]
+# Backward-compatible aliases.
+EulerIntegrator = Euler
+RK4Integrator = RK4
+IdentityIntegrator = Identity
+Integrator._subclasses["EulerIntegrator"] = Euler
+Integrator._subclasses["RK4Integrator"] = RK4
+Integrator._subclasses["IdentityIntegrator"] = Identity
+
+__all__ = ["Euler", "RK4", "Identity", "EulerIntegrator", "RK4Integrator", "IdentityIntegrator"]

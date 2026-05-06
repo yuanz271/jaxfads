@@ -9,7 +9,7 @@ from ..base import Dynamics
 from ..constraints import constrain_positive, unconstrain_positive
 
 
-class OUDynamics(Dynamics):
+class OU(Dynamics):
     """Zero-mean Ornstein–Uhlenbeck (OU) continuous-time dynamics.
 
     Continuous-time form (mean zero):
@@ -33,7 +33,7 @@ class OUDynamics(Dynamics):
         del key
         self.conf = conf
         if str(conf.system_type) != "continuous":
-            raise ValueError("OUDynamics requires dyn_conf.system_type='continuous'.")
+            raise ValueError("OU requires dyn_conf.system_type='continuous'.")
         theta0 = jnp.asarray(conf.theta)
         self.theta_free = unconstrain_positive(theta0)
 
@@ -48,4 +48,7 @@ class OUDynamics(Dynamics):
         return -self.theta * z
 
 
-__all__ = ["OUDynamics"]
+OUDynamics = OU
+Dynamics._subclasses["OUDynamics"] = OU
+
+__all__ = ["OU", "OUDynamics"]
