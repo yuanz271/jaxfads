@@ -287,10 +287,6 @@ class Dynamics(SubclassRegistryMixin, ConfModule):  # pyright: ignore[reportImpl
     Abstract base class for latent-state dynamics modules in XFADS.
 
     Concrete subclasses implement ``eval(z, u, c)``.
-    Interpretation is controlled by ``dyn_conf.system_type``:
-
-    - ``continuous``: returns ``dz/dt`` (a vector field).
-    - ``discrete``: returns ``z_{t+1}`` directly (a transition map).
     """
 
     @abstractmethod

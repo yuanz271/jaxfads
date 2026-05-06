@@ -52,8 +52,7 @@ def model_conf():
                     "input_dim": 1,
                     "context_dim": 0,
                     "state_noise": 1.0,
-                    "system_type": "discrete",
-                }
+                                }
             ),
             "enc_conf": OmegaConf.create(
                 {

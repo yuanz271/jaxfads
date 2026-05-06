@@ -29,7 +29,6 @@ conf = OmegaConf.create(
         "dynamics": "OU",
         "integrator": "Euler",
         "dyn_conf": {
-            "system_type": "continuous",
             "theta": 2.0,
             "dt": 0.05,
             "state_noise": 1.0,

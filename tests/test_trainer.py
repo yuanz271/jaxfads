@@ -76,8 +76,7 @@ def model_conf():
                     "input_dim": 1,
                     "context_dim": 0,
                     "state_noise": 1.0,
-                    "system_type": "discrete",
-                }
+                                }
             ),
             "enc_conf": OmegaConf.create(
                 {
@@ -141,8 +140,7 @@ def test_train_lora_rank1_end_to_end(trainer_config, sample_data):
                     "input_dim": 1,
                     "context_dim": 0,
                     "state_noise": 0.1,
-                    "system_type": "discrete",
-                }
+                                }
             ),
             "enc_conf": OmegaConf.create(
                 {

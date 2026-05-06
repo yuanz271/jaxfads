@@ -1,5 +1,4 @@
 import chex
-import pytest
 from jax import numpy as jnp
 from jax import random as jr
 from omegaconf import OmegaConf
@@ -25,7 +24,6 @@ def test_ou_dynamics_registry_and_euler_integrator():
             context_dim=0,
             theta=theta,
             dt=dt,
-            system_type="continuous",
         )
     )
 
@@ -52,7 +50,6 @@ def test_identity_dynamics_registry_and_identity_integrator():
             observation_dim=1,
             input_dim=0,
             context_dim=0,
-            system_type="discrete",
         )
     )
 
@@ -67,18 +64,3 @@ def test_identity_dynamics_registry_and_identity_integrator():
     chex.assert_tree_all_finite(out)
 
 
-def test_identity_dynamics_rejects_continuous_system_type():
-    conf = OmegaConf.create(
-        dict(
-            state_dim=2,
-            observation_dim=1,
-            input_dim=0,
-            context_dim=0,
-            system_type="continuous",
-        )
-    )
-
-    with pytest.raises(
-        ValueError, match="Identity requires dyn_conf.system_type='discrete'."
-    ):
-        Dynamics.get_subclass("Identity")(conf, key=jr.key(0))

@@ -18,15 +18,9 @@ z_{t+1} = Integrator(Dynamics, z_t, u_t, c_t)
 - `Integrator` defines how one-step updates are produced.
 - Process noise remains owned by `XFADS` (`dyn_conf.state_noise`).
 
-For discrete-time systems, use an `Identity` (no-op integrator) and
-let `Dynamics.eval(...)` return `z_{t+1}` directly.
-
-## System Types
-
-Set `dyn_conf.system_type` to choose semantics:
-
-- `continuous`: `Dynamics.eval(...)` returns `dz/dt`.
-- `discrete`: `Dynamics.eval(...)` returns `z_{t+1}` directly.
+Choose the dynamics/integrator pair that matches your model: if your
+`Dynamics.eval(...)` returns a derivative, use `Euler` or `RK4`; if it returns
+the next state directly, use `Identity`.
 
 ## Minimal Dynamics Example
 
@@ -44,14 +38,14 @@ class MyDynamics(Dynamics):
 
 ## Built-in Integrators
 
-- `Identity` (discrete, no `dt`)
-- `Euler` (continuous, requires `dyn_conf.dt`)
-- `RK4` (continuous, requires `dyn_conf.dt`)
+- `Identity` (pass-through integrator, no `dt`)
+- `Euler` (for derivative-returning dynamics, requires `dyn_conf.dt`)
+- `RK4` (for derivative-returning dynamics, requires `dyn_conf.dt`)
 
 ## Built-in Dynamics
 
-- `Identity`: discrete random-walk mean map `z_{t+1} = z_t`
-- `OU`: continuous OU drift map `dz/dt = -theta * z`
+- `Identity`: pass-through dynamics map `z_{t+1} = z_t`
+- `OU`: mean-reverting drift map `dz/dt = -theta * z`
 - `Functional`: wraps a non-trainable callable
 
 `Functional` only accepts:
@@ -72,7 +66,6 @@ dynamics: Functional
 integrator: Identity
 
 dyn_conf:
-  system_type: discrete
   fn_path: my_pkg.my_maps:my_transition
   fn_kwargs: {gain: 1.0}
   state_noise: 1.0
@@ -87,7 +80,6 @@ dynamics: OU
 integrator: Euler
 
 dyn_conf:
-  system_type: continuous
   theta: 2.0
   dt: 0.04
   state_noise: 1.0
@@ -102,7 +94,6 @@ dynamics: Identity
 integrator: Identity
 
 dyn_conf:
-  system_type: discrete
   state_noise: 1.0
   input_dim: 0
   context_dim: 0
@@ -118,7 +109,6 @@ dynamics: MyDynamics
 integrator: Identity
 
 dyn_conf:
-  system_type: discrete
   state_noise: 1.0
   input_dim: 0
   context_dim: 0

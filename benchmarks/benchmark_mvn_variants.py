@@ -116,8 +116,7 @@ def main() -> None:
             fn_path="vdp_example:vdp_state_map",
             fn_kwargs={"mu": args.mu},
             dt=args.dt,
-            system_type="continuous",
-            state_noise=0.1,
+                state_noise=0.1,
         ),
         enc_conf=dict(width=32, depth=2, dropout=None),
         obs_conf=dict(

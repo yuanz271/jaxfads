@@ -17,13 +17,11 @@ def _has_attr(conf, name: str) -> bool:
 
 
 class Euler(Integrator):
-    """Forward-Euler integrator for continuous-time dynamics."""
+    """Forward-Euler integrator."""
 
     dt: float
 
     def __init__(self, conf):
-        if str(conf.system_type) != "continuous":
-            raise ValueError("Euler requires dyn_conf.system_type='continuous'.")
         if not _has_attr(conf, "dt"):
             raise ValueError("Euler requires dyn_conf.dt.")
         self.dt = float(conf.dt)
@@ -41,13 +39,11 @@ class Euler(Integrator):
 
 
 class RK4(Integrator):
-    """Classical fourth-order Runge-Kutta integrator for continuous-time dynamics."""
+    """Classical fourth-order Runge-Kutta integrator."""
 
     dt: float
 
     def __init__(self, conf):
-        if str(conf.system_type) != "continuous":
-            raise ValueError("RK4 requires dyn_conf.system_type='continuous'.")
         if not _has_attr(conf, "dt"):
             raise ValueError("RK4 requires dyn_conf.dt.")
         self.dt = float(conf.dt)
@@ -70,11 +66,9 @@ class RK4(Integrator):
 
 
 class Identity(Integrator):
-    """Pass-through integrator for discrete-time dynamics."""
+    """Pass-through integrator."""
 
     def __init__(self, conf):
-        if str(conf.system_type) != "discrete":
-            raise ValueError("Identity requires dyn_conf.system_type='discrete'.")
         if _has_attr(conf, "dt"):
             raise ValueError("Identity must not receive dyn_conf.dt.")
 

@@ -45,7 +45,6 @@ conf = OmegaConf.create(
         "integrator": "Euler",
         "dropout": 0.0,
         "dyn_conf": {
-            "system_type": "continuous",
             "theta": 2.0,
             "dt": 0.05,
             "state_noise": 1.0,
@@ -246,7 +245,6 @@ integrator for discrete-time dynamics:
 "dynamics": "Identity",
 "integrator": "Identity",
 "dyn_conf": {
-    "system_type": "discrete",
     "state_noise": 1.0,
     "input_dim": 0,
     "context_dim": 0,

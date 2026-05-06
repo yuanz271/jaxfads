@@ -196,8 +196,7 @@ def nofilt_training_comparison():
             "dropout": 0.0,
             "nofilt_eps": 1e-6,
             "dyn_conf": {
-                "system_type": "discrete",
-                "state_noise": 0.1,
+                            "state_noise": 0.1,
                 "input_dim": 0,
                 "context_dim": 0,
             },

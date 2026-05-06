@@ -16,15 +16,12 @@ class Identity(Dynamics):
 
     Notes
     -----
-    Controls/covariates `u` and `c` are ignored. This map requires
-    ``dyn_conf.system_type='discrete'``.
+    Controls/covariates `u` and `c` are ignored.
     """
 
     def __init__(self, conf, key: Array):
         del key
         self.conf = conf
-        if str(conf.system_type) != "discrete":
-            raise ValueError("Identity requires dyn_conf.system_type='discrete'.")
 
     def eval(self, z: Array, u: Array, c: Array, *, key=None) -> Array:
         """Discrete identity mean map: ``f(z_t) = z_t``."""

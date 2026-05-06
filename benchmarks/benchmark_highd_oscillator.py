@@ -190,8 +190,7 @@ def main() -> None:
                             "fn_path": "benchmark_highd_oscillator:oscillator_bank_state_map",
                             "fn_kwargs": {},
                             "dt": args.dt,
-                            "system_type": "continuous",
-                            "state_noise": 0.1,
+                                            "state_noise": 0.1,
                         },
                         "enc_conf": {
                             "width": 64,

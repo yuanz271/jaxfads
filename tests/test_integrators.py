@@ -32,7 +32,7 @@ class _DiscreteMap(Dynamics):
 
 
 def test_euler_integrator_linear_field():
-    conf = SimpleNamespace(system_type="continuous", dt=0.1, a=2.0)
+    conf = SimpleNamespace(dt=0.1, a=2.0)
     field = _LinearField(conf, key=jr.key(0))
     integrator = Euler(conf)
 
@@ -43,7 +43,7 @@ def test_euler_integrator_linear_field():
 
 
 def test_rk4_integrator_linear_field_matches_expansion():
-    conf = SimpleNamespace(system_type="continuous", dt=0.1, a=1.5)
+    conf = SimpleNamespace(dt=0.1, a=1.5)
     field = _LinearField(conf, key=jr.key(0))
     integrator = RK4(conf)
 
@@ -58,7 +58,7 @@ def test_rk4_integrator_linear_field_matches_expansion():
 
 
 def test_identity_integrator_passthrough():
-    conf = SimpleNamespace(system_type="discrete")
+    conf = SimpleNamespace()
     dynamics = _DiscreteMap(conf, key=jr.key(0))
     integrator = Identity(conf)
 
@@ -69,17 +69,3 @@ def test_identity_integrator_passthrough():
     chex.assert_trees_all_close(out, z + u + c, atol=1e-7)
 
 
-def test_integrator_system_type_mismatch_raises():
-    bad_conf = SimpleNamespace(system_type="discrete", dt=0.1)
-    try:
-        Euler(bad_conf)
-        raise AssertionError("Euler should fail for discrete system_type.")
-    except ValueError:
-        pass
-
-    bad_conf2 = SimpleNamespace(system_type="continuous", dt=0.1)
-    try:
-        Identity(bad_conf2)
-        raise AssertionError("Identity should fail for continuous system_type.")
-    except ValueError:
-        pass

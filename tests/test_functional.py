@@ -35,9 +35,7 @@ sys.modules[_TEST_FN_MODULE] = _mod
 
 
 def test_functional_accepts_plain_function():
-    conf = OmegaConf.create(
-        dict(system_type="discrete", fn_path=f"{_TEST_FN_MODULE}:plain_fn")
-    )
+    conf = OmegaConf.create(dict(fn_path=f"{_TEST_FN_MODULE}:plain_fn"))
     sm = Functional(conf, key=jr.key(0))
 
     z = jnp.array([1.0, 2.0])
@@ -50,7 +48,6 @@ def test_functional_accepts_plain_function():
 def test_functional_accepts_partial_and_key_callable():
     conf = OmegaConf.create(
         dict(
-            system_type="continuous",
             fn_path=f"{_TEST_FN_MODULE}:key_fn",
             fn_kwargs=dict(gain=2.0),
         )
@@ -67,7 +64,6 @@ def test_functional_accepts_partial_and_key_callable():
 def test_functional_rejects_callable_object():
     conf = OmegaConf.create(
         dict(
-            system_type="discrete",
             fn_path=f"{_TEST_FN_MODULE}:CallableObject",
         )
     )
@@ -79,9 +75,7 @@ def test_functional_rejects_callable_object():
 
 
 def test_functional_jit_smoke():
-    conf = OmegaConf.create(
-        dict(system_type="discrete", fn_path=f"{_TEST_FN_MODULE}:plain_fn")
-    )
+    conf = OmegaConf.create(dict(fn_path=f"{_TEST_FN_MODULE}:plain_fn"))
     sm = Functional(conf, key=jr.key(0))
     z = jnp.array([1.0, 2.0])
     u = jnp.array([0.5, 0.5])

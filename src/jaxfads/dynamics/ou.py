@@ -23,8 +23,7 @@ class OU(Dynamics):
     - `theta`: Mean-reversion rate.
     Notes
     -----
-    Controls/covariates `u` and `c` are ignored. This map requires
-    ``dyn_conf.system_type='continuous'``.
+    Controls/covariates `u` and `c` are ignored.
     """
 
     theta_free: Array
@@ -32,8 +31,6 @@ class OU(Dynamics):
     def __init__(self, conf, key: Array):
         del key
         self.conf = conf
-        if str(conf.system_type) != "continuous":
-            raise ValueError("OU requires dyn_conf.system_type='continuous'.")
         theta0 = jnp.asarray(conf.theta)
         self.theta_free = unconstrain_positive(theta0)
 

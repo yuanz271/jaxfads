@@ -62,8 +62,7 @@ def test_constructor():
                     input_dim=u_size,
                     context_dim=0,
                     state_noise=state_noise,
-                    system_type="discrete",
-                )
+                        )
             ),
             enc_conf=OmegaConf.create(
                 dict(
@@ -124,8 +123,7 @@ def test_constructor_accepts_dynamics_and_integrator_keys():
                     input_dim=0,
                     context_dim=0,
                     state_noise=1.0,
-                    system_type="discrete",
-                )
+                        )
             ),
             enc_conf=OmegaConf.create(dict(width=8, depth=1, dropout=0.0)),
             obs_conf=OmegaConf.create(
@@ -178,8 +176,7 @@ def test_top_level_dims_override_subconfig_dims():
                     input_dim=u_size,
                     context_dim=0,
                     state_noise=1.0,
-                    system_type="discrete",
-                )
+                        )
             ),
             enc_conf=OmegaConf.create(
                 dict(
@@ -265,8 +262,7 @@ def test_mode_smoke_forward_pass(mode, approx_kwargs):
                     input_dim=0,
                     context_dim=0,
                     state_noise=1.0,
-                    system_type="discrete",
-                )
+                        )
             ),
             enc_conf=OmegaConf.create(
                 dict(
@@ -327,8 +323,7 @@ def test_invalid_mode_error_lists_filter_smooth_causal():
                     input_dim=0,
                     context_dim=0,
                     state_noise=1.0,
-                    system_type="discrete",
-                )
+                        )
             ),
             enc_conf=OmegaConf.create(dict(width=8, depth=1, dropout=0.0)),
             obs_conf=OmegaConf.create(
@@ -380,8 +375,7 @@ def test_filter_mode_skips_beta_encoder():
                     input_dim=0,
                     context_dim=0,
                     state_noise=1.0,
-                    system_type="discrete",
-                )
+                        )
             ),
             enc_conf=OmegaConf.create(dict(width=8, depth=1, dropout=0.0)),
             obs_conf=OmegaConf.create(
@@ -443,8 +437,7 @@ def test_xfads_nofilt_mode():
                     input_dim=0,
                     context_dim=0,
                     state_noise=1.0,
-                    system_type="discrete",
-                )
+                        )
             ),
             enc_conf=OmegaConf.create(
                 dict(alpha_encoder="IdentityEncoder", width=8, depth=1, dropout=0.0)

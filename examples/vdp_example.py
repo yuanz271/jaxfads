@@ -564,8 +564,7 @@ def main() -> None:
                 width=32,
                 depth=1,
                 dt=dt,
-                system_type="continuous",
-            ),
+                    ),
         }
     )
     model1 = XFADS(conf1, jr.key(456))
@@ -626,8 +625,7 @@ def main() -> None:
                 context_dim=0,
                 theta=2.0,
                 dt=dt,
-                system_type="continuous",
-                state_noise=1.0,
+                        state_noise=1.0,
             ),
         }
     )
@@ -692,8 +690,7 @@ def main() -> None:
                 fn_path="__main__:vdp_dynamics",
                 fn_kwargs={"mu": mu},
                 dt=dt,
-                system_type="continuous",
-                state_noise=1.0,
+                        state_noise=1.0,
             ),
         }
     )
