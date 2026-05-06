@@ -91,8 +91,4 @@ class Functional(Dynamics):
         return self.fn(z, u, c)
 
 
-# Backward-compatible alias.
-FunctionDynamics = Functional
-Dynamics._subclasses["FunctionDynamics"] = Functional
-
-__all__ = ["Functional", "FunctionDynamics"]
+__all__ = ["Functional"]

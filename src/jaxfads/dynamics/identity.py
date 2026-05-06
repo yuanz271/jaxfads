@@ -32,7 +32,4 @@ class Identity(Dynamics):
         return z
 
 
-IdentityDynamics = Identity
-Dynamics._subclasses["IdentityDynamics"] = Identity
-
-__all__ = ["Identity", "IdentityDynamics"]
+__all__ = ["Identity"]

@@ -9,24 +9,8 @@ observations, and variational approximations.
 
 from __future__ import annotations
 
-import sys
-
-from . import dynamics as _dynamics
-from . import integrators as _integrators
-from .dynamics import functional as _dynamics_functional
-from .dynamics import identity as _dynamics_identity
-from .dynamics import ou as _dynamics_ou
 from .logging import configure_logging
 from .smoother import XFADS
 from .trainer import train
-
-# Legacy import-path aliases. New public paths are `jaxfads.dynamics` and
-# `jaxfads.integrators`; older `state_maps` / `steppers` imports remain usable
-# during the deprecation window.
-sys.modules.setdefault(__name__ + ".state_maps", _dynamics)
-sys.modules.setdefault(__name__ + ".state_maps.identity", _dynamics_identity)
-sys.modules.setdefault(__name__ + ".state_maps.ou", _dynamics_ou)
-sys.modules.setdefault(__name__ + ".state_maps.function", _dynamics_functional)
-sys.modules.setdefault(__name__ + ".steppers", _integrators)
 
 __all__ = ["XFADS", "train", "configure_logging"]

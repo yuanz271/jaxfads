@@ -90,12 +90,4 @@ class Identity(Integrator):
         return dynamics.eval(z, u, c, key=key)
 
 
-# Backward-compatible aliases.
-EulerIntegrator = Euler
-RK4Integrator = RK4
-IdentityIntegrator = Identity
-Integrator._subclasses["EulerIntegrator"] = Euler
-Integrator._subclasses["RK4Integrator"] = RK4
-Integrator._subclasses["IdentityIntegrator"] = Identity
-
-__all__ = ["Euler", "RK4", "Identity", "EulerIntegrator", "RK4Integrator", "IdentityIntegrator"]
+__all__ = ["Euler", "RK4", "Identity"]

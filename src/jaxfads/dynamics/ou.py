@@ -48,7 +48,4 @@ class OU(Dynamics):
         return -self.theta * z
 
 
-OUDynamics = OU
-Dynamics._subclasses["OUDynamics"] = OU
-
-__all__ = ["OU", "OUDynamics"]
+__all__ = ["OU"]
