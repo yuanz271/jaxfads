@@ -55,7 +55,11 @@ allow-direct-references = true
 
 [tool.ruff]
 target-version = "py311"
-lint.ignore = ["E501", "F722"]
+preview = true
+
+[tool.ruff.lint]
+ignore = ["E501", "F722"]
+extend-select = ["FURB"]
 
 [tool.numpydoc_validation]
 checks = ["GL01", "SS02", "PR01", "PR10", "RT01"]
