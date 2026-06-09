@@ -206,3 +206,24 @@ def test_identity_readout_requires_square():
     )
     with pytest.raises(ValueError, match="state_dim == observation_dim"):
         _ = GLM(conf, jrnd.key(9))
+
+
+def test_gaussian_cov_floor():
+    key = jrnd.key(11)
+    dim = 4
+    conf = OmegaConf.create(
+        dict(
+            model="GLM",
+            state_dim=dim,
+            observation_dim=dim,
+            cov=[1e-9] * dim,   # near-collapsed unconstrained part
+            norm_readout=False,
+            likelihood="Gaussian",
+            _approx_name="MVN",
+            cov_floor=1e-2,
+        )
+    )
+    glm = GLM(conf, key)
+    cov = glm.likelihood.cov()
+    # floor enforced: variance >= floor despite near-zero unconstrained cov
+    assert float(cov.min()) >= 1e-2 - 1e-6, f"floor not applied: {cov}"

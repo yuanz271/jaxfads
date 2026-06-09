@@ -654,9 +654,14 @@ class Gaussian(eqx.Module, strict=True):
 
         Notes
         -----
-        Applies positive constraint to ensure valid variance values.
+        Applies positive constraint to ensure valid variance values. When
+        ``obs_conf.cov_floor`` (default 0.0) is set, a constant floor is added
+        so the variance cannot collapse to ~0 — keeping ``C Σ_z Cᵀ + Σ_obs``
+        well-conditioned in the analytic log-likelihood (numerical safeguard,
+        e.g. for identity readouts where obs-noise is otherwise unidentifiable).
         """
-        return constrain_positive(self.unconstrained_cov)
+        floor = float(self.conf.get("cov_floor", 0.0))
+        return constrain_positive(self.unconstrained_cov) + floor
 
     def eloglik(
         self,
