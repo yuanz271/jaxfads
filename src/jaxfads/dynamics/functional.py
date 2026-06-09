@@ -65,7 +65,6 @@ class Functional(Dynamics):
     takes_key: bool
 
     def __init__(self, conf, key: Array):
-        del key
         self.conf = conf
         fn_path = getattr(conf, "fn_path", None)
         if fn_path is None:

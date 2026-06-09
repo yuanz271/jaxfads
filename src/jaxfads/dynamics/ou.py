@@ -29,7 +29,6 @@ class OU(Dynamics):
     theta_free: Array
 
     def __init__(self, conf, key: Array):
-        del key
         self.conf = conf
         theta0 = jnp.asarray(conf.theta)
         self.theta_free = unconstrain_positive(theta0)
@@ -40,8 +39,7 @@ class OU(Dynamics):
         return constrain_positive(self.theta_free)
 
     def eval(self, z: Array, u: Array, c: Array, *, key=None) -> Array:
-        """Continuous-time drift: ``dz/dt = -theta * z``."""
-        del u, c, key
+        """Continuous-time drift: ``dz/dt = -theta * z`` (``u``, ``c``, ``key`` unused)."""
         return -self.theta * z
 
 

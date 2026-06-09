@@ -20,12 +20,10 @@ class Identity(Dynamics):
     """
 
     def __init__(self, conf, key: Array):
-        del key
         self.conf = conf
 
     def eval(self, z: Array, u: Array, c: Array, *, key=None) -> Array:
-        """Discrete identity mean map: ``f(z_t) = z_t``."""
-        del u, c, key
+        """Discrete identity mean map: ``f(z_t) = z_t`` (``u``, ``c``, ``key`` unused)."""
         return z
 
 
