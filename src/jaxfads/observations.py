@@ -18,7 +18,7 @@ from jax import random as jrnd
 from .base import Observation
 from .constraints import _EPS, constrain_positive, unconstrain_positive
 from .base import Approx
-from .nn import StationaryLinear, VariantBiasLinear
+from .nn import IdentityReadout, StationaryLinear, VariantBiasLinear
 
 _MAX_LOGRATE = 7.0
 
@@ -192,7 +192,7 @@ def _fa_init(y: Array, conf: Any) -> tuple[Array, Array]:
     return C, bias
 
 
-def make_readout(conf, key: Array) -> StationaryLinear | VariantBiasLinear:
+def make_readout(conf, key: Array) -> StationaryLinear | VariantBiasLinear | IdentityReadout:
     """
     Construct a readout module from observation configuration.
 
@@ -208,6 +208,8 @@ def make_readout(conf, key: Array) -> StationaryLinear | VariantBiasLinear:
     StationaryLinear or VariantBiasLinear
         Readout module configured for stationary or time-varying biases.
     """
+    if conf.get("readout", None) == "identity":
+        return IdentityReadout(conf.state_dim, conf.observation_dim)
     n_steps = conf.get("n_steps", 0)
     if n_steps > 0:
         return VariantBiasLinear(
@@ -299,7 +301,7 @@ class GLM(Observation):
     `GLM.__init__` for fail-fast errors.
     """
 
-    readout: StationaryLinear | VariantBiasLinear
+    readout: StationaryLinear | VariantBiasLinear | IdentityReadout
     likelihood: Any
 
     def __init__(self, conf, key: Array):

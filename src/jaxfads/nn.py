@@ -365,6 +365,60 @@ class StationaryLinear(Module):
         return eqx.tree_at(lambda r: r.layer, self, layer)
 
 
+class IdentityReadout(Module):
+    """Fixed (non-trainable) identity readout.
+
+    A pure stub for the case where the latent state *is* the observation space
+    (``state_dim == observation_dim``), e.g. when observations are already a
+    PCA projection and no learned decoder is desired. It carries **no array
+    fields**, so it contributes zero leaves to the optimizer pytree and is
+    non-trainable by construction (no ``freeze_paths`` needed).
+
+    The readout map is the identity: ``__call__(idx, x) -> x``. The ``weight``
+    accessor returns ``I`` lazily (materialized on demand, not stored) because
+    the analytic Gaussian ``eloglik`` reads ``readout.weight`` for the
+    covariance term ``C @ Cov(z) @ C.T``; for identity this equals ``Cov(z)``.
+    ``set_weight``/``set_bias`` are no-ops returning ``self``.
+
+    Parameters
+    ----------
+    state_dim : int
+        Latent state dimension. Must equal ``observation_dim``.
+    observation_dim : int
+        Observation dimension. Must equal ``state_dim``.
+    """
+
+    state_dim: int = eqx.field(static=True)
+    observation_dim: int = eqx.field(static=True)
+
+    def __init__(self, state_dim: int, observation_dim: int):
+        if int(state_dim) != int(observation_dim):
+            raise ValueError(
+                "IdentityReadout requires state_dim == observation_dim "
+                f"(got {state_dim} != {observation_dim})."
+            )
+        self.state_dim = int(state_dim)
+        self.observation_dim = int(observation_dim)
+
+    def __call__(self, idx, x) -> Array:
+        """Identity map. The time index ``idx`` is part of the readout
+        interface but not used by the identity map."""
+        return x
+
+    @property
+    def weight(self) -> Array:
+        """Lazily-materialized identity matrix (not a stored/trainable leaf)."""
+        return jnp.eye(self.observation_dim)
+
+    def set_weight(self, weight: Array) -> "IdentityReadout":
+        """Return ``self`` unchanged; the identity map has no weight to set."""
+        return self
+
+    def set_bias(self, bias: Array) -> "IdentityReadout":
+        """Return ``self`` unchanged; the identity map has no bias to set."""
+        return self
+
+
 class VariantBiasLinear(Module):
     """
     Readout layer with time-variant bias for non-stationary observations.

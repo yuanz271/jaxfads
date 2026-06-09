@@ -130,3 +130,79 @@ def test_set_readout_stationary_smoke():
     updated = observation.set_readout(weight=weight, bias=bias)
     chex.assert_trees_all_close(updated.readout.weight, weight)
     chex.assert_trees_all_close(updated.readout.layer.bias, bias)
+
+
+def _gaussian_identity_conf(dim: int):
+    return OmegaConf.create(
+        dict(
+            model="GLM",
+            state_dim=dim,
+            observation_dim=dim,
+            cov=[1.0] * dim,
+            norm_readout=False,
+            likelihood="Gaussian",
+            _approx_name="MVN",
+            readout="identity",
+            readout_init=None,
+        )
+    )
+
+
+def test_identity_readout_weight_is_eye_and_eloglik_runs():
+    import equinox as eqx
+    from jax import tree_util
+
+    key = jrnd.key(7)
+    dim = 4
+    conf = _gaussian_identity_conf(dim)
+    observation = GLM(conf, key)
+
+    # weight is the identity, lazily materialized
+    chex.assert_trees_all_close(observation.readout.weight, jnp.eye(dim))
+
+    # readout contributes no inexact-array leaves (no trainable params, nothing stored)
+    leaves = tree_util.tree_leaves(
+        eqx.filter(observation.readout, eqx.is_inexact_array)
+    )
+    assert leaves == [], f"IdentityReadout must have no array leaves, got {leaves}"
+
+    # __call__ is the identity map
+    x = jrnd.normal(key, (dim,))
+    chex.assert_trees_all_close(observation.readout(jnp.array(0), x), x)
+
+    # analytic Gaussian eloglik runs and is finite with identity readout
+    approx = MVN(dim=dim, rank=dim)
+    mp = approx.pack(jnp.zeros(dim), jnp.eye(dim))
+    y = jnp.zeros((dim,))
+    ll = observation.eloglik(key, jnp.array(0), mp, y, approx, mc_size=1)
+    chex.assert_shape(ll, ())
+    chex.assert_tree_all_finite(ll)
+
+
+def test_identity_readout_set_ops_are_noops():
+    key = jrnd.key(8)
+    dim = 3
+    conf = _gaussian_identity_conf(dim)
+    observation = GLM(conf, key)
+
+    r0 = observation.readout
+    r1 = r0.set_weight(jnp.zeros((dim, dim))).set_bias(jnp.ones((dim,)))
+    chex.assert_trees_all_close(r1.weight, jnp.eye(dim))
+
+
+def test_identity_readout_requires_square():
+    conf = OmegaConf.create(
+        dict(
+            model="GLM",
+            state_dim=3,
+            observation_dim=5,
+            cov=[1.0] * 5,
+            norm_readout=False,
+            likelihood="Gaussian",
+            _approx_name="MVN",
+            readout="identity",
+            readout_init=None,
+        )
+    )
+    with pytest.raises(ValueError, match="state_dim == observation_dim"):
+        _ = GLM(conf, jrnd.key(9))
