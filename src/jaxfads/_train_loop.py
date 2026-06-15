@@ -1,19 +1,23 @@
-"""Training loop for jaxfads, vendored from gearax 0.1.0 (yuanz271).
+"""Training loop for jaxfads.
 
-Adapted from ``gearax.trainer`` (same author) and brought in-tree so jaxfads
-owns its training loop. The only functional addition over the upstream loop is
-an optional ``checkpoint_callback`` invoked at each epoch boundary, which lets
-callers persist periodic checkpoints during training (best-val return is
-unchanged). The ``dataloader`` remains supplied by ``jaxfads.trainer``.
+Originally vendored from gearax 0.1.0 (yuanz271), then refactored for jaxfads's
+diagnostic workflow:
+
+  * **No validation split / early stopping** — train the full ``max_epoch``
+    budget on all data and return the final model.
+  * **Periodic checkpoints** — optional ``checkpoint_callback`` invoked at each
+    epoch boundary (caller persists every N epochs).
+  * **Per-epoch training metrics** — optional ``metrics_callback`` receives the
+    mean training loss and gradient norm per epoch, for diagnosis (e.g. spotting
+    free-run divergence onset). The ``dataloader`` is supplied by
+    ``jaxfads.trainer``.
 """
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
 from typing import Any
 
 import equinox as eqx
-import jax
-from jax import Array, lax
+import optax
 from jax import numpy as jnp
 from jax import random as jr
 from rich.progress import (
@@ -38,88 +42,33 @@ def _training_progress() -> Progress:
         TimeRemainingColumn(),
         "Loss",
         TextColumn("{task.fields[loss]:.3f}"),
-        "Best",
-        TextColumn("{task.fields[best]:.3f}"),
     )
-
-
-def _copy_pytree(pt):
-    """Return a defensive copy of a pytree, copying only array leaves."""
-    return jax.tree.map(lambda x: jnp.copy(x) if eqx.is_array(x) else x, pt)
-
-
-@dataclass
-class Monitor:
-    """Early-stopping helper that tracks validation performance."""
-
-    evaluate: Callable
-    valid_set: Any
-    patience: int
-    best_model: eqx.Module
-    best_loss: float
-    patience_left: int = field(init=False)
-    losses: list = field(init=False, default_factory=list)
-    _pbar: Any = field(init=False)
-
-    def __init__(self, model, valid_set, eval_fun, max_epoch, patience, min_epoch: int = 0) -> None:
-        self.evaluate = eval_fun
-        self.valid_set = valid_set
-        self.patience = patience
-        self.patience_left = patience
-        self.max_epoch = max_epoch
-        self.min_epoch = min_epoch
-
-        self.best_model = _copy_pytree(model)
-        self.best_loss = jnp.inf
-        self.losses = []
-
-        self._pbar = _training_progress()
-        self._task_id = self._pbar.add_task(
-            "Training", total=max_epoch, loss=jnp.inf, best=jnp.inf
-        )
-        self._pbar.start()
-
-    def step(self, model, key: Array, step: Array | None = None) -> bool:
-        val_loss = self.evaluate(model, self.valid_set, key, step).item()
-        self.losses.append(val_loss)
-
-        if val_loss < self.best_loss:
-            self.best_loss = val_loss
-            self.best_model = _copy_pytree(model)
-            self.patience_left = self.patience
-        else:
-            if len(self.losses) > self.min_epoch:
-                self.patience_left -= 1
-
-        self._pbar.update(self._task_id, advance=1, loss=val_loss, best=self.best_loss)
-
-        return self.patience_left > 0
-
-    def stop(self) -> None:
-        self._pbar.stop()
 
 
 def train(
     model,
     train_set,
-    valid_set,
     key,
     batch_loss_fun,
     dataloader,
     batch_size,
     max_epoch,
-    patience,
     optimizer,
     data_sharding,
     model_sharding,
-    min_epoch: int = 0,
+    *,
     checkpoint_callback: Callable | None = None,
-):
-    """Train with early stopping + sharded execution.
+    metrics_callback: Callable | None = None,
+) -> Any:
+    """Train for the full ``max_epoch`` budget (no validation / early stopping).
 
-    ``checkpoint_callback(model, epoch, step)`` (if given) is called once at the
-    start of each epoch, letting the caller persist periodic checkpoints. It is
-    purely a side-effecting hook and does not affect the returned best-val model.
+    Parameters mirror the optimiser/sharding setup of the previous loop. The two
+    optional callbacks fire once per completed epoch:
+
+    * ``checkpoint_callback(model, epoch, step)`` — persist a checkpoint.
+    * ``metrics_callback(epoch, step, train_loss, grad_norm)`` — record diagnostics.
+
+    Returns the **final** model (not a best-validation snapshot).
     """
 
     @eqx.filter_jit(donate="all")
@@ -127,45 +76,51 @@ def train(
         model, opt_state = eqx.filter_shard((model, opt_state), model_sharding)
         batch = eqx.filter_shard(batch, data_sharding)
 
-        grads = eqx.filter_grad(batch_loss_fun)(model, batch, key, step)
+        loss, grads = eqx.filter_value_and_grad(batch_loss_fun)(model, batch, key, step)
+        grad_norm = optax.global_norm(eqx.filter(grads, eqx.is_inexact_array))
         updates, opt_state = optimizer.update(grads, opt_state, model)
         model = eqx.apply_updates(model, updates)
-        return model, opt_state, step + 1
-
-    @eqx.filter_jit
-    def evaluate(model, batch, key, step):
-        model = eqx.filter_shard(eqx.nn.inference_mode(model), model_sharding)
-        batch = eqx.filter_shard(batch, data_sharding)
-        return lax.stop_gradient(batch_loss_fun(model, batch, key, step))
+        return model, opt_state, step + 1, loss, grad_norm
 
     opt_state = optimizer.init(eqx.filter(model, eqx.is_inexact_array))
-
     model, opt_state = eqx.filter_shard((model, opt_state), model_sharding)
-    valid_set = eqx.filter_shard(valid_set, data_sharding)
 
-    monitor = Monitor(model, valid_set, evaluate, max_epoch, patience, min_epoch)
+    pbar = _training_progress()
+    task_id = pbar.add_task("Training", total=max_epoch, loss=jnp.inf)
+    pbar.start()
+
+    def _finish_epoch(epoch, loss_sum, gnorm_sum, n, model, step):
+        mean_loss = loss_sum / max(n, 1)
+        mean_gnorm = gnorm_sum / max(n, 1)
+        pbar.update(task_id, advance=1, loss=mean_loss)
+        if metrics_callback is not None:
+            metrics_callback(int(epoch), int(step), mean_loss, mean_gnorm)
+        if checkpoint_callback is not None:
+            checkpoint_callback(model, int(epoch), int(step))
 
     step = jnp.array(0, dtype=jnp.int32)
     key, loader_key = jr.split(key)
+    prev_epoch = 0
+    loss_sum = gnorm_sum = 0.0
+    n_batches = 0
     for batch, epoch, batch_in_epoch in dataloader(train_set, batch_size, max_epoch, loader_key):
         try:
+            if epoch != prev_epoch:  # previous epoch completed
+                _finish_epoch(prev_epoch, loss_sum, gnorm_sum, n_batches, model, step)
+                loss_sum = gnorm_sum = 0.0
+                n_batches = 0
+                prev_epoch = epoch
+
             key, batch_key = jr.split(key)
-            batch = eqx.filter_shard(batch, data_sharding)
-            model, opt_state, step = train_step(model, opt_state, batch, batch_key, step)
-
-            if batch_in_epoch == 0:
-                if checkpoint_callback is not None:
-                    checkpoint_callback(model, int(epoch), int(step))
-                key, monitor_key = jr.split(key)
-                if not monitor.step(model, monitor_key, step) and epoch >= min_epoch:
-                    break
-
+            model, opt_state, step, loss, grad_norm = train_step(
+                model, opt_state, batch, batch_key, step
+            )
+            loss_sum += float(loss)
+            gnorm_sum += float(grad_norm)
+            n_batches += 1
         except KeyboardInterrupt:
             break
-    else:
-        key, monitor_key = jr.split(key)
-        monitor.step(model, monitor_key, step)
 
-    monitor.stop()
-
-    return monitor.best_model
+    _finish_epoch(prev_epoch, loss_sum, gnorm_sum, n_batches, model, step)  # final epoch
+    pbar.stop()
+    return model

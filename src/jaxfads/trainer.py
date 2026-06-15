@@ -11,7 +11,6 @@ from functools import partial
 import time
 
 import jax
-import numpy as np
 import optax
 import equinox as eqx
 from jax import Array
@@ -57,6 +56,8 @@ DEFAULT_TRAINER_CONFIG = DictConfig(
         # Periodic checkpointing: save every N epochs to checkpoint_dir (0 = off).
         "checkpoint_dir": None,
         "checkpoint_every": 0,
+        # Per-epoch training-metrics TSV (epoch/step/train_loss/grad_norm); None = off.
+        "metrics_path": None,
     }
 )
 
@@ -373,13 +374,11 @@ def train(model, data, *, conf):
     - Multi-device data parallelism
     - Dynamic batch permutation for better mixing
     """
-    user_set_patience = "patience" in conf
     conf = OmegaConf.merge(DEFAULT_TRAINER_CONFIG, conf)
 
     t0 = time.perf_counter()
 
     key = jr.key(conf.seed)
-    rng = np.random.default_rng(conf.seed)
 
     # >>> Prepare sharding
     n_devices = len(jax.devices())
@@ -387,32 +386,18 @@ def train(model, data, *, conf):
     data_sharding = jshd.NamedSharding(mesh, jshd.PartitionSpec("batch"))
     model_sharding = jshd.NamedSharding(mesh, jshd.PartitionSpec())
 
-    # Prepare data
-    # batch size is required to be multiple of the number of devices
-    # validation size is required to be multile of batch_size
+    # Prepare data: no validation split / early stopping — train the full budget
+    # on all data and return the final model (diagnostic-workflow refactor).
     data_size = len(data[0])
     batch_size = conf.batch_size
-    if conf.validation_size > 0:
-        valid_size = conf.validation_size
-    else:
-        valid_size = int(data_size * conf.valid_ratio)
-    train_size = data_size - valid_size
-
-    train_set, valid_set = train_test_split(
-        data, rng=rng, test_size=valid_size, train_size=train_size
-    )
-    if not user_set_patience:
-        conf.patience = compute_patience(conf.max_epoch, data_size, batch_size)
+    train_set = data
 
     logger.info(
-        "train start: devices=%d batch_size=%d data=%d train=%d valid=%d max_epoch=%d patience=%d seed=%d kl_warmup_steps=%d",
+        "train start: devices=%d batch_size=%d data=%d max_epoch=%d seed=%d kl_warmup_steps=%d (no val/early-stop)",
         n_devices,
         int(conf.batch_size),
         int(data_size),
-        int(train_size),
-        int(valid_size),
         int(conf.max_epoch),
-        int(conf.patience),
         int(conf.seed),
         int(conf.kl_warmup_steps),
     )
@@ -483,21 +468,35 @@ def train(model, data, *, conf):
                 save_model(str(ckpt_path / f"model_epoch{epoch}.zip"), m)
                 logger.info("checkpoint saved: epoch=%d step=%d", epoch, step)
 
+    # Per-epoch training metrics for diagnosis (incremental TSV; survives a crash).
+    metrics_callback = None
+    metrics_path = conf.get("metrics_path", None)
+    if metrics_path:
+        from pathlib import Path
+
+        _mp = Path(metrics_path)
+        _mp.parent.mkdir(parents=True, exist_ok=True)
+        _mf = _mp.open("w")
+        _mf.write("epoch\tstep\ttrain_loss\tgrad_norm\n")
+        _mf.flush()
+
+        def metrics_callback(epoch, step, train_loss, grad_norm):
+            _mf.write(f"{epoch}\t{step}\t{train_loss:.6e}\t{grad_norm:.6e}\n")
+            _mf.flush()
+
     model = _train_loop.train(
         model,
         train_set,
-        valid_set,
         key,
         loss_fn,
         dataloader,
         conf.batch_size,
         conf.max_epoch,
-        conf.patience,
         optimizer,
         data_sharding,
         model_sharding,
-        conf.min_epoch,
         checkpoint_callback=checkpoint_callback,
+        metrics_callback=metrics_callback,
     )
 
     dt = time.perf_counter() - t0
