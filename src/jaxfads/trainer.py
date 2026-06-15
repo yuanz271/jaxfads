@@ -19,7 +19,7 @@ from jax import numpy as jnp
 from jax import random as jr
 from jax import sharding as jshd
 from omegaconf import DictConfig, OmegaConf
-from gearax import trainer as gt
+from . import _train_loop
 
 from . import vi
 from .logging import get_logger
@@ -54,6 +54,9 @@ DEFAULT_TRAINER_CONFIG = DictConfig(
         # Optional list of dot-separated attribute paths to freeze.
         # Example: ["noise_free", "unconstrained_prior_natural"]
         "freeze_paths": [],
+        # Periodic checkpointing: save every N epochs to checkpoint_dir (0 = off).
+        "checkpoint_dir": None,
+        "checkpoint_every": 0,
     }
 )
 
@@ -463,7 +466,24 @@ def train(model, data, *, conf):
             noise_regularizer=conf.noise_regularizer,
         )
 
-    model = gt.train(
+    # Optional periodic checkpoint callback (every `checkpoint_every` epochs).
+    checkpoint_callback = None
+    ckpt_dir = conf.get("checkpoint_dir", None)
+    ckpt_every = int(conf.get("checkpoint_every", 0) or 0)
+    if ckpt_dir and ckpt_every > 0:
+        from pathlib import Path
+
+        from gearax.modules import save_model
+
+        ckpt_path = Path(ckpt_dir)
+        ckpt_path.mkdir(parents=True, exist_ok=True)
+
+        def checkpoint_callback(m, epoch, step):  # noqa: ARG001 - step kept for signature parity
+            if epoch > 0 and epoch % ckpt_every == 0:
+                save_model(str(ckpt_path / f"model_epoch{epoch}.zip"), m)
+                logger.info("checkpoint saved: epoch=%d step=%d", epoch, step)
+
+    model = _train_loop.train(
         model,
         train_set,
         valid_set,
@@ -477,6 +497,7 @@ def train(model, data, *, conf):
         data_sharding,
         model_sharding,
         conf.min_epoch,
+        checkpoint_callback=checkpoint_callback,
     )
 
     dt = time.perf_counter() - t0
