@@ -13,6 +13,7 @@ diagnostic workflow:
     ``jaxfads.trainer``.
 """
 
+import math
 from collections.abc import Callable
 from typing import Any
 
@@ -115,9 +116,15 @@ def train(
             model, opt_state, step, loss, grad_norm = train_step(
                 model, opt_state, batch, batch_key, step
             )
-            loss_sum += float(loss)
+            loss_f = float(loss)
+            loss_sum += loss_f
             gnorm_sum += float(grad_norm)
             n_batches += 1
+            # NaN-guard: a non-finite loss never recovers; stop early instead of
+            # burning the rest of the epoch budget (still records the diverged epoch).
+            if not math.isfinite(loss_f):
+                print(f"[train] non-finite loss at epoch {int(epoch)} step {int(step)}; stopping early")
+                break
         except KeyboardInterrupt:
             break
 
