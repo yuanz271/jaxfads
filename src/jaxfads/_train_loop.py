@@ -60,6 +60,7 @@ def train(
     *,
     checkpoint_callback: Callable | None = None,
     metrics_callback: Callable | None = None,
+    model_callback: Callable | None = None,
 ) -> Any:
     """Train for the full ``max_epoch`` budget (no validation / early stopping).
 
@@ -68,6 +69,8 @@ def train(
 
     * ``checkpoint_callback(model, epoch, step)`` — persist a checkpoint.
     * ``metrics_callback(epoch, step, train_loss, grad_norm)`` — record diagnostics.
+    * ``model_callback(model, epoch, step) -> model`` — optional epoch-boundary
+      model update, e.g. externally scheduled frozen parameters.
 
     Returns the **final** model (not a best-validation snapshot).
     """
@@ -101,6 +104,8 @@ def train(
 
     step = jnp.array(0, dtype=jnp.int32)
     key, loader_key = jr.split(key)
+    if model_callback is not None:
+        model = model_callback(model, 0, 0)
     prev_epoch = 0
     loss_sum = gnorm_sum = 0.0
     n_batches = 0
@@ -111,6 +116,8 @@ def train(
                 loss_sum = gnorm_sum = 0.0
                 n_batches = 0
                 prev_epoch = epoch
+                if model_callback is not None:
+                    model = model_callback(model, int(epoch), int(step))
 
             key, batch_key = jr.split(key)
             model, opt_state, step, loss, grad_norm = train_step(

@@ -8,6 +8,7 @@ maximizing the Evidence Lower Bound (ELBO) objective.
 """
 
 from functools import partial
+import math
 import time
 
 import jax
@@ -58,6 +59,9 @@ DEFAULT_TRAINER_CONFIG = DictConfig(
         "checkpoint_every": 0,
         # Per-epoch training-metrics TSV (epoch/step/train_loss/grad_norm); None = off.
         "metrics_path": None,
+        # Optional log-linear external schedule for process-noise variance Q.
+        # Dict keys: start, end, epochs. Applies to model.noise_free at epoch boundaries.
+        "state_noise_schedule": None,
     }
 )
 
@@ -468,6 +472,30 @@ def train(model, data, *, conf):
                 save_model(str(ckpt_path / f"model_epoch{epoch}.zip"), m)
                 logger.info("checkpoint saved: epoch=%d step=%d", epoch, step)
 
+    # Optional process-noise schedule: useful when Q should be frozen from gradients
+    # but annealed externally to avoid cold-starting with a huge Q^{-1} precision.
+    model_callback = None
+    state_noise_schedule = conf.get("state_noise_schedule", None)
+    if state_noise_schedule is not None:
+        start = float(state_noise_schedule.start)
+        end = float(state_noise_schedule.end)
+        n_epochs = max(1, int(state_noise_schedule.epochs))
+        if start <= 0 or end <= 0:
+            raise ValueError("state_noise_schedule start/end must be positive")
+        log_start, log_end = math.log(start), math.log(end)
+
+        def model_callback(m, epoch, step):  # noqa: ARG001 - step kept for callback parity
+            frac = min(max(epoch, 0), n_epochs) / n_epochs
+            q = math.exp(log_start + frac * (log_end - log_start))
+            return eqx.tree_at(lambda mm: mm.noise_free, m, m.approx.free_from_kw(scale=q))
+
+        logger.info(
+            "state-noise schedule: Q %.6g -> %.6g over %d epochs (log-linear)",
+            start,
+            end,
+            n_epochs,
+        )
+
     # Per-epoch training metrics for diagnosis (incremental TSV; survives a crash).
     metrics_callback = None
     metrics_path = conf.get("metrics_path", None)
@@ -497,6 +525,7 @@ def train(model, data, *, conf):
         model_sharding,
         checkpoint_callback=checkpoint_callback,
         metrics_callback=metrics_callback,
+        model_callback=model_callback,
     )
 
     dt = time.perf_counter() - t0
