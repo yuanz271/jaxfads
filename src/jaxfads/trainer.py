@@ -306,20 +306,18 @@ def _training_progress() -> Progress:
         - Progress counter
         - Elapsed time
         - Remaining time estimate
-        - Current loss value
-        - Best observed loss
+        - Current (per-epoch) training loss
 
     Notes
     -----
-    The progress bar provides real-time feedback during training including
-    the instantaneous loss and the best loss encountered so far.
+    The progress bar provides real-time feedback during training, showing the
+    per-epoch training loss.
     """
     return Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         "Epoch",
         MofNCompleteColumn(),
-        # TextColumn("•"),
         "Elapsed",
         TimeElapsedColumn(),
         "Remaining",
@@ -605,7 +603,9 @@ def _run_training_loop(
         else:
             finalize_epoch(current_epoch, epoch_batch_losses)
     except KeyboardInterrupt:
-        pass
+        logger.info(
+            "training interrupted (KeyboardInterrupt); returning current model"
+        )
     finally:
         pbar.stop()
 
