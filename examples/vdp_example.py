@@ -518,7 +518,7 @@ def main() -> None:
     n_devices = len(jax.devices())
     batch_size = max(n_devices, (32 // n_devices) * n_devices)
 
-    # The caller owns the train/validation split; validation lives in a EpochHandler.
+    # The caller owns the train/validation split; validation lives in an EpochHandler.
     train_data, valid_data = train_test_split(
         data, rng=np.random.default_rng(0), test_size=batch_size
     )

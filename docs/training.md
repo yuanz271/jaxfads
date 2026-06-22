@@ -155,7 +155,7 @@ EpochHandler is fully opt-in:
 
 The trainer does not split data. Split it yourself (the helper
 `jaxfads.trainer.train_test_split` is provided) and pass the validation set to
-a `EpochHandler`:
+an `EpochHandler`:
 
 ```python
 from jaxfads.trainer import train_test_split
