@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+* **Breaking:** `train` no longer splits data or handles validation. Its
+  signature is now `train(model, train_data, *, conf, on_epoch_end=None)` and it
+  returns the final-epoch model. Removed `valid_ratio`, `validation_size`,
+  `min_epoch`, `min_iter`, `max_iter`, and `beta` from the trainer config.
+* Added `EpochHandler`, a self-contained epoch-level handler owning validation,
+  best-model tracking, periodic checkpointing, metrics, and optional early
+  stopping. Construct it with `valid_data` and pass it as `on_epoch_end`; read
+  `EpochHandler.best_model` afterwards.
+* Exposed `train_test_split` for callers to build their own train/validation
+  split.
+* Vendored the training loop locally (previously from `gearax.trainer`).
+
 ## 0.7.0
 
 * Renamed the public dynamics/integrator terminology to `Dynamics` / `Integrator` with short concrete classes (`Identity`, `OU`, `Functional`, `Euler`, `RK4`).

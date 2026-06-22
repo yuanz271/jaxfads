@@ -22,7 +22,7 @@ import tensorflow_probability.substrates.jax.distributions as tfp
 from jaxfads import XFADS
 from jaxfads.base import Encoder, Observation, Approx, Dynamics
 from jaxfads.distributions import MVN
-from jaxfads.trainer import train
+from jaxfads.trainer import EpochHandler, train, train_test_split
 
 
 class PCAEncoder(Encoder):
@@ -237,17 +237,19 @@ def nofilt_training_comparison():
         {
             "seed": 0,
             "learning_rate": 1e-2,
-            "min_epoch": 300,
             "max_epoch": 300,
-            "patience": 100,
             "batch_size": 64,
-            "validation_size": 32,
             "weight_decay": 0.0,
             "freeze_paths": ["alpha_encoder", "observation", "noise_free"],
         }
     )
 
-    trained = train(model, data, conf=trainer_conf)
+    train_data, valid_data = train_test_split(
+        data, rng=np.random.default_rng(0), test_size=32
+    )
+    handler = EpochHandler(valid_data=valid_data, patience=100)
+    train(model, train_data, conf=trainer_conf, on_epoch_end=handler)
+    trained = handler.best_model
 
     w_learned = np.asarray(trained.dynamics.W)
     w_dist = float(np.linalg.norm(w_learned - np.asarray(a_ols), ord="fro"))

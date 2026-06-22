@@ -27,7 +27,7 @@ from jaxfads import XFADS, configure_logging
 from jaxfads.base import Dynamics
 from jaxfads.nn import make_mlp
 from jaxfads.observations import GLM  # noqa: F401 — registers GLM
-from jaxfads.trainer import train
+from jaxfads.trainer import EpochHandler, train, train_test_split
 
 
 # ---------------------------------------------------------------------------
@@ -518,6 +518,11 @@ def main() -> None:
     n_devices = len(jax.devices())
     batch_size = max(n_devices, (32 // n_devices) * n_devices)
 
+    # The caller owns the train/validation split; validation lives in an EpochHandler.
+    train_data, valid_data = train_test_split(
+        data, rng=np.random.default_rng(0), test_size=batch_size
+    )
+
     base_trainer_conf = dict(
         seed=0,
         learning_rate=1e-3,
@@ -525,10 +530,7 @@ def main() -> None:
         weight_decay=1e-3,
         noise_eta=0.0,
         noise_gamma=0.8,
-        min_epoch=0,
         batch_size=batch_size,
-        validation_size=batch_size,
-        valid_ratio=0.2,
     )
 
     trainer_conf_mlp = OmegaConf.create({**base_trainer_conf, "max_epoch": 500})
@@ -568,9 +570,11 @@ def main() -> None:
         }
     )
     model1 = XFADS(conf1, jr.key(456))
-    model1 = model1.initialize(*data)
+    model1 = model1.initialize(*train_data)
 
-    trained1 = train(model1, data, conf=trainer_conf_mlp)
+    handler1 = EpochHandler(valid_data=valid_data)
+    train(model1, train_data, conf=trainer_conf_mlp, on_epoch_end=handler1)
+    trained1 = handler1.best_model
 
     key, k = jr.split(key)
     r1 = evaluate(
@@ -630,9 +634,11 @@ def main() -> None:
         }
     )
     model2 = XFADS(conf2, jr.key(789))
-    model2 = model2.initialize(*data)
+    model2 = model2.initialize(*train_data)
 
-    trained2 = train(model2, data, conf=trainer_conf_ou)
+    handler2 = EpochHandler(valid_data=valid_data)
+    train(model2, train_data, conf=trainer_conf_ou, on_epoch_end=handler2)
+    trained2 = handler2.best_model
 
     key, k = jr.split(key)
     r2 = evaluate(
@@ -695,9 +701,11 @@ def main() -> None:
         }
     )
     model3 = XFADS(conf3, jr.key(321))
-    model3 = model3.initialize(*data)
+    model3 = model3.initialize(*train_data)
 
-    trained3 = train(model3, data, conf=trainer_conf_lora)
+    handler3 = EpochHandler(valid_data=valid_data)
+    train(model3, train_data, conf=trainer_conf_lora, on_epoch_end=handler3)
+    trained3 = handler3.best_model
 
     key, k = jr.split(key)
     r3 = evaluate(
