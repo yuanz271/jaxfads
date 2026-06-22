@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.8.0
+
 * **Breaking:** `train` no longer splits data or handles validation. Its
   signature is now `train(model, train_data, *, conf, on_epoch_end=None)` and it
   returns the final-epoch model. Removed `valid_ratio`, `validation_size`,
