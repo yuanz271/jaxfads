@@ -10,6 +10,7 @@ maximizing the Evidence Lower Bound (ELBO) objective.
 from collections.abc import Callable
 from functools import partial
 import json
+import math
 from pathlib import Path
 import time
 
@@ -347,7 +348,8 @@ class EpochHandler:
 
     All behavior is opt-in:
 
-    - validation/best tracking require ``valid_data``
+    - validation and best-model tracking are enabled whenever ``valid_data`` is
+      given (best tracking is automatic; there is no separate flag)
     - ``checkpoint_path is None`` disables checkpoint/metric writing
     - ``patience is None`` disables early stopping
 
@@ -355,14 +357,14 @@ class EpochHandler:
     ----------
     valid_data : tuple or None
         Validation ``(t, y, u, c)`` evaluated as a single batch each epoch.
+        When given, the best-by-validation model is tracked automatically in
+        :attr:`best_model`.
     checkpoint_path : str or Path or None
         Directory for checkpoints/metrics/config. Created if missing.
     checkpoint_every : int or None
         Save the current model every ``checkpoint_every`` epochs.
     patience : int or None
         Epochs without validation improvement before requesting a stop.
-    track_best : bool
-        Whether to keep the best-by-validation model in :attr:`best_model`.
     save_fn : Callable or None
         ``save_fn(model, path)`` persisting a model; defaults to ``save_model``.
     config : Any or None
@@ -380,7 +382,6 @@ class EpochHandler:
         checkpoint_path=None,
         checkpoint_every=None,
         patience=None,
-        track_best=True,
         save_fn: Callable | None = None,
         config=None,
         data_sharding=None,
@@ -393,7 +394,6 @@ class EpochHandler:
         )
         self.checkpoint_every = checkpoint_every
         self.patience = patience
-        self.track_best = track_best
         self.save_fn = save_fn if save_fn is not None else (lambda m, p: save_model(p, m))
         self.data_sharding = data_sharding
         self.model_sharding = model_sharding
@@ -445,8 +445,11 @@ class EpochHandler:
             self.valid_losses.append(valid_loss)
 
         improved = False
-        if self.track_best and valid_loss is not None:
-            if valid_loss < self.best_loss:
+        if valid_loss is not None and math.isfinite(valid_loss):
+            # Seed best_model on the first finite validation loss, then track
+            # subsequent improvements. A never-finite run leaves best_model None
+            # to signal a failed/diverged training.
+            if self.best_model is None or valid_loss < self.best_loss:
                 self.best_loss = valid_loss
                 self.best_model = _copy_pytree(model)
                 self.patience_left = self.patience
