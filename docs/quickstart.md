@@ -67,10 +67,12 @@ trainer_conf = OmegaConf.create(
         "learning_rate": 1e-3,
         "max_epoch": 50,
         "batch_size": 16,
-        "validation_size": 16,
         "freeze_paths": [],
     }
 )
+# Minimal run trains on all data and returns the final-epoch model.
+# For validation/checkpointing/early stopping, split the data and pass a
+# `EpochHandler` as `on_epoch_end` (see Training Configuration).
 trained = train(model, data, conf=trainer_conf)
 
 natural_params, moment_params, predictions = trained(
@@ -98,7 +100,8 @@ natural_params, moment_params, predictions = trained(
    use `dyn_conf.fn_path="module:function"`.
 1. If running a script directly, use `__main__:symbol_name` in `fn_path`.
 1. `batch_size` must be divisible by the number of JAX devices.
-1. `validation_size > 0` overrides `valid_ratio`.
+1. The trainer does not split data; build `valid_data` yourself and pass a
+   `EpochHandler` for validation/best tracking.
 
 ## Next Docs
 

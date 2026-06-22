@@ -15,20 +15,14 @@ def trainer_config():
     """Default training configuration."""
     return OmegaConf.create(
         {
-            "min_iter": 0,
-            "max_iter": 5,
-            "min_epoch": 0,
             "max_epoch": 5,
             "learning_rate": 1e-3,
             "clip_norm": 5.0,
             "batch_size": 2,
             "weight_decay": 1e-3,
-            "beta": 0.95,
             "seed": 42,
             "noise_eta": 0.5,
             "noise_gamma": 0.8,
-            "valid_ratio": 0.2,
-            "validation_size": 2,
         }
     )
 
@@ -104,7 +98,6 @@ def test_train(model_conf, trainer_config, sample_data):
     model = XFADS(model_conf, jrnd.key(0))
     trainer_config.max_epoch = 10
     trainer_config.batch_size = 64
-    trainer_config.validation_size = 32
 
     # This should run without errors
     trained_model = train(model, sample_data, conf=trainer_config)
@@ -164,7 +157,6 @@ def test_train_lora_rank1_end_to_end(trainer_config, sample_data):
     model = XFADS(model_conf, jrnd.key(0))
     trainer_config.max_epoch = 5
     trainer_config.batch_size = 64
-    trainer_config.validation_size = 32
 
     trained_model = train(model, sample_data, conf=trainer_config)
 
@@ -191,7 +183,6 @@ def test_train_freeze_paths_keeps_state_noise_fixed(
 
     trainer_config.max_epoch = 3
     trainer_config.batch_size = 64
-    trainer_config.validation_size = 32
     trainer_config.freeze_paths = ["noise_free"]
     trained_model = train(model, sample_data, conf=trainer_config)
     noise_trained = jax.device_get(trained_model.noise_free)
@@ -207,7 +198,6 @@ def test_train_freeze_paths_can_freeze_arbitrary_leaves(
 
     trainer_config.max_epoch = 3
     trainer_config.batch_size = 64
-    trainer_config.validation_size = 32
     trainer_config.freeze_paths = ["unconstrained_prior_natural"]
 
     trained_model = train(model, sample_data, conf=trainer_config)
@@ -221,7 +211,6 @@ def test_train_freeze_paths_invalid_path_raises(
     model = XFADS(model_conf, jrnd.key(0))
     trainer_config.max_epoch = 1
     trainer_config.batch_size = 64
-    trainer_config.validation_size = 32
     trainer_config.freeze_paths = ["does.not.exist"]
 
     with pytest.raises(ValueError, match="Invalid freeze path"):
