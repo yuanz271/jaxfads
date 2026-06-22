@@ -19,7 +19,8 @@ from jax import numpy as jnp
 from jax import random as jr
 from jax import sharding as jshd
 from omegaconf import DictConfig, OmegaConf
-from gearax import trainer as gt
+
+from . import _train_loop
 
 from . import vi
 from .logging import get_logger
@@ -463,7 +464,7 @@ def train(model, data, *, conf):
             noise_regularizer=conf.noise_regularizer,
         )
 
-    model = gt.train(
+    model = _train_loop.train(
         model,
         train_set,
         valid_set,
