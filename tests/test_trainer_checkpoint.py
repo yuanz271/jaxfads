@@ -58,8 +58,13 @@ def _model_conf(obs_dim=6, state_dim=2):
 
 
 def _trainer_conf(**overrides):
-    base = {"max_epoch": 3, "batch_size": 4, "learning_rate": 1e-3, "seed": 0,
-            "noise_eta": 0.0}
+    base = {
+        "max_epoch": 3,
+        "batch_size": 4,
+        "learning_rate": 1e-3,
+        "seed": 0,
+        "noise_eta": 0.0,
+    }
     base.update(overrides)
     return OmegaConf.create(base)
 
@@ -68,6 +73,16 @@ def _new_model():
     from jaxfads.smoother import XFADS
 
     return XFADS(_model_conf(), jrnd.key(0))
+
+
+def _assert_loadable_checkpoint(path, batch):
+    from jaxfads.smoother import XFADS
+
+    loaded = XFADS.load(path)
+    free_energy, post_moments, prior_moments = loaded(*batch, key=jrnd.key(123))
+    assert jnp.isfinite(free_energy).all()
+    assert jnp.isfinite(post_moments).all()
+    assert jnp.isfinite(prior_moments).all()
 
 
 def test_monitor_writes_artifacts(tmp_path):
@@ -94,6 +109,11 @@ def test_monitor_writes_artifacts(tmp_path):
     assert len(metrics["train_losses"]) == 3
     assert len(metrics["valid_losses"]) == 3
     assert handler.best_model is not None
+
+    batch = tuple(x[:2] for x in train_data)
+    _assert_loadable_checkpoint(tmp_path / "best.zip", batch)
+    for checkpoint in checkpoints:
+        _assert_loadable_checkpoint(checkpoint, batch)
 
 
 def test_no_handler_writes_nothing(tmp_path):
