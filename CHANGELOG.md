@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+* KL warm-up is now driven by an `optax` schedule built from
+  `conf.kl_warmup_steps`, evaluated on the training step and passed as the
+  `beta` KL weight. `beta` stays an objective coefficient (never routed through
+  the optimizer).
+* **Breaking:** `batch_loss` is now a pure objective evaluator
+  `batch_loss(model, batch, key, *, beta=1.0, noise_regularizer=None)`; the
+  `step` and `kl_warmup_steps` arguments were removed. Callers compute the KL
+  weight and pass `beta` directly.
+
 ## 0.8.0
 
 * **Breaking:** `train` no longer splits data or handles validation. Its

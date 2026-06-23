@@ -116,7 +116,14 @@ def train_test_split(arrays, *, rng, test_ratio=None, test_size=None, train_size
 
 
 def batch_elbo(
-    model, key, times, posterior_moments, predicted_moments, observations, *, beta=1.0
+    model,
+    key,
+    times,
+    posterior_moments,
+    predicted_moments,
+    observations,
+    *,
+    beta,
 ) -> Array:
     """
     Compute Evidence Lower Bound (ELBO) for batched sequences.
@@ -139,7 +146,8 @@ def batch_elbo(
     observations : Array, shape (N, T, observation_dim)
         Observed data sequences.
     beta : float, optional
-        KL weight for warm-up annealing, in ``[0, 1]``.  Default is ``1.0``.
+        KL weight in ``[0, 1]`` (required). ``beta = 1`` is the standard,
+        un-annealed ELBO; warm-up supplies a value ramping up to it.
 
     Returns
     -------
@@ -173,13 +181,17 @@ def batch_loss(
     model,
     batch,
     key,
-    step,
     *,
-    kl_warmup_steps=0,
+    beta=1.0,
     noise_regularizer=None,
 ):
     """
     Compute negative ELBO loss for a batch of sequences.
+
+    This is a pure objective evaluator: it depends only on ``(model, batch,
+    key, beta)``. It has no notion of training step or KL warm-up -- the KL
+    weight ``beta`` is supplied by the caller (the trainer evaluates a
+    schedule and passes the value in; see :func:`train`).
 
     Parameters
     ----------
@@ -191,13 +203,10 @@ def batch_loss(
         matching the training data layout.
     key : Array
         JAX PRNGKey used for stochastic components.
-    step : Array
-        Scalar ``jnp.int32`` training step counter provided by the
-        training loop.
-    kl_warmup_steps : int, optional
-        Number of training steps over which the KL weight β is linearly
-        annealed from 0 to 1.  When ``0`` (default) the standard ELBO is
-        used (β = 1 from the start).
+    beta : float or Array, optional
+        KL weight in ``[0, 1]``. Default ``1.0`` (standard, un-annealed ELBO).
+    noise_regularizer : Callable or None, optional
+        Optional ``noise_regularizer(model) -> Array`` added to the loss.
 
     Returns
     -------
@@ -205,12 +214,6 @@ def batch_loss(
         Scalar loss equal to the mean negative ELBO over the batch, plus
         optional regularization terms.
     """
-    beta = jnp.where(
-        kl_warmup_steps > 0,
-        jnp.minimum(1.0, step / kl_warmup_steps),
-        1.0,
-    )
-
     times, observations, controls, covariates = batch
 
     key, model_key = jr.split(key)
@@ -418,28 +421,24 @@ class EpochHandler:
         data_sharding = self.data_sharding
 
         @eqx.filter_jit
-        def _evaluate(model, batch, key, step):
+        def _evaluate(model, batch, key):
             model = eqx.nn.inference_mode(model)
             if model_sharding is not None:
                 model = eqx.filter_shard(model, model_sharding)
             if data_sharding is not None:
                 batch = eqx.filter_shard(batch, data_sharding)
-            return lax.stop_gradient(
-                batch_loss(
-                    model, batch, key, step, kl_warmup_steps=0, noise_regularizer=None
-                )
-            )
+            # Validation uses the true ELBO (beta = 1), no regularizer.
+            return lax.stop_gradient(batch_loss(model, batch, key, beta=1.0))
 
         return _evaluate
 
     def __call__(self, model, info) -> bool:
         epoch = info["epoch"]
-        step = info["step"]
 
         valid_loss = None
         if self.has_valid:
             eval_key = jr.fold_in(self.key, epoch)
-            valid_loss = float(self._evaluate(model, self.valid_data, eval_key, step))
+            valid_loss = float(self._evaluate(model, self.valid_data, eval_key))
             self.valid_losses.append(valid_loss)
 
         improved = False
@@ -709,13 +708,27 @@ def train(model, train_data, *, conf, on_epoch_end=None):
             optax.masked(optax.set_to_zero(), freeze_mask),
         )
 
+    # KL weight schedule: optax curve evaluated on the loop's step counter.
+    # beta is an objective coefficient (not an optimizer hyperparameter), so it
+    # is evaluated here and passed into the loss -- never routed through the
+    # optimizer. kl_warmup_steps == 0 means standard ELBO (beta = 1).
+    kl_warmup_steps = int(conf.kl_warmup_steps)
+    # beta ramps 0 -> 1; beta = 1 is the standard ELBO (the annealing target,
+    # fixed by the variational objective, not a tunable hyperparameter).
+    beta_schedule = (
+        optax.linear_schedule(
+            init_value=0.0, end_value=1.0, transition_steps=kl_warmup_steps
+        )
+        if kl_warmup_steps > 0
+        else optax.constant_schedule(1.0)
+    )
+
     def loss_fn(model, batch, key, step):
         return batch_loss(
             model,
             batch,
             key,
-            step,
-            kl_warmup_steps=conf.kl_warmup_steps,
+            beta=beta_schedule(step),
             noise_regularizer=conf.noise_regularizer,
         )
 

@@ -1,5 +1,6 @@
 import pytest
 import jax
+import optax
 from jax import numpy as jnp, random as jrnd
 import chex
 from omegaconf import OmegaConf
@@ -8,6 +9,29 @@ from jaxfads.trainer import train
 from jaxfads.smoother import XFADS
 import jaxfads.observations  # noqa: F401 — register GLM subclass
 from conftest import MockDynamics  # noqa: F401 - class registration side-effect
+
+
+@pytest.mark.parametrize("kl_warmup_steps", [0, 1, 4, 10])
+def test_kl_warmup_schedule_matches_legacy_formula(kl_warmup_steps):
+    """The optax KL-weight curve matches the old inline beta ramp.
+
+    Legacy: beta = where(n > 0, min(1, step/n), 1.0). New: an optax schedule
+    evaluated on the loop step. Values agree within float32 tolerance (optax's
+    affine ``1 - (1 - step/n)`` form differs from direct ``step/n`` by ~1 ULP;
+    the warm-up-off case beta == 1.0 is exact).
+    """
+    schedule = (
+        optax.linear_schedule(0.0, 1.0, kl_warmup_steps)
+        if kl_warmup_steps > 0
+        else optax.constant_schedule(1.0)
+    )
+    for step in [0, 1, 2, 3, 4, 5, 9, 10, 11, 50]:
+        legacy = (
+            min(1.0, step / kl_warmup_steps) if kl_warmup_steps > 0 else 1.0
+        )
+        chex.assert_trees_all_close(
+            jnp.asarray(float(schedule(step))), jnp.asarray(legacy), atol=1e-6
+        )
 
 
 @pytest.fixture

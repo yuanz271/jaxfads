@@ -79,16 +79,15 @@ def test_noise_regularizer_is_added(model_conf, sample_data):
     model = model.initialize(*sample_data)
 
     key = jax.random.key(1)
-    step = jnp.array(0, dtype=jnp.int32)
 
-    base = batch_loss(model, sample_data, key, step, noise_regularizer=None)
+    base = batch_loss(model, sample_data, key, noise_regularizer=None)
 
     lam = jnp.array(1e-3, dtype=base.dtype)
 
     def l2_reg(m):
         return lam * jnp.sum(m.noise_free**2)
 
-    reg = batch_loss(model, sample_data, key, step, noise_regularizer=l2_reg)
+    reg = batch_loss(model, sample_data, key, noise_regularizer=l2_reg)
 
     chex.assert_trees_all_close(reg - base, l2_reg(model), atol=1e-6)
 
@@ -99,10 +98,9 @@ def test_stop_gradient_on_noise_free_zeroes_its_grad_component(model_conf, sampl
     model = model.initialize(*sample_data)
 
     key = jax.random.key(1)
-    step = jnp.array(0, dtype=jnp.int32)
 
     def loss(m):
-        return batch_loss(m, sample_data, key, step, noise_regularizer=None)
+        return batch_loss(m, sample_data, key, noise_regularizer=None)
 
     grads = eqx.filter_grad(loss)(model)
     assert jnp.any(grads.noise_free != 0)
@@ -113,7 +111,7 @@ def test_stop_gradient_on_noise_free_zeroes_its_grad_component(model_conf, sampl
             m,
             jax.lax.stop_gradient(m.noise_free),
         )
-        return batch_loss(m, sample_data, key, step, noise_regularizer=None)
+        return batch_loss(m, sample_data, key, noise_regularizer=None)
 
     frozen_grads = eqx.filter_grad(frozen_loss)(model)
 
