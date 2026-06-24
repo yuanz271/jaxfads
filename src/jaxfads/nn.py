@@ -89,8 +89,9 @@ def make_mlp(
     layers = [enn.Linear(in_size, width, key=layer_key), enn.Lambda(activation)]
     for i in range(depth - 1):
         key, layer_key = jrnd.split(key)
-        layers.append(enn.Linear(width, width, key=layer_key))
-        layers.append(enn.Lambda(activation))
+        layers.extend(
+            [enn.Linear(width, width, key=layer_key), enn.Lambda(activation)]
+        )
         if dropout is not None:
             layers.append(enn.Dropout(dropout))
     key, layer_key = jrnd.split(key)
