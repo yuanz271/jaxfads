@@ -7,9 +7,13 @@
   `beta` KL weight. `beta` stays an objective coefficient (never routed through
   the optimizer).
 * **Breaking:** `batch_loss` is now a pure objective evaluator
-  `batch_loss(model, batch, key, *, beta=1.0, noise_regularizer=None)`; the
-  `step` and `kl_warmup_steps` arguments were removed. Callers compute the KL
-  weight and pass `beta` directly.
+  `batch_loss(model, batch, key, *, beta=1.0)`; the `step`, `kl_warmup_steps`,
+  and `noise_regularizer` arguments were removed. Callers compute the KL weight
+  and pass `beta` directly.
+* **Breaking:** the model regularizer is no longer a config field
+  (`conf.noise_regularizer` removed). Pass it directly as
+  `train(model, data, conf=..., regularizer=...)`; the trainer composes
+  `loss = -ELBO + regularizer(model)`. The config stays serializable.
 
 ## 0.8.0
 

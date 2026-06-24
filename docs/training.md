@@ -50,7 +50,10 @@ Pass a `DictConfig` (or plain dict) as `conf`. Missing keys are filled from
 | `noise_gamma` | `0.8` | Gradient noise decay exponent |
 | `seed` | `0` | Random seed for shuffling and noise |
 | `freeze_paths` | `[]` | Optional list of dot-separated model attribute paths to freeze (e.g. `["noise_free"]`) |
-| `noise_regularizer` | `None` | Optional `Callable[[XFADS], Array]` added to the loss |
+
+A model regularizer is **not** a config field; it is passed directly to
+`train(..., regularizer=...)` (see below), because it is a Python callable and
+the config is meant to stay serializable.
 
 Validation, checkpointing, and early stopping are not training config; they are
 handler concerns (see [`EpochHandler`](#epoch-callbacks-and-the-epochhandler)).
@@ -176,23 +179,30 @@ loss = mean(-ELBO) + regularizer(model)
 
 where:
 - **ELBO** = E_q[log p(y|z)] − KL(q(z|y) ∥ p(z))
-- `regularizer(model)` is an *optional* user-provided callable set on the
-  **trainer configuration** as `noise_regularizer`.
+- `regularizer(model)` is an *optional* user-provided callable passed to
+  `train(model, data, conf=..., regularizer=...)`. `batch_loss` itself stays a
+  pure objective; the trainer composes `loss = -ELBO + regularizer(model)`.
 
 By default no extra regularization term is added. This keeps the core library
 agnostic to the latent family (not every `Approx` has a covariance-like noise).
 
-### Example: L2 regularizer on process-noise free parameters
+### Example: regularizing the process-noise covariance Q
+
+The penalty must be written in the quantity you intend to regularize. To
+regularize the process-noise covariance Q, transform `noise_free` through the
+Approx rather than penalizing the raw free parameters (which live in a
+nonlinear chart and are not a meaningful function of Q):
 
 ```python
 import jax.numpy as jnp
 
-# Penalize the free-form process noise parameters stored on the model.
-# This is model/Approx-specific by design.
-def l2_noise_regularizer(model):
-    return 1e-4 * jnp.sum(model.noise_free**2)
+def q_regularizer(model):
+    approx = model.approx
+    moment = approx.canon_to_moment(approx.free_to_canon(model.noise_free))
+    _, Q = approx.unpack(moment)          # full (D, D) covariance
+    return 1e-4 * jnp.trace(Q)            # well-defined function of Q
 
-trainer_conf.noise_regularizer = l2_noise_regularizer
+train(model, data, conf=trainer_conf, regularizer=q_regularizer)
 ```
 
 

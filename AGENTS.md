@@ -94,8 +94,15 @@ Invariant for callers:
 
 ### Training regularization
 
-- The trainer supports an optional user hook:
-  - `trainer_conf.noise_regularizer: Callable[[XFADS], Array] | None`
+- The trainer supports an optional user hook passed as an argument (not config,
+  since it is a callable):
+  - `train(model, data, *, conf, on_epoch_end=None, regularizer=None)` where
+    `regularizer: Callable[[XFADS], Array] | None` adds a scalar penalty to the
+    per-batch objective (`loss = -ELBO + regularizer(model)`).
+  - `batch_loss` stays a pure objective; the trainer composes the penalty.
+  - Penalize the intended quantity in its own space (e.g. transform
+    `noise_free` via the Approx to regularize Q; do not penalize the raw free
+    parameters).
 - Parameter freezing is configured declaratively via:
   - `trainer_conf.freeze_paths: list[str]` (dot-separated model attribute paths,
     e.g. `["noise_free"]`)

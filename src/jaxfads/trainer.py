@@ -55,8 +55,6 @@ DEFAULT_TRAINER_CONFIG = DictConfig(
         "noise_eta": 0.5,
         "noise_gamma": 0.8,
         "kl_warmup_steps": 0,
-        # Optional user-provided regularizer: Callable[[XFADS], Array]
-        "noise_regularizer": None,
         # Optional list of dot-separated attribute paths to freeze.
         # Example: ["noise_free", "unconstrained_prior_natural"]
         "freeze_paths": [],
@@ -183,15 +181,14 @@ def batch_loss(
     key,
     *,
     beta=1.0,
-    noise_regularizer=None,
 ):
     """
     Compute negative ELBO loss for a batch of sequences.
 
     This is a pure objective evaluator: it depends only on ``(model, batch,
-    key, beta)``. It has no notion of training step or KL warm-up -- the KL
-    weight ``beta`` is supplied by the caller (the trainer evaluates a
-    schedule and passes the value in; see :func:`train`).
+    key, beta)``. It has no notion of training step, KL warm-up, or
+    regularization -- the KL weight ``beta`` is supplied by the caller, and any
+    parameter penalty is composed by the trainer (see :func:`train`).
 
     Parameters
     ----------
@@ -205,14 +202,11 @@ def batch_loss(
         JAX PRNGKey used for stochastic components.
     beta : float or Array, optional
         KL weight in ``[0, 1]``. Default ``1.0`` (standard, un-annealed ELBO).
-    noise_regularizer : Callable or None, optional
-        Optional ``noise_regularizer(model) -> Array`` added to the loss.
 
     Returns
     -------
     Array
-        Scalar loss equal to the mean negative ELBO over the batch, plus
-        optional regularization terms.
+        Scalar mean negative ELBO over the batch.
     """
     times, observations, controls, covariates = batch
 
@@ -232,13 +226,7 @@ def batch_loss(
         beta=beta,
     )
 
-    mean_fe = jnp.mean(free_energy)
-    reg = (
-        noise_regularizer(model)
-        if noise_regularizer is not None
-        else jnp.asarray(0.0, dtype=mean_fe.dtype)
-    )
-    return mean_fe + reg
+    return jnp.mean(free_energy)
 
 
 def dataloader(arrays, batch_size, num_epochs, key, shuffle=True):
@@ -611,7 +599,7 @@ def _run_training_loop(
     return model
 
 
-def train(model, train_data, *, conf, on_epoch_end=None):
+def train(model, train_data, *, conf, on_epoch_end=None, regularizer=None):
     """
     Training routine for XFADS models with multi-device support.
 
@@ -638,6 +626,13 @@ def train(model, train_data, *, conf, on_epoch_end=None):
         ``on_epoch_end(model, info)`` called once per finished epoch with
         train-only ``info`` (``epoch``, ``step``, ``train_loss``,
         ``train_losses``); returning a truthy value stops training.
+    regularizer : Callable or None, optional
+        Optional ``regularizer(model) -> Array`` scalar penalty added to the
+        per-batch objective (``loss = -ELBO + regularizer(model)``). It is a
+        pure function of the model, so any parameter penalty must be written
+        in the relevant parameter space (e.g. a penalty on the process-noise
+        covariance Q must transform ``noise_free`` via the Approx, not act on
+        the raw free parameters).
 
     Returns
     -------
@@ -724,13 +719,10 @@ def train(model, train_data, *, conf, on_epoch_end=None):
     )
 
     def loss_fn(model, batch, key, step):
-        return batch_loss(
-            model,
-            batch,
-            key,
-            beta=beta_schedule(step),
-            noise_regularizer=conf.noise_regularizer,
-        )
+        loss = batch_loss(model, batch, key, beta=beta_schedule(step))
+        if regularizer is not None:
+            loss = loss + regularizer(model)
+        return loss
 
     final_model = _run_training_loop(
         model,
