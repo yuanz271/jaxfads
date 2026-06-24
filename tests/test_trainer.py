@@ -149,6 +149,43 @@ def test_train_accepts_user_optimizer(model_conf, trainer_config, sample_data):
     assert jnp.any(default.noise_free != custom.noise_free)
 
 
+@pytest.mark.parametrize(
+    "opt_name",
+    ["prodigy", "adamw", "lamb", "lars"],
+)
+def test_train_with_params_aware_optimizer(
+    model_conf, trainer_config, sample_data, opt_name
+):
+    """Params-aware optimizers (read current params at update) work via train().
+
+    These previously failed: the loop passed the full model to ``update`` (bool
+    leaves) and donated buffers that ``params0``-storing optimizers alias.
+    """
+    trainer_config.max_epoch = 4
+    trainer_config.batch_size = 64
+    steps = trainer_config.max_epoch * 2
+
+    optimizers = {
+        "prodigy": optax.contrib.prodigy(
+            learning_rate=optax.linear_schedule(1.0, 0.0, steps)
+        ),
+        "adamw": optax.adamw(1e-3, weight_decay=1e-2),
+        "lamb": optax.lamb(1e-3),
+        "lars": optax.lars(1e-3),
+    }
+
+    model = XFADS(model_conf, jrnd.key(0))
+    before = np.asarray(model.noise_free)  # snapshot: train() donates buffers
+    trained = train(
+        model, sample_data, conf=trainer_config, optimizer=optimizers[opt_name]
+    )
+
+    assert trained is not None
+    assert jnp.all(jnp.isfinite(trained.noise_free))
+    # The optimizer actually updated the model.
+    assert np.any(np.asarray(trained.noise_free) != before)
+
+
 def test_user_optimizer_composes_with_freeze_paths(
     model_conf, trainer_config, sample_data
 ):

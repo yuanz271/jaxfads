@@ -527,12 +527,20 @@ def _run_training_loop(
         loss, grads = eqx.filter_value_and_grad(batch_loss_fun)(
             model, batch, key, step
         )
-        updates, opt_state = optimizer.update(grads, opt_state, model)
+        # Pass the filtered (trainable-array) params -- matching the structure of
+        # ``grads`` -- so *params-aware* optimizers (AdamW, Lion, LAMB, LARS,
+        # Adafactor, Prodigy, D-Adaptation) see a consistent pytree instead of
+        # the full model's bool/callable leaves.
+        params = eqx.filter(model, eqx.is_inexact_array)
+        updates, opt_state = optimizer.update(grads, opt_state, params)
         model = eqx.apply_updates(model, updates)
 
         return model, opt_state, step + 1, loss
 
-    opt_state = optimizer.init(eqx.filter(model, eqx.is_inexact_array))
+    # Initialize on a *copy* of the params so optimizers that store the initial
+    # params (e.g. Prodigy/D-Adaptation) do not alias the live, donated model
+    # buffer (which would trigger a double-donation error).
+    opt_state = optimizer.init(_copy_pytree(eqx.filter(model, eqx.is_inexact_array)))
 
     # put on device
     model, opt_state = eqx.filter_shard((model, opt_state), model_sharding)
@@ -699,7 +707,10 @@ def train(
             optax.scale_by_learning_rate(conf.learning_rate),
         )
 
-    freeze_mask = jax.tree.map(lambda _: False, model)
+    # Build the freeze mask over the *filtered* (trainable-array) structure so it
+    # aligns with the params the optimizer sees inside the training loop.
+    params = eqx.filter(model, eqx.is_inexact_array)
+    freeze_mask = jax.tree.map(lambda _: False, params)
     freeze_paths = [str(p) for p in conf.freeze_paths]
     for path in freeze_paths:
         parts = tuple(path.split("."))

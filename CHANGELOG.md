@@ -14,6 +14,13 @@
   (`conf.noise_regularizer` removed). Pass it directly as
   `train(model, data, conf=..., regularizer=...)`; the trainer composes
   `loss = -ELBO + regularizer(model)`. The config stays serializable.
+* The training loop now supports **params-aware** optimizers (those that read
+  the current parameters at update time): decoupled weight decay (`adamw`,
+  `add_decayed_weights`), trust-ratio methods (`lamb`, `lars`), and
+  learning-rate-free methods (`optax.contrib.prodigy`, `dadapt_adamw`). The loop
+  carries the trainable-array partition as optimizer state (rebuilding the model
+  only inside the loss) and initializes the optimizer on a copy of the params,
+  so any `optax.GradientTransformation` passed via `optimizer=` works.
 * **Breaking:** the default optimizer no longer applies weight decay, and
   `weight_decay` was removed from the trainer config. In a plugin framework the
   trainer cannot know which leaves are weight matrices vs variances/biases, so

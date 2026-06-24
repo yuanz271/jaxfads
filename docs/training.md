@@ -102,6 +102,23 @@ optimizer = optax.chain(
 train(model, data, conf=trainer_conf, optimizer=optimizer)
 ```
 
+Any `optax` optimizer works, including **params-aware** ones that read the
+current parameters at update time -- decoupled weight decay (`adamw`,
+`add_decayed_weights`), trust-ratio methods (`lamb`, `lars`), and learning-rate-
+free methods (`optax.contrib.prodigy`, `dadapt_adamw`). For example, a
+learning-rate-free run (no LR to tune; recommended with a `1.0 -> 0` schedule):
+
+```python
+import optax
+
+steps = max_epoch * steps_per_epoch
+optimizer = optax.contrib.prodigy(
+    learning_rate=optax.linear_schedule(1.0, 0.0, steps),  # 1.0 = base/max
+    safeguard_warmup=True,
+)
+train(model, data, conf=trainer_conf, optimizer=optimizer)
+```
+
 ### Freezing Parameters
 
 Use `freeze_paths` to freeze arbitrary leaves declaratively in serialized
