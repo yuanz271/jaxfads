@@ -527,7 +527,6 @@ def main() -> None:
         seed=0,
         learning_rate=1e-3,
         clip_norm=5.0,
-        weight_decay=1e-3,
         noise_eta=0.0,
         noise_gamma=0.8,
         batch_size=batch_size,

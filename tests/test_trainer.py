@@ -1,6 +1,7 @@
 import pytest
 import jax
 import optax
+import numpy as np
 from jax import numpy as jnp, random as jrnd
 import chex
 from omegaconf import OmegaConf
@@ -43,7 +44,6 @@ def trainer_config():
             "learning_rate": 1e-3,
             "clip_norm": 5.0,
             "batch_size": 2,
-            "weight_decay": 1e-3,
             "seed": 42,
             "noise_eta": 0.5,
             "noise_gamma": 0.8,
@@ -131,6 +131,40 @@ def test_train(model_conf, trainer_config, sample_data):
     assert hasattr(trained_model, "conf")
     assert hasattr(trained_model, "dynamics")
     assert hasattr(trained_model, "integrator")
+
+
+def test_train_accepts_user_optimizer(model_conf, trainer_config, sample_data):
+    """A user-supplied optax optimizer is used in place of the default."""
+    trainer_config.max_epoch = 5
+    trainer_config.batch_size = 64
+
+    def run(optimizer):
+        model = XFADS(model_conf, jrnd.key(0))
+        return train(model, sample_data, conf=trainer_config, optimizer=optimizer)
+
+    default = run(None)
+    custom = run(optax.sgd(1e-2))  # very different update rule than the default
+
+    # A different optimizer yields a different trained model.
+    assert jnp.any(default.noise_free != custom.noise_free)
+
+
+def test_user_optimizer_composes_with_freeze_paths(
+    model_conf, trainer_config, sample_data
+):
+    """``freeze_paths`` is applied on top of a user-supplied optimizer."""
+    trainer_config.max_epoch = 5
+    trainer_config.batch_size = 64
+    trainer_config.freeze_paths = ["noise_free"]
+
+    model = XFADS(model_conf, jrnd.key(0))
+    # Snapshot to host: train() donates the input model's buffers.
+    before = np.asarray(model.noise_free)
+    trained = train(
+        model, sample_data, conf=trainer_config, optimizer=optax.sgd(1e-1)
+    )
+
+    np.testing.assert_allclose(np.asarray(trained.noise_free), before, atol=0.0)
 
 
 def test_train_lora_rank1_end_to_end(trainer_config, sample_data):

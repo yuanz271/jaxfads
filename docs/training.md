@@ -45,11 +45,17 @@ Pass a `DictConfig` (or plain dict) as `conf`. Missing keys are filled from
 | `max_epoch` | `50` | Number of training epochs (always run in full unless a callback stops early) |
 | `batch_size` | `1` | Mini-batch size (must be divisible by device count) |
 | `clip_norm` | `5.0` | Global gradient norm clipping threshold |
-| `weight_decay` | `1e-3` | AdamW-style weight decay |
 | `noise_eta` | `0.5` | Gradient noise scale (for regularisation) |
 | `noise_gamma` | `0.8` | Gradient noise decay exponent |
 | `seed` | `0` | Random seed for shuffling and noise |
 | `freeze_paths` | `[]` | Optional list of dot-separated model attribute paths to freeze (e.g. `["noise_free"]`) |
+
+These fields configure the **built-in** optimizer only. The default optimizer
+applies **no weight decay**: in a plugin framework the trainer cannot know which
+leaves are weight matrices vs variances/biases, so it makes no decay assumption.
+To use (masked) weight decay or a custom schedule, pass your own `optax`
+optimizer via `train(..., optimizer=...)` (see below); the conf optimizer fields
+are then ignored, but `freeze_paths` is still applied on top.
 
 A model regularizer is **not** a config field; it is passed directly to
 `train(..., regularizer=...)` (see below), because it is a Python callable and
@@ -69,9 +75,31 @@ trainer_conf = OmegaConf.create(dict(
     max_epoch=200,
     batch_size=64,
     clip_norm=5.0,
-    weight_decay=1e-3,
     noise_eta=0.0,         # disable gradient noise
 ))
+```
+
+### Custom optimizer (e.g. masked weight decay)
+
+The default optimizer applies no weight decay. To decay only the weight
+matrices of your model (and not biases / variance-like free parameters), build
+an `optax` optimizer with a model-derived mask and pass it to `train`:
+
+```python
+import jax, equinox as eqx, optax
+
+# Decay only 2-D leaves (weight matrices); skip biases, scales, and the
+# free-form covariance parameters (noise_free, unconstrained_prior_natural).
+wd_mask = jax.tree.map(lambda p: eqx.is_inexact_array(p) and p.ndim >= 2, model)
+
+optimizer = optax.chain(
+    optax.clip_by_global_norm(5.0),
+    optax.scale_by_adam(),
+    optax.add_decayed_weights(1e-3, mask=wd_mask),
+    optax.scale_by_learning_rate(1e-3),
+)
+
+train(model, data, conf=trainer_conf, optimizer=optimizer)
 ```
 
 ### Freezing Parameters

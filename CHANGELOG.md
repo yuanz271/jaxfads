@@ -14,6 +14,13 @@
   (`conf.noise_regularizer` removed). Pass it directly as
   `train(model, data, conf=..., regularizer=...)`; the trainer composes
   `loss = -ELBO + regularizer(model)`. The config stays serializable.
+* **Breaking:** the default optimizer no longer applies weight decay, and
+  `weight_decay` was removed from the trainer config. In a plugin framework the
+  trainer cannot know which leaves are weight matrices vs variances/biases, so
+  it makes no decay assumption. `train` now accepts
+  `optimizer=` (an `optax.GradientTransformation`); pass your own optimizer for
+  (masked) weight decay or custom schedules. `freeze_paths` is still applied on
+  top of either the default or a supplied optimizer.
 
 ## 0.8.0
 

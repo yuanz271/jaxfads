@@ -39,18 +39,18 @@ from .logging import get_logger
 logger = get_logger(__name__)
 
 #: Default configuration for XFADS training hyperparameters.
-#: Contains settings for optimization (learning_rate, clip_norm, weight_decay),
-#: training schedule (max_epoch, batch_size), noise injection (noise_eta,
-#: noise_gamma), and KL warm-up (kl_warmup_steps). Validation, checkpointing,
-#: and early stopping are not part of training config; they live in handlers
-#: (see :class:`EpochHandler`).
+#: Contains settings for the default optimizer (learning_rate, clip_norm,
+#: noise_eta, noise_gamma), training schedule (max_epoch, batch_size), and KL
+#: warm-up (kl_warmup_steps). These configure the built-in optimizer only; pass
+#: ``optimizer=`` to :func:`train` to take full control (e.g. weight decay).
+#: Validation, checkpointing, and early stopping are not part of training
+#: config; they live in handlers (see :class:`EpochHandler`).
 DEFAULT_TRAINER_CONFIG = DictConfig(
     {
         "max_epoch": 50,
         "learning_rate": 1e-3,
         "clip_norm": 5.0,
         "batch_size": 1,
-        "weight_decay": 1e-3,
         "seed": 0,
         "noise_eta": 0.5,
         "noise_gamma": 0.8,
@@ -599,7 +599,9 @@ def _run_training_loop(
     return model
 
 
-def train(model, train_data, *, conf, on_epoch_end=None, regularizer=None):
+def train(
+    model, train_data, *, conf, on_epoch_end=None, regularizer=None, optimizer=None
+):
     """
     Training routine for XFADS models with multi-device support.
 
@@ -633,6 +635,14 @@ def train(model, train_data, *, conf, on_epoch_end=None, regularizer=None):
         in the relevant parameter space (e.g. a penalty on the process-noise
         covariance Q must transform ``noise_free`` via the Approx, not act on
         the raw free parameters).
+    optimizer : optax.GradientTransformation or None, optional
+        Optimizer to use. When ``None`` (default), a built-in optimizer is
+        constructed from ``conf`` (gradient clipping, decaying gradient noise,
+        Adam, learning rate) with **no weight decay** -- in a plugin framework
+        the trainer cannot know which leaves are weight matrices vs
+        variances/biases. To use (masked) weight decay or a custom schedule,
+        build your own ``optax`` optimizer and pass it here; the conf optimizer
+        fields are then ignored. ``conf.freeze_paths`` is still applied on top.
 
     Returns
     -------
@@ -669,22 +679,25 @@ def train(model, train_data, *, conf, on_epoch_end=None, regularizer=None):
         model_sharding.spec,
     )
     logger.debug(
-        "optimizer: lr=%s clip_norm=%s weight_decay=%s noise_eta=%s noise_gamma=%s",
+        "optimizer: %s lr=%s clip_norm=%s noise_eta=%s noise_gamma=%s",
+        "user-supplied" if optimizer is not None else "default",
         conf.learning_rate,
         conf.clip_norm,
-        conf.weight_decay,
         conf.noise_eta,
         conf.noise_gamma,
     )
 
-    # Prepare optimizer
-    optimizer = optax.chain(
-        optax.clip_by_global_norm(conf.clip_norm),
-        optax.add_noise(conf.noise_eta, conf.noise_gamma, conf.seed),
-        optax.scale_by_adam(),
-        optax.add_decayed_weights(conf.weight_decay),
-        optax.scale_by_learning_rate(conf.learning_rate),
-    )
+    # Prepare optimizer. The default makes no parameter-decay assumption: in a
+    # plugin framework the trainer cannot know which leaves are weight matrices
+    # vs variances/biases. Users who want (masked) weight decay or a custom
+    # schedule supply their own ``optax`` optimizer.
+    if optimizer is None:
+        optimizer = optax.chain(
+            optax.clip_by_global_norm(conf.clip_norm),
+            optax.add_noise(conf.noise_eta, conf.noise_gamma, conf.seed),
+            optax.scale_by_adam(),
+            optax.scale_by_learning_rate(conf.learning_rate),
+        )
 
     freeze_mask = jax.tree.map(lambda _: False, model)
     freeze_paths = [str(p) for p in conf.freeze_paths]
