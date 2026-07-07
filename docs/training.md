@@ -44,16 +44,18 @@ Pass a `DictConfig` (or plain dict) as `conf`. Missing keys are filled from
 | `learning_rate` | `1e-3` | Adam learning rate |
 | `max_epoch` | `50` | Number of training epochs (always run in full unless a callback stops early) |
 | `batch_size` | `1` | Mini-batch size (must be divisible by device count) |
-| `clip_norm` | `5.0` | Global gradient norm clipping threshold |
 | `seed` | `0` | Random seed for shuffling |
 | `freeze_paths` | `[]` | Optional list of dot-separated model attribute paths to freeze (e.g. `["noise_free"]`) |
 
-These fields configure the **built-in** optimizer only. The default optimizer
-applies **no weight decay**: in a plugin framework the trainer cannot know which
-leaves are weight matrices vs variances/biases, so it makes no decay assumption.
-To use (masked) weight decay or a custom schedule, pass your own `optax`
-optimizer via `train(..., optimizer=...)` (see below); the conf optimizer fields
-are then ignored, but `freeze_paths` is still applied on top.
+The default optimizer is **vanilla Adam** and `learning_rate` is its only
+knob. It applies **no gradient clipping, no gradient noise, and no weight
+decay** -- in a plugin framework the trainer cannot know which leaves are
+weight matrices vs variances/biases, and clipping/noise can destabilize
+sensitive objectives (e.g. chaotic dynamical-systems reconstruction), so the
+default imposes no such policy. To add clipping, weight decay, gradient
+noise, or a custom schedule, pass your own `optax` optimizer via
+`train(..., optimizer=...)` (see below); `learning_rate` is then ignored, but
+`freeze_paths` is still applied on top.
 
 A model regularizer is **not** a config field; it is passed directly to
 `train(..., regularizer=...)` (see below), because it is a Python callable and
@@ -72,7 +74,6 @@ trainer_conf = OmegaConf.create(dict(
     learning_rate=5e-4,
     max_epoch=200,
     batch_size=64,
-    clip_norm=5.0,
 ))
 ```
 
@@ -127,22 +128,24 @@ trainer_conf = {
 }
 ```
 
-## Optimizer Chain
+## Default Optimizer
 
-The default optimizer is an Optax chain:
+The default optimizer is **vanilla Adam** -- `optax.adam(conf.learning_rate)`,
+nothing more:
 
-1. **Clip by global norm** — prevents gradient explosions
-2. **Scale by Adam** — adaptive learning rates
-3. **Scale by learning rate** — final LR scaling
+- **no gradient clipping**
+- **no gradient noise**
+- **no weight decay**
 
-It applies **no gradient noise** and **no weight decay**. Decaying gradient
-noise was previously included as light regularization, but it injects large
-early-training stochasticity that destabilizes sensitive objectives (notably
-chaotic dynamical-systems reconstruction), so it was removed. Weight decay is
-omitted because, in a plugin framework, the trainer cannot know which leaves
-are weight matrices vs variances/biases. For either, pass your own `optax`
-optimizer via `optimizer=...` (e.g. add `optax.add_noise(...)` or
-`optax.add_decayed_weights(...)` to a chain).
+This is a deliberate "no policy" default. In a plugin framework the trainer
+cannot know which leaves are weight matrices vs variances/biases (so it
+imposes no weight decay), and gradient noise/clipping can destabilize
+sensitive objectives -- e.g. chaotic dynamical-systems reconstruction, where
+injected gradient noise prevented the model from settling onto the true
+attractor. Anything beyond plain Adam is opt-in: build your own `optax`
+optimizer and pass it via `optimizer=...` (e.g. add `optax.clip_by_global_norm`,
+`optax.add_decayed_weights`, or `optax.add_noise` to a chain -- see the custom
+optimizer example above).
 
 ## Scheduling a Model Attribute (`param_schedule`)
 

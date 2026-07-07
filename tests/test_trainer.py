@@ -42,7 +42,6 @@ def trainer_config():
         {
             "max_epoch": 5,
             "learning_rate": 1e-3,
-            "clip_norm": 5.0,
             "batch_size": 2,
             "seed": 42,
         }

@@ -39,17 +39,16 @@ from .logging import get_logger
 logger = get_logger(__name__)
 
 #: Default configuration for XFADS training hyperparameters.
-#: Contains settings for the default optimizer (learning_rate, clip_norm),
-#: training schedule (max_epoch, batch_size), and KL warm-up
-#: (kl_warmup_steps). These configure the built-in optimizer only; pass
-#: ``optimizer=`` to :func:`train` to take full control (e.g. weight decay).
+#: Contains the single default-optimizer setting (learning_rate), the training
+#: schedule (max_epoch, batch_size), and KL warm-up (kl_warmup_steps). The
+#: default optimizer is vanilla Adam; pass ``optimizer=`` to :func:`train` for
+#: anything else (gradient clipping, weight decay, custom schedules).
 #: Validation, checkpointing, and early stopping are not part of training
 #: config; they live in handlers (see :class:`EpochHandler`).
 DEFAULT_TRAINER_CONFIG = DictConfig(
     {
         "max_epoch": 50,
         "learning_rate": 1e-3,
-        "clip_norm": 5.0,
         "batch_size": 1,
         "seed": 0,
         "kl_warmup_steps": 0,
@@ -713,13 +712,15 @@ def train(
         covariance Q must transform ``noise_free`` via the Approx, not act on
         the raw free parameters).
     optimizer : optax.GradientTransformation or None, optional
-        Optimizer to use. When ``None`` (default), a built-in optimizer is
-        constructed from ``conf`` (gradient clipping, decaying gradient noise,
-        Adam, learning rate) with **no weight decay** -- in a plugin framework
+        Optimizer to use. When ``None`` (default), the built-in optimizer is
+        **vanilla Adam** (``optax.adam(conf.learning_rate)``) -- no gradient
+        clipping, no gradient noise, no weight decay. In a plugin framework
         the trainer cannot know which leaves are weight matrices vs
-        variances/biases. To use (masked) weight decay or a custom schedule,
-        build your own ``optax`` optimizer and pass it here; the conf optimizer
-        fields are then ignored. ``conf.freeze_paths`` is still applied on top.
+        variances/biases, and gradient noise/clipping can destabilize
+        sensitive objectives, so the default imposes no such policy. To add
+        clipping, weight decay, gradient noise, or a custom schedule, build
+        your own ``optax`` optimizer and pass it here; ``conf.learning_rate``
+        is then ignored. ``conf.freeze_paths`` is still applied on top.
     param_schedule : Callable or None, optional
         Optional ``param_schedule(model, step) -> model`` applied at the start
         of every step (before the loss/gradient computation), for driving a
@@ -767,29 +768,21 @@ def train(
         model_sharding.spec,
     )
     logger.debug(
-        "optimizer: %s lr=%s clip_norm=%s",
-        "user-supplied" if optimizer is not None else "default",
+        "optimizer: %s lr=%s",
+        "user-supplied" if optimizer is not None else "default (vanilla Adam)",
         conf.learning_rate,
-        conf.clip_norm,
     )
 
-    # Prepare optimizer. The default makes no parameter-decay assumption: in a
-    # plugin framework the trainer cannot know which leaves are weight matrices
-    # vs variances/biases. Users who want (masked) weight decay or a custom
-    # schedule supply their own ``optax`` optimizer.
-    #
-    # No gradient noise: decaying gradient noise (formerly ``add_noise``) was
-    # intended as light regularization, but it injects large early-training
-    # stochasticity (std ~ sqrt(eta) at step 0) that destabilizes sensitive
-    # objectives -- notably chaotic dynamical-systems reconstruction, where it
-    # can prevent the model from ever settling onto the true attractor. Users
-    # who want it can add ``optax.add_noise`` to a custom ``optimizer=``.
+    # Prepare optimizer. The default is deliberately **vanilla Adam** -- no
+    # gradient clipping, no gradient noise, no weight decay. In a plugin
+    # framework the trainer cannot know which leaves are weights vs
+    # variances/biases, so it imposes no regularization policy; and gradient
+    # noise/clipping can destabilize sensitive objectives (e.g. chaotic
+    # dynamical-systems reconstruction). Users who want clipping, weight
+    # decay, gradient noise, or a custom schedule pass their own ``optax``
+    # optimizer via ``optimizer=`` (``freeze_paths`` is still applied on top).
     if optimizer is None:
-        optimizer = optax.chain(
-            optax.clip_by_global_norm(conf.clip_norm),
-            optax.scale_by_adam(),
-            optax.scale_by_learning_rate(conf.learning_rate),
-        )
+        optimizer = optax.adam(conf.learning_rate)
 
     # Build the freeze mask over the *filtered* (trainable-array) structure so it
     # aligns with the params the optimizer sees inside the training loop.

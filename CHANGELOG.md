@@ -2,14 +2,19 @@
 
 ## Unreleased
 
-* **Breaking:** the default optimizer no longer injects decaying gradient
-  noise, and `noise_eta` / `noise_gamma` were removed from the trainer config.
-  The noise (`optax.add_noise`) was intended as light regularization, but its
-  large early-training stochasticity destabilizes sensitive objectives (e.g.
-  chaotic dynamical-systems reconstruction, where it can prevent the model
-  from settling onto the true attractor). Add `optax.add_noise` to a custom
-  `optimizer=` if you want it. This also avoids an `add_noise` +
-  `donate="all"` buffer-aliasing crash in the jitted loop.
+* **Breaking:** the default optimizer is now **vanilla Adam**
+  (`optax.adam(conf.learning_rate)`) with no gradient clipping, no gradient
+  noise, and no weight decay. `clip_norm`, `noise_eta`, `noise_gamma`, and
+  `weight_decay` were all removed from the trainer config. Rationale: in a
+  plugin framework the trainer cannot know which leaves are weights vs
+  variances/biases (so no weight decay), and gradient noise/clipping can
+  destabilize sensitive objectives -- e.g. chaotic dynamical-systems
+  reconstruction, where `optax.add_noise`'s large early-training stochasticity
+  prevented the model from settling onto the true attractor. Clipping, weight
+  decay, gradient noise, and custom schedules are now all opt-in via a
+  user-supplied `optimizer=`; `freeze_paths` is still applied on top. Removing
+  `add_noise` also avoids an `add_noise` + `donate="all"` buffer-aliasing
+  crash in the jitted loop.
 * `train` now accepts `param_schedule=` (a `Callable[[model, step], model]`)
   applied at the start of every training step, for driving an arbitrary model
   attribute through a step-indexed `optax` schedule. A new helper,
