@@ -137,8 +137,63 @@ The default optimizer is an Optax chain:
 1. **Clip by global norm** — prevents gradient explosions
 2. **Add noise** — Gaussian gradient noise for regularisation
 3. **Scale by Adam** — adaptive learning rates
-4. **Add decayed weights** — L2 regularisation
-5. **Scale by learning rate** — final LR scaling
+4. **Scale by learning rate** — final LR scaling
+
+It applies **no weight decay** — in a plugin framework the trainer cannot know
+which leaves are weight matrices vs variances/biases. Pass your own `optax`
+optimizer via `optimizer=...` for (masked) weight decay.
+
+## Scheduling a Model Attribute (`param_schedule`)
+
+`on_epoch_end`, `regularizer`, and `optimizer` cover per-epoch policy,
+additive loss terms, and the update rule. A fourth extension point,
+`param_schedule`, drives an arbitrary model attribute through a step-indexed
+`optax` schedule — for example, annealing the process-noise scale (Q) over
+training, which shifts the filter's implicit balance between trusting the
+encoder (data-driven correction) and trusting the dynamics (free-running
+prediction).
+
+```python
+from jaxfads.trainer import noise_schedule, train
+
+trainer_conf = {
+    "max_epoch": 300,
+    "batch_size": 64,
+    "freeze_paths": ["noise_free"],  # required -- see note below
+}
+
+schedule = noise_schedule(
+    model.approx, q_hi=2.0, q_lo=0.005, transition_steps=2400
+)
+trained = train(model, data, conf=trainer_conf, param_schedule=schedule)
+```
+
+`param_schedule(model, step) -> model` is called at the **start of every
+step**, before the loss/gradient computation, so the scheduled value is what
+the loss is evaluated on and what persists in the returned model. It is a
+general mechanism — the trainer only calls the function and does not
+interpret what it changes; `noise_schedule` is a small built-in helper for
+the common Q-annealing case, built on `optax.exponential_decay` (its
+`end_value` clamping means "anneal then hold" needs no separate logic — just
+train for more epochs than `transition_steps` covers).
+
+**`freeze_paths` is required, not optional, when using `param_schedule`.**
+Without it, the optimizer's own gradient-based update (plus gradient noise
+and Adam momentum) will perturb the scheduled attribute away from its target
+value within the same step — the schedule and the optimizer fight each other.
+Since `param_schedule` is an opaque callable, the trainer cannot detect which
+paths it touches and enforce this automatically.
+
+To write a custom schedule (e.g. for a different attribute or shape), the
+pattern is:
+
+```python
+import equinox as eqx
+
+def my_schedule(model, step):
+    value = my_optax_schedule(step)
+    return eqx.tree_at(lambda m: m.some_attribute, model, value)
+```
 
 ## Multi-Device Training
 

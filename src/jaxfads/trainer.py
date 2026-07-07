@@ -113,6 +113,59 @@ def train_test_split(arrays, *, rng, test_ratio=None, test_size=None, train_size
     ), tuple(array[perm[:test_size]] for array in arrays)
 
 
+def noise_schedule(approx, *, q_hi, q_lo, transition_steps):
+    """Build a ``param_schedule`` that anneals process noise (Q) geometrically.
+
+    Returns a ``Callable[[model, step], model]`` suitable for
+    :func:`train`'s ``param_schedule`` argument, replacing ``model.noise_free``
+    at every step with the free-form encoding of scale
+    ``optax.exponential_decay(q_hi, transition_steps, q_lo / q_hi, end_value=q_lo)``
+    evaluated at that step. After ``transition_steps``, the schedule holds at
+    ``q_lo`` (``end_value`` clamping), so "anneal then hold" needs no separate
+    logic -- just train for more epochs than ``transition_steps`` covers.
+
+    Parameters
+    ----------
+    approx : Approx
+        The model's ``Approx`` instance (``model.approx``), used to encode the
+        scheduled scale into ``noise_free``'s free-form parameterization via
+        ``approx.free_from_kw(scale=...)``.
+    q_hi, q_lo : float
+        Initial and final process-noise scale.
+    transition_steps : int
+        Number of steps over which Q decays geometrically from ``q_hi`` to
+        ``q_lo``.
+
+    Returns
+    -------
+    Callable[[XFADS, Array], XFADS]
+        A function ``(model, step) -> model`` that sets ``model.noise_free``
+        to the scheduled value, leaving all other attributes unchanged.
+
+    Notes
+    -----
+    Pass the same ``noise_free`` path in ``conf.freeze_paths`` so the
+    optimizer's own gradient-based update does not fight the schedule::
+
+        schedule = noise_schedule(model.approx, q_hi=2.0, q_lo=0.005,
+                                   transition_steps=2400)
+        conf.freeze_paths = ["noise_free"]
+        model = train(model, train_data, conf=conf, param_schedule=schedule)
+    """
+    decay = optax.exponential_decay(
+        init_value=q_hi,
+        transition_steps=transition_steps,
+        decay_rate=q_lo / q_hi,
+        end_value=q_lo,
+    )
+
+    def schedule(model, step):
+        q = decay(step)
+        return eqx.tree_at(lambda m: m.noise_free, model, approx.free_from_kw(scale=q))
+
+    return schedule
+
+
 def batch_elbo(
     model,
     key,
@@ -477,6 +530,7 @@ def _run_training_loop(
     data_sharding,
     model_sharding,
     on_epoch_end=None,
+    param_schedule=None,
 ):
     """
     Run sharded training for a fixed number of epochs.
@@ -511,6 +565,13 @@ def _run_training_loop(
         Called once per finished epoch as ``on_epoch_end(model, info)`` where
         ``info`` is ``{"epoch": int, "step": jnp.int32, "train_loss": float,
         "train_losses": list[float]}``. Returning a truthy value stops training.
+    param_schedule : Callable or None
+        Optional ``param_schedule(model, step) -> model`` applied at the start
+        of every step, before the loss/gradient computation. Use it to drive a
+        model attribute (e.g. process-noise scale) through an ``optax``
+        schedule keyed on the step counter. The corresponding path(s) should
+        also be listed in ``conf.freeze_paths`` so the optimizer's own
+        gradient-based update does not fight the schedule.
 
     Returns
     -------
@@ -523,6 +584,9 @@ def _run_training_loop(
         """One optimization step: shard inputs, compute value+grad, and update."""
         model, opt_state = eqx.filter_shard((model, opt_state), model_sharding)
         batch = eqx.filter_shard(batch, data_sharding)
+
+        if param_schedule is not None:
+            model = param_schedule(model, step)
 
         loss, grads = eqx.filter_value_and_grad(batch_loss_fun)(
             model, batch, key, step
@@ -608,7 +672,14 @@ def _run_training_loop(
 
 
 def train(
-    model, train_data, *, conf, on_epoch_end=None, regularizer=None, optimizer=None
+    model,
+    train_data,
+    *,
+    conf,
+    on_epoch_end=None,
+    regularizer=None,
+    optimizer=None,
+    param_schedule=None,
 ):
     """
     Training routine for XFADS models with multi-device support.
@@ -651,6 +722,17 @@ def train(
         variances/biases. To use (masked) weight decay or a custom schedule,
         build your own ``optax`` optimizer and pass it here; the conf optimizer
         fields are then ignored. ``conf.freeze_paths`` is still applied on top.
+    param_schedule : Callable or None, optional
+        Optional ``param_schedule(model, step) -> model`` applied at the start
+        of every step (before the loss/gradient computation), for driving a
+        model attribute through a step-indexed schedule -- e.g. annealing the
+        process-noise scale via :func:`noise_schedule`. This is a general
+        mechanism, not specific to any one attribute: the trainer only calls
+        the function and does not interpret what it changes. The
+        corresponding path(s) should also be listed in ``conf.freeze_paths``,
+        otherwise the optimizer's own gradient-based update will fight the
+        schedule (e.g. via gradient noise or optimizer momentum, even where
+        the raw gradient is itself zero).
 
     Returns
     -------
@@ -760,6 +842,7 @@ def train(
         data_sharding,
         model_sharding,
         on_epoch_end=on_epoch_end,
+        param_schedule=param_schedule,
     )
 
     dt = time.perf_counter() - t0

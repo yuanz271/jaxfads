@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+* `train` now accepts `param_schedule=` (a `Callable[[model, step], model]`)
+  applied at the start of every training step, for driving an arbitrary model
+  attribute through a step-indexed `optax` schedule. A new helper,
+  `noise_schedule(approx, q_hi, q_lo, transition_steps)`, builds the common
+  case: annealing the process-noise scale (Q) geometrically via
+  `optax.exponential_decay`. `freeze_paths` should list the scheduled
+  attribute so the optimizer's own gradient-based update does not fight the
+  schedule.
 * KL warm-up is now driven by an `optax` schedule built from
   `conf.kl_warmup_steps`, evaluated on the training step and passed as the
   `beta` KL weight. `beta` stays an objective coefficient (never routed through
