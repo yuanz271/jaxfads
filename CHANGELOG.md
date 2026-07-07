@@ -2,6 +2,54 @@
 
 ## Unreleased
 
+* **Breaking:** the default optimizer is now **vanilla Adam**
+  (`optax.adam(conf.learning_rate)`) with no gradient clipping, no gradient
+  noise, and no weight decay. `clip_norm`, `noise_eta`, `noise_gamma`, and
+  `weight_decay` were all removed from the trainer config. Rationale: in a
+  plugin framework the trainer cannot know which leaves are weights vs
+  variances/biases (so no weight decay), and gradient noise/clipping can
+  destabilize sensitive objectives -- e.g. chaotic dynamical-systems
+  reconstruction, where `optax.add_noise`'s large early-training stochasticity
+  prevented the model from settling onto the true attractor. Clipping, weight
+  decay, gradient noise, and custom schedules are now all opt-in via a
+  user-supplied `optimizer=`; `freeze_paths` is still applied on top. Removing
+  `add_noise` also avoids an `add_noise` + `donate="all"` buffer-aliasing
+  crash in the jitted loop.
+* `train` now accepts `param_schedule=` (a `Callable[[model, step], model]`)
+  applied at the start of every training step, for driving an arbitrary model
+  attribute through a step-indexed `optax` schedule. A new helper,
+  `noise_schedule(approx, q_hi, q_lo, transition_steps)`, builds the common
+  case: annealing the process-noise scale (Q) geometrically via
+  `optax.exponential_decay`. `freeze_paths` should list the scheduled
+  attribute so the optimizer's own gradient-based update does not fight the
+  schedule.
+* KL warm-up is now driven by an `optax` schedule built from
+  `conf.kl_warmup_steps`, evaluated on the training step and passed as the
+  `beta` KL weight. `beta` stays an objective coefficient (never routed through
+  the optimizer).
+* **Breaking:** `batch_loss` is now a pure objective evaluator
+  `batch_loss(model, batch, key, *, beta=1.0)`; the `step`, `kl_warmup_steps`,
+  and `noise_regularizer` arguments were removed. Callers compute the KL weight
+  and pass `beta` directly.
+* **Breaking:** the model regularizer is no longer a config field
+  (`conf.noise_regularizer` removed). Pass it directly as
+  `train(model, data, conf=..., regularizer=...)`; the trainer composes
+  `loss = -ELBO + regularizer(model)`. The config stays serializable.
+* The training loop now supports **params-aware** optimizers (those that read
+  the current parameters at update time): decoupled weight decay (`adamw`,
+  `add_decayed_weights`), trust-ratio methods (`lamb`, `lars`), and
+  learning-rate-free methods (`optax.contrib.prodigy`, `dadapt_adamw`). The loop
+  carries the trainable-array partition as optimizer state (rebuilding the model
+  only inside the loss) and initializes the optimizer on a copy of the params,
+  so any `optax.GradientTransformation` passed via `optimizer=` works.
+* **Breaking:** the default optimizer no longer applies weight decay, and
+  `weight_decay` was removed from the trainer config. In a plugin framework the
+  trainer cannot know which leaves are weight matrices vs variances/biases, so
+  it makes no decay assumption. `train` now accepts
+  `optimizer=` (an `optax.GradientTransformation`); pass your own optimizer for
+  (masked) weight decay or custom schedules. `freeze_paths` is still applied on
+  top of either the default or a supplied optimizer.
+
 ## 0.8.0
 
 * **Breaking:** `train` no longer splits data or handles validation. Its

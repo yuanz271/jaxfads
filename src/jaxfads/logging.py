@@ -124,7 +124,7 @@ def configure_logging(
     # --- file handler ---
     if file_path is None:
         env_file = os.environ.get("JAXFADS_LOG_FILE")
-        file_path = env_file if env_file else None
+        file_path = env_file or None
 
     if file_path is not None:
         path = Path(file_path).expanduser()

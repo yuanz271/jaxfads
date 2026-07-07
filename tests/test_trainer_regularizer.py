@@ -6,7 +6,7 @@ import equinox as eqx
 from omegaconf import OmegaConf
 
 from jaxfads.smoother import XFADS
-from jaxfads.trainer import batch_loss
+from jaxfads.trainer import batch_loss, train
 import jaxfads.observations  # noqa: F401 — register GLM subclass
 from conftest import MockDynamics  # noqa: F401 - class registration side-effect
 
@@ -74,23 +74,50 @@ def model_conf():
     )
 
 
-def test_noise_regularizer_is_added(model_conf, sample_data):
+def test_regularizer_adds_its_gradient(model_conf, sample_data):
+    """The trainer composes ``loss = -ELBO + regularizer(model)``.
+
+    ``batch_loss`` is a pure objective; the penalty is added in ``train``'s
+    ``loss_fn``. Here we replicate that composition and check the regularizer
+    contributes exactly its own gradient (additive composition).
+    """
     model = XFADS(model_conf, jax.random.key(0))
     model = model.initialize(*sample_data)
 
     key = jax.random.key(1)
-    step = jnp.array(0, dtype=jnp.int32)
-
-    base = batch_loss(model, sample_data, key, step, noise_regularizer=None)
-
-    lam = jnp.array(1e-3, dtype=base.dtype)
+    lam = jnp.array(1e-3)
 
     def l2_reg(m):
         return lam * jnp.sum(m.noise_free**2)
 
-    reg = batch_loss(model, sample_data, key, step, noise_regularizer=l2_reg)
+    g_obj = eqx.filter_grad(lambda m: batch_loss(m, sample_data, key, beta=1.0))(model)
+    g_both = eqx.filter_grad(
+        lambda m: batch_loss(m, sample_data, key, beta=1.0) + l2_reg(m)
+    )(model)
+    g_reg = eqx.filter_grad(l2_reg)(model)
 
-    chex.assert_trees_all_close(reg - base, l2_reg(model), atol=1e-6)
+    chex.assert_trees_all_close(
+        (g_both.noise_free - g_obj.noise_free), g_reg.noise_free, atol=1e-6
+    )
+
+
+def test_train_applies_regularizer(model_conf, sample_data):
+    """A regularizer passed to ``train`` is wired into the optimized loss."""
+    conf = OmegaConf.create({"max_epoch": 3, "batch_size": 5, "seed": 0})
+
+    def strong_reg(m):
+        return 1e2 * jnp.sum(m.noise_free**2)
+
+    # train() donates its input model's buffers, so use a fresh (identical)
+    # model for each run.
+    def fresh_model():
+        return XFADS(model_conf, jax.random.key(0)).initialize(*sample_data)
+
+    base = train(fresh_model(), sample_data, conf=conf)
+    reg = train(fresh_model(), sample_data, conf=conf, regularizer=strong_reg)
+
+    # A strong penalty on noise_free changes the optimization outcome.
+    assert jnp.any(base.noise_free != reg.noise_free)
 
 
 def test_stop_gradient_on_noise_free_zeroes_its_grad_component(model_conf, sample_data):
@@ -99,10 +126,9 @@ def test_stop_gradient_on_noise_free_zeroes_its_grad_component(model_conf, sampl
     model = model.initialize(*sample_data)
 
     key = jax.random.key(1)
-    step = jnp.array(0, dtype=jnp.int32)
 
     def loss(m):
-        return batch_loss(m, sample_data, key, step, noise_regularizer=None)
+        return batch_loss(m, sample_data, key, beta=1.0)
 
     grads = eqx.filter_grad(loss)(model)
     assert jnp.any(grads.noise_free != 0)
@@ -113,7 +139,7 @@ def test_stop_gradient_on_noise_free_zeroes_its_grad_component(model_conf, sampl
             m,
             jax.lax.stop_gradient(m.noise_free),
         )
-        return batch_loss(m, sample_data, key, step, noise_regularizer=None)
+        return batch_loss(m, sample_data, key, beta=1.0)
 
     frozen_grads = eqx.filter_grad(frozen_loss)(model)
 

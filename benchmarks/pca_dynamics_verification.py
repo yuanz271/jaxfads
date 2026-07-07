@@ -239,7 +239,6 @@ def nofilt_training_comparison():
             "learning_rate": 1e-2,
             "max_epoch": 300,
             "batch_size": 64,
-            "weight_decay": 0.0,
             "freeze_paths": ["alpha_encoder", "observation", "noise_free"],
         }
     )
