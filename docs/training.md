@@ -45,9 +45,7 @@ Pass a `DictConfig` (or plain dict) as `conf`. Missing keys are filled from
 | `max_epoch` | `50` | Number of training epochs (always run in full unless a callback stops early) |
 | `batch_size` | `1` | Mini-batch size (must be divisible by device count) |
 | `clip_norm` | `5.0` | Global gradient norm clipping threshold |
-| `noise_eta` | `0.5` | Gradient noise scale (for regularisation) |
-| `noise_gamma` | `0.8` | Gradient noise decay exponent |
-| `seed` | `0` | Random seed for shuffling and noise |
+| `seed` | `0` | Random seed for shuffling |
 | `freeze_paths` | `[]` | Optional list of dot-separated model attribute paths to freeze (e.g. `["noise_free"]`) |
 
 These fields configure the **built-in** optimizer only. The default optimizer
@@ -75,7 +73,6 @@ trainer_conf = OmegaConf.create(dict(
     max_epoch=200,
     batch_size=64,
     clip_norm=5.0,
-    noise_eta=0.0,         # disable gradient noise
 ))
 ```
 
@@ -135,13 +132,17 @@ trainer_conf = {
 The default optimizer is an Optax chain:
 
 1. **Clip by global norm** — prevents gradient explosions
-2. **Add noise** — Gaussian gradient noise for regularisation
-3. **Scale by Adam** — adaptive learning rates
-4. **Scale by learning rate** — final LR scaling
+2. **Scale by Adam** — adaptive learning rates
+3. **Scale by learning rate** — final LR scaling
 
-It applies **no weight decay** — in a plugin framework the trainer cannot know
-which leaves are weight matrices vs variances/biases. Pass your own `optax`
-optimizer via `optimizer=...` for (masked) weight decay.
+It applies **no gradient noise** and **no weight decay**. Decaying gradient
+noise was previously included as light regularization, but it injects large
+early-training stochasticity that destabilizes sensitive objectives (notably
+chaotic dynamical-systems reconstruction), so it was removed. Weight decay is
+omitted because, in a plugin framework, the trainer cannot know which leaves
+are weight matrices vs variances/biases. For either, pass your own `optax`
+optimizer via `optimizer=...` (e.g. add `optax.add_noise(...)` or
+`optax.add_decayed_weights(...)` to a chain).
 
 ## Scheduling a Model Attribute (`param_schedule`)
 

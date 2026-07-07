@@ -63,7 +63,6 @@ def _trainer_conf(**overrides):
         "batch_size": 4,
         "learning_rate": 1e-3,
         "seed": 0,
-        "noise_eta": 0.0,
     }
     base.update(overrides)
     return OmegaConf.create(base)

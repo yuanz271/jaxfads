@@ -39,9 +39,9 @@ from .logging import get_logger
 logger = get_logger(__name__)
 
 #: Default configuration for XFADS training hyperparameters.
-#: Contains settings for the default optimizer (learning_rate, clip_norm,
-#: noise_eta, noise_gamma), training schedule (max_epoch, batch_size), and KL
-#: warm-up (kl_warmup_steps). These configure the built-in optimizer only; pass
+#: Contains settings for the default optimizer (learning_rate, clip_norm),
+#: training schedule (max_epoch, batch_size), and KL warm-up
+#: (kl_warmup_steps). These configure the built-in optimizer only; pass
 #: ``optimizer=`` to :func:`train` to take full control (e.g. weight decay).
 #: Validation, checkpointing, and early stopping are not part of training
 #: config; they live in handlers (see :class:`EpochHandler`).
@@ -52,8 +52,6 @@ DEFAULT_TRAINER_CONFIG = DictConfig(
         "clip_norm": 5.0,
         "batch_size": 1,
         "seed": 0,
-        "noise_eta": 0.5,
-        "noise_gamma": 0.8,
         "kl_warmup_steps": 0,
         # Optional list of dot-separated attribute paths to freeze.
         # Example: ["noise_free", "unconstrained_prior_natural"]
@@ -769,22 +767,26 @@ def train(
         model_sharding.spec,
     )
     logger.debug(
-        "optimizer: %s lr=%s clip_norm=%s noise_eta=%s noise_gamma=%s",
+        "optimizer: %s lr=%s clip_norm=%s",
         "user-supplied" if optimizer is not None else "default",
         conf.learning_rate,
         conf.clip_norm,
-        conf.noise_eta,
-        conf.noise_gamma,
     )
 
     # Prepare optimizer. The default makes no parameter-decay assumption: in a
     # plugin framework the trainer cannot know which leaves are weight matrices
     # vs variances/biases. Users who want (masked) weight decay or a custom
     # schedule supply their own ``optax`` optimizer.
+    #
+    # No gradient noise: decaying gradient noise (formerly ``add_noise``) was
+    # intended as light regularization, but it injects large early-training
+    # stochasticity (std ~ sqrt(eta) at step 0) that destabilizes sensitive
+    # objectives -- notably chaotic dynamical-systems reconstruction, where it
+    # can prevent the model from ever settling onto the true attractor. Users
+    # who want it can add ``optax.add_noise`` to a custom ``optimizer=``.
     if optimizer is None:
         optimizer = optax.chain(
             optax.clip_by_global_norm(conf.clip_norm),
-            optax.add_noise(conf.noise_eta, conf.noise_gamma, conf.seed),
             optax.scale_by_adam(),
             optax.scale_by_learning_rate(conf.learning_rate),
         )

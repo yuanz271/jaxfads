@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+* **Breaking:** the default optimizer no longer injects decaying gradient
+  noise, and `noise_eta` / `noise_gamma` were removed from the trainer config.
+  The noise (`optax.add_noise`) was intended as light regularization, but its
+  large early-training stochasticity destabilizes sensitive objectives (e.g.
+  chaotic dynamical-systems reconstruction, where it can prevent the model
+  from settling onto the true attractor). Add `optax.add_noise` to a custom
+  `optimizer=` if you want it. This also avoids an `add_noise` +
+  `donate="all"` buffer-aliasing crash in the jitted loop.
 * `train` now accepts `param_schedule=` (a `Callable[[model, step], model]`)
   applied at the start of every training step, for driving an arbitrary model
   attribute through a step-indexed `optax` schedule. A new helper,

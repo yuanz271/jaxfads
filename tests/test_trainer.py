@@ -45,8 +45,6 @@ def trainer_config():
             "clip_norm": 5.0,
             "batch_size": 2,
             "seed": 42,
-            "noise_eta": 0.5,
-            "noise_gamma": 0.8,
         }
     )
 
