@@ -133,9 +133,6 @@ def main() -> None:
     trainer_conf = dict(
         seed=0,
         learning_rate=1e-3,
-        clip_norm=5.0,
-        noise_eta=0.0,
-        noise_gamma=0.8,
         max_epoch=args.max_epoch,
         batch_size=args.batch_size,
         freeze_state_noise=bool(args.freeze_state_noise),
