@@ -121,6 +121,18 @@ def noise_schedule(approx, *, q_hi, q_lo, transition_steps):
     ``q_lo`` (``end_value`` clamping), so "anneal then hold" needs no separate
     logic -- just train for more epochs than ``transition_steps`` covers.
 
+    Design note: the decay is computed in Q's **constrained (variance)**
+    units -- ``q_hi``/``q_lo`` are literal process-noise variances -- and only
+    converted to the free-form (unconstrained) parameterization as the final
+    step, via ``approx.free_from_kw(scale=q)``. This is deliberate: the
+    free-form encoding is a nonlinear reparameterization (e.g. a sqrt/inverse-
+    softplus-style transform), so geometrically interpolating the free-form
+    values directly would trace a different, distorted path through variance
+    space than the intended geometric decay in Q. When writing an analogous
+    schedule for a different constrained model attribute, anneal in the
+    attribute's natural (constrained) space and convert to free-form only at
+    the end, as done here.
+
     Parameters
     ----------
     approx : Approx

@@ -199,6 +199,16 @@ def my_schedule(model, step):
     return eqx.tree_at(lambda m: m.some_attribute, model, value)
 ```
 
+**If the attribute is stored in a constrained/free-form (unconstrained)
+parameterization** (as `noise_free` is), **anneal in the constrained space,
+not the free-form space**, and convert to free-form only as the last step —
+exactly what `noise_schedule` does: `optax.exponential_decay` interpolates
+the literal variance `q`, and `approx.free_from_kw(scale=q)` converts to
+free-form afterward. The free-form encoding is typically a nonlinear
+reparameterization (e.g. sqrt / inverse-softplus-style), so interpolating
+free-form values directly traces a different, distorted path through the
+constrained space than the intended schedule.
+
 ## Multi-Device Training
 
 When multiple devices are available, training data is automatically sharded
