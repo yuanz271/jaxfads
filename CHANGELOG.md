@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.9.0
+
 * **Breaking:** the default optimizer is now **vanilla Adam**
   (`optax.adam(conf.learning_rate)`) with no gradient clipping, no gradient
   noise, and no weight decay. `clip_norm`, `noise_eta`, `noise_gamma`, and
