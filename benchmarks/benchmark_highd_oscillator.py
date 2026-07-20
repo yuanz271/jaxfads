@@ -24,7 +24,7 @@ from omegaconf import OmegaConf
 
 from jaxfads import XFADS, configure_logging
 from jaxfads.observations import GLM  # noqa: F401 (register GLM)
-from jaxfads.trainer import train
+from jaxfads.trainer import EpochHandler, train, train_test_split
 
 
 def oscillator_bank_dynamics(z, u, c, *, omega=1.2, gamma=0.15, beta=0.02):
@@ -212,23 +212,21 @@ def main() -> None:
                     {
                         "seed": seed,
                         "learning_rate": 1e-3,
-                        "clip_norm": 5.0,
-                        "weight_decay": 1e-3,
-                        "noise_eta": 0.0,
-                        "noise_gamma": 0.8,
-                        "min_epoch": 0,
                         "max_epoch": args.max_epoch,
                         "batch_size": args.batch_size,
-                        "validation_size": args.batch_size,
-                        "valid_ratio": 0.2,
                         "freeze_state_noise": bool(args.freeze_state_noise),
                     }
                 )
 
-                model = XFADS(conf, jr.key(seed)).initialize(*data)
+                train_data, valid_data = train_test_split(
+                    data, rng=np.random.default_rng(0), test_size=args.batch_size
+                )
+                model = XFADS(conf, jr.key(seed)).initialize(*train_data)
 
                 t0 = time.perf_counter()
-                trained = train(model, data, conf=trainer_conf)
+                handler = EpochHandler(valid_data=valid_data)
+                train(model, train_data, conf=trainer_conf, on_epoch_end=handler)
+                trained = handler.best_model
                 train_s = time.perf_counter() - t0
 
                 metrics = evaluate_model(trained, data, latent)

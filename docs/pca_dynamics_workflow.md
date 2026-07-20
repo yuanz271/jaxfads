@@ -103,7 +103,6 @@ trainer_conf = OmegaConf.create(
         "learning_rate": 1e-3,
         "max_epoch": 200,
         "batch_size": 32,
-        "validation_size": 32,
         "freeze_paths": [
             "observation.readout",
             "observation.likelihood",
@@ -125,13 +124,20 @@ Trainable parameters are then only:
 ## Training and inference
 
 ```python
+import numpy as np
 import jax.random as jr
 from jaxfads import XFADS
-from jaxfads.trainer import train
+from jaxfads.trainer import EpochHandler, train, train_test_split
 from jaxfads.observations import GLM  # noqa: F401
 
-model = XFADS(conf, jr.key(0)).initialize(*data)
-trained = train(model, data, conf=trainer_conf)
+train_data, valid_data = train_test_split(
+    data, rng=np.random.default_rng(0), test_size=32
+)
+model = XFADS(conf, jr.key(0)).initialize(*train_data)
+
+handler = EpochHandler(valid_data=valid_data)
+train(model, train_data, conf=trainer_conf, on_epoch_end=handler)
+trained = handler.best_model
 
 # Inference
 natural_params, moment_params, predictions = trained(

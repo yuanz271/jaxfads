@@ -7,19 +7,30 @@ tracking, and validation-based early stopping. The training is based on
 maximizing the Evidence Lower Bound (ELBO) objective.
 """
 
+from collections.abc import Callable
 from functools import partial
+import json
 import math
+from pathlib import Path
 import time
 
 import jax
 import optax
 import equinox as eqx
-from jax import Array
+from jax import Array, lax
 from jax import numpy as jnp
 from jax import random as jr
 from jax import sharding as jshd
 from omegaconf import DictConfig, OmegaConf
-from . import _train_loop
+from gearax.modules import save_model
+from rich.progress import (
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
 
 from . import vi
 from .logging import get_logger
@@ -28,40 +39,22 @@ from .logging import get_logger
 logger = get_logger(__name__)
 
 #: Default configuration for XFADS training hyperparameters.
-#: Contains settings for optimization (learning_rate, clip_norm, weight_decay),
-#: training schedule (min/max_iter, min/max_epoch, batch_size), early stopping
-#: (patience, valid_ratio, validation_size), and noise injection (noise_eta, noise_gamma).
+#: Contains the single default-optimizer setting (learning_rate), the training
+#: schedule (max_epoch, batch_size), and KL warm-up (kl_warmup_steps). The
+#: default optimizer is vanilla Adam; pass ``optimizer=`` to :func:`train` for
+#: anything else (gradient clipping, weight decay, custom schedules).
+#: Validation, checkpointing, and early stopping are not part of training
+#: config; they live in handlers (see :class:`EpochHandler`).
 DEFAULT_TRAINER_CONFIG = DictConfig(
     {
-        "min_iter": 0,
-        "max_iter": 50,
-        "min_epoch": 0,
         "max_epoch": 50,
         "learning_rate": 1e-3,
-        "clip_norm": 5.0,
         "batch_size": 1,
-        "weight_decay": 1e-3,
-        "beta": 0.95,
         "seed": 0,
-        "noise_eta": 0.5,
-        "noise_gamma": 0.8,
-        "valid_ratio": 0.2,
-        "validation_size": 80,
-        "patience": 10,
         "kl_warmup_steps": 0,
-        # Optional user-provided regularizer: Callable[[XFADS], Array]
-        "noise_regularizer": None,
         # Optional list of dot-separated attribute paths to freeze.
         # Example: ["noise_free", "unconstrained_prior_natural"]
         "freeze_paths": [],
-        # Periodic checkpointing: save every N epochs to checkpoint_dir (0 = off).
-        "checkpoint_dir": None,
-        "checkpoint_every": 0,
-        # Per-epoch training-metrics TSV (epoch/step/train_loss/grad_norm); None = off.
-        "metrics_path": None,
-        # Optional log-linear external schedule for process-noise variance Q.
-        # Dict keys: start, end, epochs. Applies to model.noise_free at epoch boundaries.
-        "state_noise_schedule": None,
     }
 )
 
@@ -117,8 +110,80 @@ def train_test_split(arrays, *, rng, test_ratio=None, test_size=None, train_size
     ), tuple(array[perm[:test_size]] for array in arrays)
 
 
+def noise_schedule(approx, *, q_hi, q_lo, transition_steps):
+    """Build a ``param_schedule`` that anneals process noise (Q) geometrically.
+
+    Returns a ``Callable[[model, step], model]`` suitable for
+    :func:`train`'s ``param_schedule`` argument, replacing ``model.noise_free``
+    at every step with the free-form encoding of scale
+    ``optax.exponential_decay(q_hi, transition_steps, q_lo / q_hi, end_value=q_lo)``
+    evaluated at that step. After ``transition_steps``, the schedule holds at
+    ``q_lo`` (``end_value`` clamping), so "anneal then hold" needs no separate
+    logic -- just train for more epochs than ``transition_steps`` covers.
+
+    Design note: the decay is computed in Q's **constrained (variance)**
+    units -- ``q_hi``/``q_lo`` are literal process-noise variances -- and only
+    converted to the free-form (unconstrained) parameterization as the final
+    step, via ``approx.free_from_kw(scale=q)``. This is deliberate: the
+    free-form encoding is a nonlinear reparameterization (e.g. a sqrt/inverse-
+    softplus-style transform), so geometrically interpolating the free-form
+    values directly would trace a different, distorted path through variance
+    space than the intended geometric decay in Q. When writing an analogous
+    schedule for a different constrained model attribute, anneal in the
+    attribute's natural (constrained) space and convert to free-form only at
+    the end, as done here.
+
+    Parameters
+    ----------
+    approx : Approx
+        The model's ``Approx`` instance (``model.approx``), used to encode the
+        scheduled scale into ``noise_free``'s free-form parameterization via
+        ``approx.free_from_kw(scale=...)``.
+    q_hi, q_lo : float
+        Initial and final process-noise scale.
+    transition_steps : int
+        Number of steps over which Q decays geometrically from ``q_hi`` to
+        ``q_lo``.
+
+    Returns
+    -------
+    Callable[[XFADS, Array], XFADS]
+        A function ``(model, step) -> model`` that sets ``model.noise_free``
+        to the scheduled value, leaving all other attributes unchanged.
+
+    Notes
+    -----
+    Pass the same ``noise_free`` path in ``conf.freeze_paths`` so the
+    optimizer's own gradient-based update does not fight the schedule::
+
+        schedule = noise_schedule(model.approx, q_hi=2.0, q_lo=0.005,
+                                   transition_steps=2400)
+        conf.freeze_paths = ["noise_free"]
+        model = train(model, train_data, conf=conf, param_schedule=schedule)
+    """
+    decay = optax.exponential_decay(
+        init_value=q_hi,
+        transition_steps=transition_steps,
+        decay_rate=q_lo / q_hi,
+        end_value=q_lo,
+    )
+
+    def schedule(model, step):
+        q = decay(step)
+        return eqx.tree_at(lambda m: m.noise_free, model, approx.free_from_kw(scale=q))
+
+    return schedule
+
+
 def batch_elbo(
-    model, key, times, posterior_moments, predicted_moments, observations, *, beta=1.0
+    model,
+    key,
+    times,
+    posterior_moments,
+    predicted_moments,
+    observations,
+    *,
+    beta,
 ) -> Array:
     """
     Compute Evidence Lower Bound (ELBO) for batched sequences.
@@ -141,7 +206,8 @@ def batch_elbo(
     observations : Array, shape (N, T, observation_dim)
         Observed data sequences.
     beta : float, optional
-        KL weight for warm-up annealing, in ``[0, 1]``.  Default is ``1.0``.
+        KL weight in ``[0, 1]`` (required). ``beta = 1`` is the standard,
+        un-annealed ELBO; warm-up supplies a value ramping up to it.
 
     Returns
     -------
@@ -175,13 +241,16 @@ def batch_loss(
     model,
     batch,
     key,
-    step,
     *,
-    kl_warmup_steps=0,
-    noise_regularizer=None,
+    beta=1.0,
 ):
     """
     Compute negative ELBO loss for a batch of sequences.
+
+    This is a pure objective evaluator: it depends only on ``(model, batch,
+    key, beta)``. It has no notion of training step, KL warm-up, or
+    regularization -- the KL weight ``beta`` is supplied by the caller, and any
+    parameter penalty is composed by the trainer (see :func:`train`).
 
     Parameters
     ----------
@@ -193,26 +262,14 @@ def batch_loss(
         matching the training data layout.
     key : Array
         JAX PRNGKey used for stochastic components.
-    step : Array
-        Scalar ``jnp.int32`` training step counter provided by the
-        training loop.
-    kl_warmup_steps : int, optional
-        Number of training steps over which the KL weight β is linearly
-        annealed from 0 to 1.  When ``0`` (default) the standard ELBO is
-        used (β = 1 from the start).
+    beta : float or Array, optional
+        KL weight in ``[0, 1]``. Default ``1.0`` (standard, un-annealed ELBO).
 
     Returns
     -------
     Array
-        Scalar loss equal to the mean negative ELBO over the batch, plus
-        optional regularization terms.
+        Scalar mean negative ELBO over the batch.
     """
-    beta = jnp.where(
-        kl_warmup_steps > 0,
-        jnp.minimum(1.0, step / kl_warmup_steps),
-        1.0,
-    )
-
     times, observations, controls, covariates = batch
 
     key, model_key = jr.split(key)
@@ -231,13 +288,7 @@ def batch_loss(
         beta=beta,
     )
 
-    mean_fe = jnp.mean(free_energy)
-    reg = (
-        noise_regularizer(model)
-        if noise_regularizer is not None
-        else jnp.asarray(0.0, dtype=mean_fe.dtype)
-    )
-    return mean_fe + reg
+    return jnp.mean(free_energy)
 
 
 def dataloader(arrays, batch_size, num_epochs, key, shuffle=True):
@@ -295,47 +346,364 @@ def dataloader(arrays, batch_size, num_epochs, key, shuffle=True):
         epoch += 1
 
 
-def compute_patience(max_epoch, data_size, batch_size, scale=0.1):
+def _training_progress() -> Progress:
     """
-    Compute early-stopping patience (in epochs) from total training steps.
-
-    Parameters
-    ----------
-    max_epoch : int
-        Maximum number of epochs configured for training.
-    data_size : int
-        Number of samples in the dataset.
-    batch_size : int
-        Mini-batch size.
-    scale : float, optional
-        Fraction of total training steps used as patience. Default is ``0.1``.
+    Create a Rich progress bar for training visualization.
 
     Returns
     -------
-    int
-        Patience measured in epochs (at least ``1``).
+    Progress
+        Configured Rich Progress instance with columns for:
+        - Spinner animation
+        - Task description
+        - Progress counter
+        - Elapsed time
+        - Remaining time estimate
+        - Current (per-epoch) training loss
+
+    Notes
+    -----
+    The progress bar provides real-time feedback during training, showing the
+    per-epoch training loss.
     """
-    n_batches = data_size // batch_size
-    total_steps = max_epoch * n_batches
-    patience_steps = int(total_steps * scale)
-    patience_epochs = max(1, patience_steps // n_batches)
-    return patience_epochs
+    return Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        "Epoch",
+        MofNCompleteColumn(),
+        "Elapsed",
+        TimeElapsedColumn(),
+        "Remaining",
+        TimeRemainingColumn(),
+        "Loss",
+        TextColumn("{task.fields[loss]:.3f}"),
+    )
 
 
-def train(model, data, *, conf):
+def _copy_pytree(pt):
+    """Return a defensive copy of a pytree, copying only array leaves."""
+    return jax.tree.map(lambda x: jnp.copy(x) if eqx.is_array(x) else x, pt)
+
+
+class EpochHandler:
+    """Self-contained ``on_epoch_end`` handler.
+
+    Owns all epoch-level policy so the training loop stays a pure mechanism:
+    validation, best-model tracking, periodic checkpointing, metrics
+    persistence, and optional early stopping. Construct it yourself and pass it
+    as ``on_epoch_end`` to :func:`train`; read :attr:`best_model` afterwards.
+
+    Validation is fully owned here: given ``valid_data``, the handler builds its
+    own jitted evaluation from :func:`batch_loss` (``beta=1``, no regularizer),
+    so JAX concerns stay out of user code.
+
+    All behavior is opt-in:
+
+    - validation and best-model tracking are enabled whenever ``valid_data`` is
+      given (best tracking is automatic; there is no separate flag)
+    - ``checkpoint_path is None`` disables checkpoint/metric writing
+    - ``patience is None`` disables early stopping
+
+    Parameters
+    ----------
+    valid_data : tuple or None
+        Validation ``(t, y, u, c)`` evaluated as a single batch each epoch.
+        When given, the best-by-validation model is tracked automatically in
+        :attr:`best_model`.
+    checkpoint_path : str or Path or None
+        Directory for checkpoints/metrics/config. Created if missing.
+    checkpoint_every : int or None
+        Save the current model every ``checkpoint_every`` epochs.
+    patience : int or None
+        Epochs without validation improvement before requesting a stop.
+    save_fn : Callable or None
+        ``save_fn(model, path)`` persisting a model; defaults to ``save_model``.
+    config : Any or None
+        Optional resolved config dumped to ``checkpoint_path/config.yaml``.
+    data_sharding, model_sharding : Any or None
+        Optional sharding for the validation step; defaults to replicated.
+    seed : int
+        Seed for the validation PRNG key.
+    """
+
+    def __init__(
+        self,
+        *,
+        valid_data=None,
+        checkpoint_path=None,
+        checkpoint_every=None,
+        patience=None,
+        save_fn: Callable | None = None,
+        config=None,
+        data_sharding=None,
+        model_sharding=None,
+        seed: int = 0,
+    ) -> None:
+        self.valid_data = valid_data
+        self.checkpoint_path = (
+            Path(checkpoint_path).expanduser().resolve() if checkpoint_path else None
+        )
+        self.checkpoint_every = checkpoint_every
+        self.patience = patience
+        self.save_fn = save_fn if save_fn is not None else (lambda m, p: save_model(p, m))
+        self.data_sharding = data_sharding
+        self.model_sharding = model_sharding
+        self.key = jr.key(seed)
+
+        self.has_valid = valid_data is not None
+        self.best_loss = float("inf")
+        self.best_model = None
+        self.patience_left = patience
+        self.valid_losses: list = []
+
+        if self.has_valid:
+            self._evaluate = self._build_evaluate()
+            if self.data_sharding is not None:
+                self.valid_data = eqx.filter_shard(self.valid_data, self.data_sharding)
+
+        if self.checkpoint_path is not None:
+            self.checkpoint_path.mkdir(parents=True, exist_ok=True)
+            if config is not None:
+                OmegaConf.save(config, self.checkpoint_path / "config.yaml")
+
+    def _build_evaluate(self) -> Callable:
+        model_sharding = self.model_sharding
+        data_sharding = self.data_sharding
+
+        @eqx.filter_jit
+        def _evaluate(model, batch, key):
+            model = eqx.nn.inference_mode(model)
+            if model_sharding is not None:
+                model = eqx.filter_shard(model, model_sharding)
+            if data_sharding is not None:
+                batch = eqx.filter_shard(batch, data_sharding)
+            # Validation uses the true ELBO (beta = 1), no regularizer.
+            return lax.stop_gradient(batch_loss(model, batch, key, beta=1.0))
+
+        return _evaluate
+
+    def __call__(self, model, info) -> bool:
+        epoch = info["epoch"]
+
+        valid_loss = None
+        if self.has_valid:
+            eval_key = jr.fold_in(self.key, epoch)
+            valid_loss = float(self._evaluate(model, self.valid_data, eval_key))
+            self.valid_losses.append(valid_loss)
+
+        improved = False
+        if valid_loss is not None and math.isfinite(valid_loss):
+            # Seed best_model on the first finite validation loss, then track
+            # subsequent improvements. A never-finite run leaves best_model None
+            # to signal a failed/diverged training.
+            if self.best_model is None or valid_loss < self.best_loss:
+                self.best_loss = valid_loss
+                self.best_model = _copy_pytree(model)
+                self.patience_left = self.patience
+                improved = True
+            elif self.patience is not None:
+                self.patience_left -= 1
+
+        if self.checkpoint_path is not None:
+            if self.checkpoint_every and (epoch + 1) % self.checkpoint_every == 0:
+                self.save_fn(
+                    model, self.checkpoint_path / f"checkpoint_epoch{epoch:04d}.zip"
+                )
+            if improved:
+                self.save_fn(model, self.checkpoint_path / "best.zip")
+            self._write_metrics(info)
+
+        if self.patience is not None and self.patience_left is not None:
+            return self.patience_left <= 0
+        return False
+
+    def _write_metrics(self, info) -> None:
+        metrics = {
+            "train_losses": info["train_losses"],
+            "valid_losses": self.valid_losses,
+        }
+        (self.checkpoint_path / "metrics.json").write_text(
+            json.dumps(metrics, indent=2)
+        )
+
+
+def _run_training_loop(
+    model,
+    train_set,
+    key,
+    batch_loss_fun,
+    dataloader,
+    batch_size,
+    max_epoch,
+    optimizer,
+    data_sharding,
+    model_sharding,
+    on_epoch_end=None,
+    param_schedule=None,
+):
+    """
+    Run sharded training for a fixed number of epochs.
+
+    The loop is validation agnostic: it owns the JAX-sensitive training compute
+    (jitted, sharded step) and the progress display, reports the per-epoch
+    training loss, and delegates all epoch-level policy (validation,
+    checkpointing, best tracking, early stopping) to ``on_epoch_end``.
+
+    Parameters
+    ----------
+    model : eqx.Module
+        Model to optimise; may contain PyTree leaves requiring sharding.
+    train_set : Any
+        Training dataset consumed by ``dataloader``.
+    key : Array
+        Base PRNG key; internally split for data loading.
+    batch_loss_fun : Callable
+        Loss for a ``(model, batch, key, step)`` call, where *step* is a scalar
+        ``jnp.int32`` counting training batches processed so far.
+    dataloader : Callable
+        Generator producing ``(batch, epoch, batch_in_epoch)`` tuples.
+    batch_size : int
+        Size of each training batch.
+    max_epoch : int
+        Number of epochs to train for.
+    optimizer : Any
+        Optax-like optimiser with ``init``/``update``.
+    data_sharding, model_sharding : Any
+        Partitioning applied via ``eqx.filter_shard``.
+    on_epoch_end : Callable or None
+        Called once per finished epoch as ``on_epoch_end(model, info)`` where
+        ``info`` is ``{"epoch": int, "step": jnp.int32, "train_loss": float,
+        "train_losses": list[float]}``. Returning a truthy value stops training.
+    param_schedule : Callable or None
+        Optional ``param_schedule(model, step) -> model`` applied at the start
+        of every step, before the loss/gradient computation. Use it to drive a
+        model attribute (e.g. process-noise scale) through an ``optax``
+        schedule keyed on the step counter. The corresponding path(s) should
+        also be listed in ``conf.freeze_paths`` so the optimizer's own
+        gradient-based update does not fight the schedule.
+
+    Returns
+    -------
+    eqx.Module
+        The final-epoch model.
+    """
+
+    @eqx.filter_jit(donate="all")
+    def train_step(model, opt_state, batch, key, step):
+        """One optimization step: shard inputs, compute value+grad, and update."""
+        model, opt_state = eqx.filter_shard((model, opt_state), model_sharding)
+        batch = eqx.filter_shard(batch, data_sharding)
+
+        if param_schedule is not None:
+            model = param_schedule(model, step)
+
+        loss, grads = eqx.filter_value_and_grad(batch_loss_fun)(
+            model, batch, key, step
+        )
+        # Pass the filtered (trainable-array) params -- matching the structure of
+        # ``grads`` -- so *params-aware* optimizers (AdamW, Lion, LAMB, LARS,
+        # Adafactor, Prodigy, D-Adaptation) see a consistent pytree instead of
+        # the full model's bool/callable leaves.
+        params = eqx.filter(model, eqx.is_inexact_array)
+        updates, opt_state = optimizer.update(grads, opt_state, params)
+        model = eqx.apply_updates(model, updates)
+
+        return model, opt_state, step + 1, loss
+
+    # Initialize on a *copy* of the params so optimizers that store the initial
+    # params (e.g. Prodigy/D-Adaptation) do not alias the live, donated model
+    # buffer (which would trigger a double-donation error).
+    opt_state = optimizer.init(_copy_pytree(eqx.filter(model, eqx.is_inexact_array)))
+
+    # put on device
+    model, opt_state = eqx.filter_shard((model, opt_state), model_sharding)
+
+    train_losses: list = []
+
+    pbar = _training_progress()
+    task_id = pbar.add_task("Training", total=max_epoch, loss=jnp.inf)
+    pbar.start()
+
+    step = jnp.array(0, dtype=jnp.int32)
+    key, loader_key = jr.split(key)
+    current_epoch = 0
+    epoch_batch_losses: list = []
+
+    def finalize_epoch(epoch_idx, batch_losses) -> bool:
+        """Record the epoch's training loss and run the callback.
+
+        Returns ``True`` when the callback requests an early stop.
+        """
+        if batch_losses:
+            train_loss = float(jnp.mean(jnp.stack(batch_losses)))
+        else:
+            train_loss = float("nan")
+        train_losses.append(train_loss)
+
+        pbar.update(task_id, advance=1, loss=train_loss)
+
+        if on_epoch_end is not None:
+            info = {
+                "epoch": epoch_idx,
+                "step": step,
+                "train_loss": train_loss,
+                "train_losses": train_losses,
+            }
+            return bool(on_epoch_end(model, info))
+        return False
+
+    try:
+        for batch, epoch, _batch_in_epoch in dataloader(
+            train_set, batch_size, max_epoch, loader_key
+        ):
+            if epoch != current_epoch:
+                if finalize_epoch(current_epoch, epoch_batch_losses):
+                    break
+                epoch_batch_losses = []
+                current_epoch = epoch
+
+            key, batch_key = jr.split(key)
+            batch = eqx.filter_shard(batch, data_sharding)
+            model, opt_state, step, loss = train_step(
+                model, opt_state, batch, batch_key, step
+            )
+            epoch_batch_losses.append(loss)
+        else:
+            finalize_epoch(current_epoch, epoch_batch_losses)
+    except KeyboardInterrupt:
+        logger.info(
+            "training interrupted (KeyboardInterrupt); returning current model"
+        )
+    finally:
+        pbar.stop()
+
+    return model
+
+
+def train(
+    model,
+    train_data,
+    *,
+    conf,
+    on_epoch_end=None,
+    regularizer=None,
+    optimizer=None,
+    param_schedule=None,
+):
     """
     Training routine for XFADS models with multi-device support.
 
-    Implements efficient training using JAX transformations, automatic
-    differentiation, and multi-device data parallelism. Features include
-    gradient clipping, weight decay, noise injection, and validation-based
-    early stopping with exponential moving averages.
+    The trainer is a pure mechanism: it optimizes ``model`` on ``train_data``
+    for ``conf.max_epoch`` epochs and returns the final-epoch model. It has no
+    notion of validation, checkpointing, best models, or early stopping --
+    those are epoch-level policy supplied via ``on_epoch_end`` (see
+    :class:`EpochHandler`). The caller owns the train/validation split.
 
     Parameters
     ----------
     model : XFADS
         The XFADS model to train.
-    data : tuple of Array
+    train_data : tuple of Array
         Training data as tuple (t, y, u, c) where:
         - t: time indices, shape (N, T)
         - y: observations, shape (N, T, observation_dim)
@@ -344,39 +712,43 @@ def train(model, data, *, conf):
     conf : dict or DictConfig
         Training configuration with hyperparameters. If dict or partial config,
         missing values will be filled with defaults from DEFAULT_TRAINER_CONFIG.
+    on_epoch_end : Callable or None
+        ``on_epoch_end(model, info)`` called once per finished epoch with
+        train-only ``info`` (``epoch``, ``step``, ``train_loss``,
+        ``train_losses``); returning a truthy value stops training.
+    regularizer : Callable or None, optional
+        Optional ``regularizer(model) -> Array`` scalar penalty added to the
+        per-batch objective (``loss = -ELBO + regularizer(model)``). It is a
+        pure function of the model, so any parameter penalty must be written
+        in the relevant parameter space (e.g. a penalty on the process-noise
+        covariance Q must transform ``noise_free`` via the Approx, not act on
+        the raw free parameters).
+    optimizer : optax.GradientTransformation or None, optional
+        Optimizer to use. When ``None`` (default), the built-in optimizer is
+        **vanilla Adam** (``optax.adam(conf.learning_rate)``) -- no gradient
+        clipping, no gradient noise, no weight decay. In a plugin framework
+        the trainer cannot know which leaves are weight matrices vs
+        variances/biases, and gradient noise/clipping can destabilize
+        sensitive objectives, so the default imposes no such policy. To add
+        clipping, weight decay, gradient noise, or a custom schedule, build
+        your own ``optax`` optimizer and pass it here; ``conf.learning_rate``
+        is then ignored. ``conf.freeze_paths`` is still applied on top.
+    param_schedule : Callable or None, optional
+        Optional ``param_schedule(model, step) -> model`` applied at the start
+        of every step (before the loss/gradient computation), for driving a
+        model attribute through a step-indexed schedule -- e.g. annealing the
+        process-noise scale via :func:`noise_schedule`. This is a general
+        mechanism, not specific to any one attribute: the trainer only calls
+        the function and does not interpret what it changes. The
+        corresponding path(s) should also be listed in ``conf.freeze_paths``,
+        otherwise the optimizer's own gradient-based update will fight the
+        schedule (e.g. via gradient noise or optimizer momentum, even where
+        the raw gradient is itself zero).
 
     Returns
     -------
     XFADS
-        Trained XFADS model with optimized parameters.
-
-    Notes
-    -----
-    The training procedure follows these steps:
-
-    1. **Data Preparation**: Split data into train/validation sets and
-       distribute across available devices using JAX sharding.
-
-    2. **Optimizer Setup**: Configure Optax optimizer chain with:
-       - Gradient clipping for stability
-       - Gradient noise injection for regularization
-       - Adam optimizer with weight decay
-       - Learning rate scaling
-
-    3. **Training Loop**: Iterative optimization with:
-       - Mini-batch gradient descent
-       - Validation loss monitoring
-       - Exponential moving average smoothing
-       - Early stopping based on convergence criteria
-
-    4. **Loss Computation**: Maximizes ELBO (Evidence Lower Bound):
-       Loss = -E[log p(y|z)] + KL(q(z)||p(z)) + optional regularizers
-
-    The implementation is optimized for performance with:
-    - JIT compilation of critical functions
-    - Efficient memory management with equinox
-    - Multi-device data parallelism
-    - Dynamic batch permutation for better mixing
+        The final-epoch model.
     """
     conf = OmegaConf.merge(DEFAULT_TRAINER_CONFIG, conf)
 
@@ -390,14 +762,11 @@ def train(model, data, *, conf):
     data_sharding = jshd.NamedSharding(mesh, jshd.PartitionSpec("batch"))
     model_sharding = jshd.NamedSharding(mesh, jshd.PartitionSpec())
 
-    # Prepare data: no validation split / early stopping — train the full budget
-    # on all data and return the final model (diagnostic-workflow refactor).
-    data_size = len(data[0])
-    batch_size = conf.batch_size
-    train_set = data
+    # batch size is required to be a multiple of the number of devices.
+    data_size = len(train_data[0])
 
     logger.info(
-        "train start: devices=%d batch_size=%d data=%d max_epoch=%d seed=%d kl_warmup_steps=%d (no val/early-stop)",
+        "train start: devices=%d batch_size=%d data=%d max_epoch=%d seed=%d kl_warmup_steps=%d",
         n_devices,
         int(conf.batch_size),
         int(data_size),
@@ -411,24 +780,26 @@ def train(model, data, *, conf):
         model_sharding.spec,
     )
     logger.debug(
-        "optimizer: lr=%s clip_norm=%s weight_decay=%s noise_eta=%s noise_gamma=%s",
+        "optimizer: %s lr=%s",
+        "user-supplied" if optimizer is not None else "default (vanilla Adam)",
         conf.learning_rate,
-        conf.clip_norm,
-        conf.weight_decay,
-        conf.noise_eta,
-        conf.noise_gamma,
     )
 
-    # Prepare optimizer
-    optimizer = optax.chain(
-        optax.clip_by_global_norm(conf.clip_norm),
-        optax.add_noise(conf.noise_eta, conf.noise_gamma, conf.seed),
-        optax.scale_by_adam(),
-        optax.add_decayed_weights(conf.weight_decay),
-        optax.scale_by_learning_rate(conf.learning_rate),
-    )
+    # Prepare optimizer. The default is deliberately **vanilla Adam** -- no
+    # gradient clipping, no gradient noise, no weight decay. In a plugin
+    # framework the trainer cannot know which leaves are weights vs
+    # variances/biases, so it imposes no regularization policy; and gradient
+    # noise/clipping can destabilize sensitive objectives (e.g. chaotic
+    # dynamical-systems reconstruction). Users who want clipping, weight
+    # decay, gradient noise, or a custom schedule pass their own ``optax``
+    # optimizer via ``optimizer=`` (``freeze_paths`` is still applied on top).
+    if optimizer is None:
+        optimizer = optax.adam(conf.learning_rate)
 
-    freeze_mask = jax.tree.map(lambda _: False, model)
+    # Build the freeze mask over the *filtered* (trainable-array) structure so it
+    # aligns with the params the optimizer sees inside the training loop.
+    params = eqx.filter(model, eqx.is_inexact_array)
+    freeze_mask = jax.tree.map(lambda _: False, params)
     freeze_paths = [str(p) for p in conf.freeze_paths]
     for path in freeze_paths:
         parts = tuple(path.split("."))
@@ -445,76 +816,30 @@ def train(model, data, *, conf):
             optax.masked(optax.set_to_zero(), freeze_mask),
         )
 
+    # KL weight schedule: optax curve evaluated on the loop's step counter.
+    # beta is an objective coefficient (not an optimizer hyperparameter), so it
+    # is evaluated here and passed into the loss -- never routed through the
+    # optimizer. kl_warmup_steps == 0 means standard ELBO (beta = 1).
+    kl_warmup_steps = int(conf.kl_warmup_steps)
+    # beta ramps 0 -> 1; beta = 1 is the standard ELBO (the annealing target,
+    # fixed by the variational objective, not a tunable hyperparameter).
+    beta_schedule = (
+        optax.linear_schedule(
+            init_value=0.0, end_value=1.0, transition_steps=kl_warmup_steps
+        )
+        if kl_warmup_steps > 0
+        else optax.constant_schedule(1.0)
+    )
+
     def loss_fn(model, batch, key, step):
-        return batch_loss(
-            model,
-            batch,
-            key,
-            step,
-            kl_warmup_steps=conf.kl_warmup_steps,
-            noise_regularizer=conf.noise_regularizer,
-        )
+        loss = batch_loss(model, batch, key, beta=beta_schedule(step))
+        if regularizer is not None:
+            loss = loss + regularizer(model)
+        return loss
 
-    # Optional periodic checkpoint callback (every `checkpoint_every` epochs).
-    checkpoint_callback = None
-    ckpt_dir = conf.get("checkpoint_dir", None)
-    ckpt_every = int(conf.get("checkpoint_every", 0) or 0)
-    if ckpt_dir and ckpt_every > 0:
-        from pathlib import Path
-
-        from gearax.modules import save_model
-
-        ckpt_path = Path(ckpt_dir)
-        ckpt_path.mkdir(parents=True, exist_ok=True)
-
-        def checkpoint_callback(m, epoch, step):  # noqa: ARG001 - step kept for signature parity
-            if epoch > 0 and epoch % ckpt_every == 0:
-                save_model(str(ckpt_path / f"model_epoch{epoch}.zip"), m)
-                logger.info("checkpoint saved: epoch=%d step=%d", epoch, step)
-
-    # Optional process-noise schedule: useful when Q should be frozen from gradients
-    # but annealed externally to avoid cold-starting with a huge Q^{-1} precision.
-    model_callback = None
-    state_noise_schedule = conf.get("state_noise_schedule", None)
-    if state_noise_schedule is not None:
-        start = float(state_noise_schedule.start)
-        end = float(state_noise_schedule.end)
-        n_epochs = max(1, int(state_noise_schedule.epochs))
-        if start <= 0 or end <= 0:
-            raise ValueError("state_noise_schedule start/end must be positive")
-        log_start, log_end = math.log(start), math.log(end)
-
-        def model_callback(m, epoch, step):  # noqa: ARG001 - step kept for callback parity
-            frac = min(max(epoch, 0), n_epochs) / n_epochs
-            q = math.exp(log_start + frac * (log_end - log_start))
-            return eqx.tree_at(lambda mm: mm.noise_free, m, m.approx.free_from_kw(scale=q))
-
-        logger.info(
-            "state-noise schedule: Q %.6g -> %.6g over %d epochs (log-linear)",
-            start,
-            end,
-            n_epochs,
-        )
-
-    # Per-epoch training metrics for diagnosis (incremental TSV; survives a crash).
-    metrics_callback = None
-    metrics_path = conf.get("metrics_path", None)
-    if metrics_path:
-        from pathlib import Path
-
-        _mp = Path(metrics_path)
-        _mp.parent.mkdir(parents=True, exist_ok=True)
-        _mf = _mp.open("w")
-        _mf.write("epoch\tstep\ttrain_loss\tgrad_norm\n")
-        _mf.flush()
-
-        def metrics_callback(epoch, step, train_loss, grad_norm):
-            _mf.write(f"{epoch}\t{step}\t{train_loss:.6e}\t{grad_norm:.6e}\n")
-            _mf.flush()
-
-    model = _train_loop.train(
+    final_model = _run_training_loop(
         model,
-        train_set,
+        train_data,
         key,
         loss_fn,
         dataloader,
@@ -523,12 +848,11 @@ def train(model, data, *, conf):
         optimizer,
         data_sharding,
         model_sharding,
-        checkpoint_callback=checkpoint_callback,
-        metrics_callback=metrics_callback,
-        model_callback=model_callback,
+        on_epoch_end=on_epoch_end,
+        param_schedule=param_schedule,
     )
 
     dt = time.perf_counter() - t0
     logger.info("train end: elapsed=%.2fs", dt)
 
-    return model
+    return final_model

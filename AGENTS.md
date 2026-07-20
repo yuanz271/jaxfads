@@ -94,11 +94,26 @@ Invariant for callers:
 
 ### Training regularization
 
-- The trainer supports an optional user hook:
-  - `trainer_conf.noise_regularizer: Callable[[XFADS], Array] | None`
+- The trainer supports an optional user hook passed as an argument (not config,
+  since it is a callable):
+  - `train(model, data, *, conf, on_epoch_end=None, regularizer=None,
+    optimizer=None)` where `regularizer: Callable[[XFADS], Array] | None` adds a
+    scalar penalty to the per-batch objective (`loss = -ELBO +
+    regularizer(model)`).
+  - `batch_loss` stays a pure objective; the trainer composes the penalty.
+  - Penalize the intended quantity in its own space (e.g. transform
+    `noise_free` via the Approx to regularize Q; do not penalize the raw free
+    parameters).
+- Optimizer policy is user-ownable. The default optimizer applies **no weight
+  decay**: in a plugin framework the trainer cannot know which leaves are
+  weight matrices vs variances/biases, so it makes no decay assumption. Pass
+  `optimizer=` (an `optax.GradientTransformation`) to take full control, e.g.
+  `optax.add_decayed_weights(wd, mask=...)` with a model-derived mask. There is
+  no `weight_decay` config field.
 - Parameter freezing is configured declaratively via:
   - `trainer_conf.freeze_paths: list[str]` (dot-separated model attribute paths,
-    e.g. `["noise_free"]`)
+    e.g. `["noise_free"]`); applied on top of the default or a supplied
+    optimizer.
 - No built-in covariance-based noise regularization is applied by default.
 
 ## Python rules
