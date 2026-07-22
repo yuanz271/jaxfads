@@ -4,9 +4,13 @@
 
 **Status:** root-caused to a magnesium-specific hardware fault (elevated NVRM
 error history on the NUMA-node-1 PCIe domain serving GPUs 4-7), not a general
-JAX/XLA/equinox/jaxfads defect. A **separate**, likely-general 2-device hang
-bug was also found during the investigation (see below). Workaround (single-
-GPU pinning) remains in place and is sufficient for both.
+JAX/XLA/equinox/jaxfads defect. A **separate** 2-device hang failure mode was
+also found during the investigation; as of 2026-07-22 (see "Update" section
+below) neither failure mode currently reproduces on magnesium after a reboot,
+including when re-tested against the real training pipeline that originally
+surfaced the bug. Workaround (single-GPU pinning) remains in place
+regardless, since recurrence risk has not been eliminated, only currently
+absent.
 
 **Symptom:** when more than one JAX device is visible (no `CUDA_VISIBLE_DEVICES`
 pinning) and `train()`/`_run_training_loop`'s default `data_sharding` /
@@ -33,14 +37,18 @@ per-machine run logs.
 
 ### Two distinct failure modes were found, not one
 
-1. **n=2 device meshes hang** (near-deterministic, not just occasional).
-   Reproduced on both magnesium and palladium (identical hardware/software
-   otherwise), independent of which physical GPU pair, independent of
-   cold-vs-warm process position (tested by running the same pair first and
-   last in a sweep -- it hung both times, ruling out a cold-start artifact).
-   This looks like a genuine, likely host-independent JAX/XLA collective
-   deadlock specific to exactly 2 participants, separate from the
-   wrong-answer failure mode below.
+1. **n=2 device meshes hang** (near-deterministic while it was occurring, not
+   just occasional). Reproduced on both magnesium and palladium (identical
+   hardware/software otherwise), independent of which physical GPU pair,
+   independent of cold-vs-warm process position (tested by running the same
+   pair first and last in a sweep -- it hung both times, ruling out a
+   cold-start artifact). Originally suspected to be a genuine,
+   host-independent JAX/XLA collective deadlock; **revised** after a
+   2026-07-22 reboot made it stop reproducing entirely (see "Update" section
+   below) -- now considered more likely to be accumulated driver/NCCL-level
+   state (e.g. stale IPC/shared-memory handshake artifacts, or a wedged GPU
+   context left by an earlier abnormally-terminated process) than a
+   deterministic code defect, though this is not fully confirmed either way.
 
 2. **n=4 / n=8 device meshes probabilistically compute a wrong reduction**
    (one or more shards' contributions silently dropped from the collective
@@ -244,3 +252,73 @@ and avoid exactly-2-GPU meshes on any host.
   `scripts/shell/hdsr_runs/current/run_jaxfads_hbn.sh` already pins
   `CUDA_VISIBLE_DEVICES` to a single GPU by default with an inline comment
   referencing this doc.
+- Set up periodic re-testing (e.g. daily, or after heavy GPU usage) of
+  `fresh_process_sweep.sh`'s n=2 case plus an `ipcs -m`/`ipcs -s`/`/dev/shm`
+  check, to determine whether the hang failure mode recurs as magnesium's
+  uptime grows again -- this is the discriminating test between "accumulated
+  driver/NCCL state" (recurs gradually with uptime/usage) and "a real
+  latent bug" (could recur at any time regardless of uptime).
+
+## Update 2026-07-22: wedged GPU context, reboot, and full re-test (both
+failure modes currently absent, cause of the hang narrowed but not confirmed)
+
+**A live wedged-GPU-context incident occurred during this investigation**,
+independent of but consistent with everything above. A `fresh_process_sweep.sh`
+trial hit the (300s-timeout-bounded) n=2-style hang; after the trial's
+`timeout` and a manual `SIGKILL`, the process became a zombie (`Z` state --
+fully dead in userspace) but `nvidia-smi` continued reporting ~35GB of GPU
+memory and an active compute context still attached to that (dead) PID on
+GPU 0/1. A manual `nvidia-smi --gpu-reset` on GPU 1 was refused: "In use by
+another client." This is direct, first-hand confirmation that the underlying
+failure is not purely userspace-level -- the NVIDIA driver's own GPU-side
+context teardown can get stuck in a way that survives `SIGKILL` and blocks a
+manual reset. Magnesium was rebooted (2026-07-22 18:01:29 per `uptime -s`) to
+clear it; this is the same class of remedy (full GPU/driver reset via
+reboot) that resolved the original 2026-06-15 GSP-firmware incident on GPU 6.
+
+**Post-reboot, `ipcs -m`/`ipcs -s`/`/dev/shm`/`/tmp` were confirmed clean**
+(no shared-memory segments, semaphores, or NCCL/CUDA artifacts) -- a baseline
+for future comparison if the hang recurs.
+
+**Post-reboot, a full `fresh_process_sweep.sh` re-run (all 7 configs,
+including both `(0,1)` cold-first/warm-last cases that had hung in every
+prior sweep on both magnesium and palladium) came back 100% correct: no
+hangs, no wrong answers**, with normal, unremarkable temperatures throughout
+(26-32 C across all 8 GPUs, no anomaly on GPU 6 relative to siblings) and
+substantially faster elapsed times than pre-reboot runs (3-9s vs. 20s+ for
+equivalent correct configs).
+
+**Post-reboot, the actual downstream training pipeline that originally
+surfaced this bug (`eeg/scripts/python/jaxfads_hbn/jaxfads_hbn_train.py`,
+real `XFADS` model, real HBN adapter data, real `jaxfads.trainer.train()`)
+was re-run pinned-vs-unpinned** (single GPU vs. all 8 visible, same seed
+`20250417`, `k=8 latent=8 p=2 hidden_size=160 mc_size=4 batch_size=512`,
+2048-trial subsample of `response_locked_k8` -- k=12 data used in the
+original discovery is not present on this machine, so this is the same code
+path at smaller scale, not a byte-for-byte scale match):
+
+| epochs (steps) | pinned (1 GPU) | unpinned (8 GPUs) |
+|---|---|---|
+| 1 (4 steps) | loss=12.500, MSE final=0.78775 | loss=12.500, MSE final=0.78775 (exact match) |
+| 20 (80 steps) | loss=7.630, MSE final=0.17664 | loss=7.630, MSE final=0.17660 (diff 4e-5, benign FP-reduction-order noise) |
+
+No divergence, no hang, no error, no leftover process/GPU memory after either
+run. This is a third independent confirmation (alongside the clean sweep and
+the clean IPC baseline) that the bug is not currently reproducing.
+
+**Revised interpretation.** A reboot fixing a supposedly-deterministic
+collective hang is itself evidence that the n=2 hang was probably not a pure,
+always-present JAX/XLA code defect. The most likely explanation is
+accumulated GPU-driver/NCCL-level state -- possibly *partly self-inflicted*
+by this investigation's own repeated forced-kills of hung trials (including
+the wedged-context incident above) compounding over many sessions on both
+magnesium and palladium, rather than a clean-room-reproducible bug
+independent of testing activity. The wrong-answer mode's hardware root cause
+on magnesium (NUMA1 NVRM error history) is unaffected by this revision and
+remains the primary conclusion for that failure mode.
+
+**Practical implication:** neither failure mode is currently observed, but
+"currently absent" is not the same as "fixed" -- the single-GPU-pinning
+workaround should remain the default until (a) magnesium's NUMA1 hardware is
+physically inspected, and (b) periodic re-testing (see "Not yet done") shows
+the hang does not recur as uptime/usage accumulate again.
