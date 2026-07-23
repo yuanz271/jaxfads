@@ -10,10 +10,10 @@ from collections.abc import Callable
 from typing import Any, Protocol
 
 import equinox as eqx
-import tensorflow_probability.substrates.jax.distributions as tfp
 from jax import Array
 from jax import numpy as jnp
 from jax import random as jrnd
+from jax.scipy.linalg import cho_solve
 
 from .base import Observation
 from .constraints import _EPS, constrain_positive, unconstrain_positive
@@ -700,12 +700,58 @@ class Gaussian(eqx.Module, strict=True):
 
         where the observation covariance includes both state uncertainty
         and observation noise.
+
+        Uses the matrix determinant lemma and Woodbury identity to avoid ever
+        forming the dense ``(observation_dim, observation_dim)`` covariance
+        matrix ``Sigma_y = R + C @ Cov(z) @ C.T``. This matters when
+        ``observation_dim >> state_dim`` (e.g. a linear readout onto raw,
+        high-dimensional observations): the naive dense form costs
+        ``O(observation_dim**2)`` memory and ``O(observation_dim**3)`` time
+        (a Cholesky factorization) per time step per trial in a batch; the
+        Woodbury form below costs ``O(observation_dim * state_dim)`` memory
+        and ``O(observation_dim * state_dim**2 + state_dim**3)`` time
+        instead.
+
+        The one ``O(observation_dim * state_dim**2)`` contraction
+        (``C.T @ diag(1/r) @ C``) depends only on the (trainable) readout
+        weight ``C`` and observation noise ``r`` -- not on ``moment``, ``t``,
+        or the batch/time index -- so under ``jax.vmap`` over batch and time
+        it carries no mapped axis and is effectively computed once rather
+        than once per (batch, time) instance.
         """
         mean_z, cov_z = approx.unpack(moment)
         mean_y = readout(t, mean_z)
-        C = readout.weight  # left matrix
-        cov_y = C @ cov_z @ C.T + jnp.diag(self.cov())
-        ll = tfp.MultivariateNormalFullCovariance(mean_y, cov_y).log_prob(y)
+        C = readout.weight  # (d, m): d = observation_dim, m = state_dim
+        r = self.cov()  # (d,)
+
+        d = r.shape[-1]
+        m = cov_z.shape[-1]
+        eye_m = jnp.eye(m, dtype=cov_z.dtype)
+        delta = y - mean_y  # (d,)
+        r_inv = 1.0 / r  # (d,)
+
+        # Hoistable: depends only on C, r (see Notes above).
+        Ct_Rinv = C.T * r_inv[None, :]  # (m, d)
+        K = Ct_Rinv @ C  # (m, m) = C^T R^-1 C
+
+        # Per-(batch,time): Sigma_z^-1 via a damped solve, matching this
+        # module's MVN.moment_to_natural convention for covariance inversion.
+        cov_z_damped = cov_z + _EPS * eye_m
+        cov_z_inv = jnp.linalg.solve(cov_z_damped, eye_m)
+        M = cov_z_inv + K  # (m, m), guaranteed PD (cov_z_inv is PD, K is PSD)
+        L_M = jnp.linalg.cholesky(M)
+
+        v = Ct_Rinv @ delta  # (m,)
+        Minv_v = cho_solve((L_M, True), v)
+        quad = jnp.sum(delta**2 * r_inv) - v @ Minv_v
+
+        logdet_R = jnp.sum(jnp.log(r))
+        L_cov_z = jnp.linalg.cholesky(cov_z_damped)
+        logdet_cov_z = 2.0 * jnp.sum(jnp.log(jnp.diag(L_cov_z)))
+        logdet_M = 2.0 * jnp.sum(jnp.log(jnp.diag(L_M)))
+        logdet = logdet_R + logdet_cov_z + logdet_M
+
+        ll = -0.5 * (d * jnp.log(2.0 * jnp.pi) + logdet + quad)
         return ll
 
     # def set_static(self, static=True) -> None:
