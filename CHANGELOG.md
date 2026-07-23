@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+## 0.10.0
+
+* `Gaussian.eloglik` now computes the analytic expected log-likelihood via a
+  Woodbury/matrix-determinant-lemma form for the diagonal-plus-low-rank
+  observation covariance, instead of building a dense
+  `(observation_dim x observation_dim)` matrix. This cuts the dominant cost
+  from `O(observation_dim^2)` memory / `O(observation_dim^3)` time to
+  `O(observation_dim * state_dim^2 + state_dim^3)`, fixing an out-of-memory
+  failure with high-dimensional observations and a linear readout (e.g.
+  `observation_dim=497`, `state_dim=21`, `batch_size=16`). Verified to match
+  the previous dense implementation to ~1e-7 in log-density and ~1e-5 in
+  gradients.
+* Upgraded the supported `jax` range: the transitive `jax<0.7.0` cap
+  (inherited from `gearax`) is gone, `jax` now resolves to the latest
+  release (0.11.0) with no `[tool.uv] override-dependencies` needed, and
+  `requires-python` is bumped to `>=3.12` (jax 0.11.0 dropped Python 3.11
+  support). This required switching to `tfp-nightly[jax]` (stable
+  `tensorflow-probability` still depends on a jax internal removed in
+  0.7.0) and requesting explicit `Auto` mesh axes in `trainer.py`'s device
+  mesh to keep `eqx.filter_shard` working under jax's newer
+  "sharding-in-types" default (jax >=0.9.0).
+* Documented that `noise_schedule` (and any custom `param_schedule`)
+  anneals constrained (e.g. variance) values and converts to free-form
+  parameters only as the final step, since interpolating in free-form space
+  directly would distort the intended path.
+
 ## 0.9.0
 
 * **Breaking:** the default optimizer is now **vanilla Adam**
