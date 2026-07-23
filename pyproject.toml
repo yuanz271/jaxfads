@@ -21,7 +21,7 @@ dependencies = [
     "omegaconf>=2.3.0",
     "rich>=14.0.0",
     "tfp-nightly[jax]",  # stable tensorflow-probability is JAX<0.7 only; nightly fixes JAX 0.7+ compat (see tensorflow/probability#1994)
-    "jax>=0.4.38,<0.7.0",
+    "jax>=0.4.38",
     "gearax @ git+https://github.com/yuanz271/gearax.git@29d694e66adb11c5bf6dd43c52ff5f839cd86f10",
     "jaxtyping>=0.3.2",
 ]
@@ -36,6 +36,25 @@ dev = [
     "ruff>=0.9.4",
     "ty>=0.0.1",
 ]
+
+[tool.uv]
+# gearax (pinned commit) declares jax<0.7.0 with no documented reason (its own
+# jax usage -- jax.tree.map, Array, lax, jnp, random -- uses nothing removed in
+# jax 0.7+ itself). Override to jax==0.8.0, empirically the newest version that
+# still works:
+#   - jax 0.7.0/0.7.1: excluded by equinox's own constraint (jax!=0.7.0,!=0.7.1)
+#   - jax 0.8.0: full jaxfads test suite passes (single- and multi-GPU); this
+#     project's own real training script (jaxfads_dev_train.py) runs correctly
+#     including at the largest observation_dim (497) and batch_size=16 (the
+#     case the Woodbury eloglik patch fixed)
+#   - jax >=0.9.0: BREAKS -- gearax's trainer.py calls
+#     eqx.filter_shard(...)/lax.with_sharding_constraint with an Explicit-axis
+#     NamedSharding, which jax >=0.9's stricter sharding-mesh API rejects
+#     ("only refer to Auto axes of the mesh ... meant to use `reshard`?");
+#     reproduced on both single-GPU and 8-GPU meshes at 0.9.0, 0.10.2, 0.11.0
+# Fixing gearax's trainer for the newer sharding API (not attempted here)
+# would be required to go past 0.8.0.
+override-dependencies = ["jax==0.8.0"]
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
