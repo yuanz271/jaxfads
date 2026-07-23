@@ -11,7 +11,6 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "Topic :: Scientific/Engineering :: Mathematics",
     "License :: OSI Approved :: MIT License",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
@@ -22,7 +21,7 @@ dependencies = [
     "rich>=14.0.0",
     "tfp-nightly[jax]",  # stable tensorflow-probability is JAX<0.7 only; nightly fixes JAX 0.7+ compat (see tensorflow/probability#1994)
     "jax>=0.4.38",
-    "gearax @ git+https://github.com/yuanz271/gearax.git@29d694e66adb11c5bf6dd43c52ff5f839cd86f10",
+    "gearax @ git+https://github.com/yuanz271/gearax.git@9ef627f3f13940ec86e78228bd338329f172c959",  # bumped past gearax's own jax<0.7.0 pin removal; no override-dependencies needed here anymore
     "jaxtyping>=0.3.2",
 ]
 
@@ -36,30 +35,6 @@ dev = [
     "ruff>=0.9.4",
     "ty>=0.0.1",
 ]
-
-[tool.uv]
-# gearax (pinned commit) declares jax<0.7.0 with no documented reason (its own
-# jax usage -- jax.tree.map, Array, lax, jnp, random -- uses nothing removed in
-# jax 0.7+ itself). Override to the true latest (0.11.0):
-#   - jax 0.7.0/0.7.1: excluded by equinox's own constraint (jax!=0.7.0,!=0.7.1)
-#   - jax 0.9.0+ initially appeared to break jax.make_mesh's default mesh axes
-#     (Explicit since ~0.9.0, the new "sharding-in-types" mode), under which
-#     lax.with_sharding_constraint (used by eqx.filter_shard in this module's
-#     own trainer.py, vendored from gearax) raises "only refer to Auto axes
-#     of the mesh ... meant to use the reshard API?". Fixed directly in
-#     src/jaxfads/trainer.py by requesting axis_types=(Auto,) explicitly on
-#     the mesh jaxfads itself constructs -- not a gearax/equinox bug, jaxfads
-#     just needed to ask for the pre-0.9 mesh behavior explicitly.
-#   - jax 0.11.0 (latest): with that fix, full test suite passes (single- and
-#     multi-GPU), and this project's own real training script
-#     (jaxfads_dev_train.py in the calling project) runs correctly including
-#     the largest observation_dim=497, batch_size=16 case (the case the
-#     Woodbury eloglik patch fixed) -- confirms all three fixes compose.
-#   - jax 0.11.0 dropped Python 3.11 support, hence requires-python bumped to
-#     >=3.12 below (this project's actual venv runs Python 3.13 regardless).
-# GPU acceleration (e.g. jax[cuda12]) is left to the consumer's own
-# environment/config -- not hardcoded here.
-override-dependencies = ["jax==0.11.0"]
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
