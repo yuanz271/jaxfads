@@ -5,7 +5,7 @@ description = "eXponential FAmily Dynamical System"
 authors = [{ name = "yuanz", email = "yuanz271@gmail.com" }]
 license = "MIT"
 readme = "README.md"
-requires-python = ">= 3.11"
+requires-python = ">= 3.12"
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
@@ -40,21 +40,26 @@ dev = [
 [tool.uv]
 # gearax (pinned commit) declares jax<0.7.0 with no documented reason (its own
 # jax usage -- jax.tree.map, Array, lax, jnp, random -- uses nothing removed in
-# jax 0.7+ itself). Override to jax==0.8.0, empirically the newest version that
-# still works:
+# jax 0.7+ itself). Override to the true latest (0.11.0):
 #   - jax 0.7.0/0.7.1: excluded by equinox's own constraint (jax!=0.7.0,!=0.7.1)
-#   - jax 0.8.0: full jaxfads test suite passes (single- and multi-GPU); this
-#     project's own real training script (jaxfads_dev_train.py) runs correctly
-#     including at the largest observation_dim (497) and batch_size=16 (the
-#     case the Woodbury eloglik patch fixed)
-#   - jax >=0.9.0: BREAKS -- gearax's trainer.py calls
-#     eqx.filter_shard(...)/lax.with_sharding_constraint with an Explicit-axis
-#     NamedSharding, which jax >=0.9's stricter sharding-mesh API rejects
-#     ("only refer to Auto axes of the mesh ... meant to use `reshard`?");
-#     reproduced on both single-GPU and 8-GPU meshes at 0.9.0, 0.10.2, 0.11.0
-# Fixing gearax's trainer for the newer sharding API (not attempted here)
-# would be required to go past 0.8.0.
-override-dependencies = ["jax==0.8.0"]
+#   - jax 0.9.0+ initially appeared to break jax.make_mesh's default mesh axes
+#     (Explicit since ~0.9.0, the new "sharding-in-types" mode), under which
+#     lax.with_sharding_constraint (used by eqx.filter_shard in this module's
+#     own trainer.py, vendored from gearax) raises "only refer to Auto axes
+#     of the mesh ... meant to use the reshard API?". Fixed directly in
+#     src/jaxfads/trainer.py by requesting axis_types=(Auto,) explicitly on
+#     the mesh jaxfads itself constructs -- not a gearax/equinox bug, jaxfads
+#     just needed to ask for the pre-0.9 mesh behavior explicitly.
+#   - jax 0.11.0 (latest): with that fix, full test suite passes (single- and
+#     multi-GPU), and this project's own real training script
+#     (jaxfads_dev_train.py in the calling project) runs correctly including
+#     the largest observation_dim=497, batch_size=16 case (the case the
+#     Woodbury eloglik patch fixed) -- confirms all three fixes compose.
+#   - jax 0.11.0 dropped Python 3.11 support, hence requires-python bumped to
+#     >=3.12 below (this project's actual venv runs Python 3.13 regardless).
+# GPU acceleration (e.g. jax[cuda12]) is left to the consumer's own
+# environment/config -- not hardcoded here.
+override-dependencies = ["jax==0.11.0"]
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]

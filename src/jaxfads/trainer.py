@@ -758,7 +758,12 @@ def train(
 
     # >>> Prepare sharding
     n_devices = len(jax.devices())
-    mesh = jax.make_mesh((n_devices,), ("batch",))
+    # axis_types=(Auto,): jax's mesh axes default to Explicit since ~0.9.0 (the
+    # new "sharding-in-types" mode), under which lax.with_sharding_constraint
+    # (used by eqx.filter_shard below) rejects any spec, raising "only refer to
+    # Auto axes of the mesh ... meant to use the reshard API?". Requesting Auto
+    # axes explicitly restores with_sharding_constraint's pre-0.9 behavior.
+    mesh = jax.make_mesh((n_devices,), ("batch",), axis_types=(jax.sharding.AxisType.Auto,))
     data_sharding = jshd.NamedSharding(mesh, jshd.PartitionSpec("batch"))
     model_sharding = jshd.NamedSharding(mesh, jshd.PartitionSpec())
 
