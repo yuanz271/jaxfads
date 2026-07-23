@@ -20,7 +20,7 @@ dependencies = [
     "equinox>=0.11.12",
     "omegaconf>=2.3.0",
     "rich>=14.0.0",
-    "tensorflow-probability[jax]>=0.24.0,<0.26.0",
+    "tfp-nightly[jax]",  # stable tensorflow-probability is JAX<0.7 only; nightly fixes JAX 0.7+ compat (see tensorflow/probability#1994)
     "jax>=0.4.38,<0.7.0",
     "gearax @ git+https://github.com/yuanz271/gearax.git@29d694e66adb11c5bf6dd43c52ff5f839cd86f10",
     "jaxtyping>=0.3.2",
