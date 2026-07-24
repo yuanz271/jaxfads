@@ -25,6 +25,18 @@ dependencies = [
     "jaxtyping>=0.3.2",
 ]
 
+# GPU support is opt-in, not assumed: the base `jax` dependency above installs
+# CPU-only by default. Users pick exactly one of these extras based on their
+# system's CUDA version (jax[cuda12] and jax[cuda13] cannot coexist in the same
+# environment -- each installs a jaxlib build compiled against a specific CUDA
+# toolkit, so `pip install jaxfads[cuda12,cuda13]` together would conflict, not
+# combine). Note CUDA 13 dropped support for some older GPU architectures
+# (Maxwell/Volta/Pascal, SM < 7.5) that CUDA 12 still supports, so cuda13 is
+# not a strict superset -- users on older GPUs should stay on cuda12.
+[project.optional-dependencies]
+cuda12 = ["jax[cuda12]"]
+cuda13 = ["jax[cuda13]"]
+
 [dependency-groups]
 dev = [
     "chex>=0.1.90",
