@@ -1,11 +1,18 @@
+from functools import partial
+
 import chex
+import equinox as eqx
+import jax
 import pytest
 from jax import numpy as jnp
 from jax import random as jrnd
 from omegaconf import OmegaConf
 
+from jaxfads.constraints import unconstrain_positive
 from jaxfads.distributions import MVN
-from jaxfads.observations import GLM
+from jaxfads.observations import GLM, mstep_gaussian_cov
+from jaxfads.smoother import XFADS
+from conftest import MockDynamics  # noqa: F401 - class registration side-effect
 
 
 def _poisson_conf(state_dim: int, observation_dim: int, *, n_steps: int = 0):
@@ -130,3 +137,116 @@ def test_set_readout_stationary_smoke():
     updated = observation.set_readout(weight=weight, bias=bias)
     chex.assert_trees_all_close(updated.readout.weight, weight)
     chex.assert_trees_all_close(updated.readout.layer.bias, bias)
+
+
+def _xfads_gaussian_model(*, state_dim, observation_dim, T, seed=0):
+    model_conf = OmegaConf.create(
+        dict(
+            mode="smooth",
+            observation_dim=observation_dim,
+            state_dim=state_dim,
+            dynamics="MockDynamics",
+            integrator="Identity",
+            approx="MVN",
+            approx_kwargs={},
+            mc_size=2,
+            seed=seed,
+            n_steps=T,
+            fb_penalty=0,
+            noise_penalty=0,
+            dropout=0.0,
+            dyn_conf=OmegaConf.create(dict(input_dim=0, context_dim=0, state_noise=1.0)),
+            enc_conf=OmegaConf.create(dict(width=8, depth=1, dropout=0.0)),
+            obs_conf=OmegaConf.create(
+                dict(
+                    model="GLM",
+                    cov=[1.0] * observation_dim,
+                    norm_readout=False,
+                    dropout=0.0,
+                    likelihood="Gaussian",
+                )
+            ),
+        )
+    )
+    return XFADS(model_conf, jrnd.key(seed))
+
+
+def test_mstep_gaussian_cov_matches_independently_computed_residual_stat():
+    """mstep_gaussian_cov's returned unconstrained_cov must correspond exactly to
+    the mean of (residual^2 + propagated posterior variance) over the *original*
+    model's posterior -- i.e. the closed-form M-step given the current E-step,
+    not some other quantity."""
+    state_dim, observation_dim, T, batch = 2, 4, 5, 3
+    model = _xfads_gaussian_model(state_dim=state_dim, observation_dim=observation_dim, T=T)
+
+    key = jrnd.key(1)
+    times = jnp.broadcast_to(jnp.arange(T), (batch, T))
+    y = jrnd.normal(key, (batch, T, observation_dim))
+    u = jnp.zeros((batch, T, 0))
+    c = jnp.zeros((batch, T, 0))
+    model = model.initialize(times, y, u, c)
+
+    # Deliberately mismatched initial covariance (mimicking a Heywood-degenerate
+    # starting point) -- the M-step must correct it based on the actual residual,
+    # not merely leave a value near the (wrong) prior.
+    wrong_cov = jnp.full((observation_dim,), 1e-4)
+    model = eqx.tree_at(
+        lambda m: m.observation.likelihood.unconstrained_cov,
+        model,
+        unconstrain_positive(wrong_cov),
+    )
+
+    mstep_key = jrnd.key(2)
+    updated = mstep_gaussian_cov(model, (times, y, u, c), key=mstep_key)
+
+    # Independently recompute the expected M-step statistic using the same
+    # (original, wrong-cov) model and the same key, mirroring mstep_gaussian_cov's
+    # own aggregation but written independently here.
+    approx = model.approx
+    readout = model.observation.readout
+    likelihood = model.observation.likelihood
+    _natural, moment, _pred = model(times, y, u, c, key=mstep_key)
+
+    stat = jax.vmap(jax.vmap(partial(likelihood.mstep_stat, approx=approx, readout=readout)))(
+        times, moment, y
+    )
+    expected_r = jnp.mean(stat, axis=(0, 1))
+
+    chex.assert_trees_all_close(updated.observation.likelihood.cov(), expected_r, atol=1e-4)
+    # And it must differ substantially from the deliberately-wrong starting point.
+    assert not jnp.allclose(updated.observation.likelihood.cov(), wrong_cov, atol=1e-2)
+
+
+def test_mstep_gaussian_cov_raises_for_poisson_likelihood():
+    state_dim, observation_dim, T, batch = 2, 3, 4, 2
+    model_conf = OmegaConf.create(
+        dict(
+            mode="smooth",
+            observation_dim=observation_dim,
+            state_dim=state_dim,
+            dynamics="MockDynamics",
+            integrator="Identity",
+            approx="MVN",
+            approx_kwargs={},
+            mc_size=2,
+            seed=0,
+            n_steps=T,
+            fb_penalty=0,
+            noise_penalty=0,
+            dropout=0.0,
+            dyn_conf=OmegaConf.create(dict(input_dim=0, context_dim=0, state_noise=1.0)),
+            enc_conf=OmegaConf.create(dict(width=8, depth=1, dropout=0.0)),
+            obs_conf=OmegaConf.create(
+                dict(model="GLM", norm_readout=False, dropout=0.0, likelihood="Poisson")
+            ),
+        )
+    )
+    model = XFADS(model_conf, jrnd.key(0))
+    times = jnp.broadcast_to(jnp.arange(T), (batch, T))
+    y = jrnd.poisson(jrnd.key(1), jnp.ones((batch, T, observation_dim)))
+    u = jnp.zeros((batch, T, 0))
+    c = jnp.zeros((batch, T, 0))
+    model = model.initialize(times, y, u, c)
+
+    with pytest.raises(NotImplementedError, match="Gaussian likelihood"):
+        mstep_gaussian_cov(model, (times, y, u, c), key=jrnd.key(2))

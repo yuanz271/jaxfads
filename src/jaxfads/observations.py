@@ -7,9 +7,11 @@ are defined in ``jaxfads.base``.
 """
 
 from collections.abc import Callable
+from functools import partial
 from typing import Any, Protocol
 
 import equinox as eqx
+import jax
 from jax import Array
 from jax import numpy as jnp
 from jax import random as jrnd
@@ -758,6 +760,70 @@ class Gaussian(eqx.Module, strict=True):
         ll = -0.5 * (d * jnp.log(2.0 * jnp.pi) + logdet + quad)
         return ll
 
+    def mstep_stat(self, t: Array, moment: Array, y: Array, approx: Approx, readout) -> Array:
+        """Per-(batch,time) sufficient statistic for the closed-form EM M-step
+        update of this likelihood's observation covariance.
+
+        Returns ``(y - E[C z])**2 + diag(C Cov(z) C^T)``, shape ``(observation_dim,)``.
+        Averaging this quantity over batch and time (see :func:`mstep_gaussian_cov`)
+        gives the covariance value that maximizes the expected log-likelihood given
+        the current posterior -- the standard EM M-step for a Gaussian observation
+        model with a (possibly time-varying) linear readout, holding the
+        dynamics/readout/encoder fixed (E-step already performed by the caller via
+        ``model(...)``).
+
+        Why this exists (Heywood-case immunity)
+        ----------------------------------------
+        ``eloglik`` above computes the *joint* likelihood
+        ``log N(y; E[Cz], C Cov(z) C^T + R)`` with a low-rank (``C Cov(z) C^T``,
+        rank <= state_dim) plus diagonal (``R``) covariance structure -- the same
+        structure as a factor-analysis model, with ``R`` playing the role of the
+        factor model's "uniquenesses". This is well known in the factor-analysis
+        literature to admit a degenerate MLE mode (a "Heywood case"): joint
+        gradient-based optimization of ``R`` can drive one or more of its
+        components toward the numerical floor while the corresponding
+        dimension's residual stays large, because the low-rank correction term
+        can make the *joint* density favor this even though it does not reflect a
+        genuine improvement in fit for that dimension. This was observed directly
+        in practice: a component's fitted covariance reached ``_MIN_VARIANCE``
+        while its actual residual variance, measured independently, was ~10^6
+        times larger.
+
+        Estimating ``R`` via this M-step instead of joint gradient descent avoids
+        the exploit entirely: the estimate *is* the expected squared residual
+        (including the propagated posterior uncertainty ``diag(C Cov(z) C^T)``),
+        so it cannot decouple from the actual reconstruction quality the way a
+        freely-optimized parameter can.
+
+        Parameters
+        ----------
+        t : Array
+            Time index for the (possibly time-varying) readout.
+        moment : Array
+            Moment parameters of the posterior q(z_t) (from the E-step).
+        y : Array, shape (observation_dim,)
+            Observed data at this (batch, time) instance.
+        approx : Approx
+            Exponential-family approximation instance (``approx.unpack`` must
+            return ``(mean, cov)`` with a dense ``(state_dim, state_dim)``
+            covariance -- MVN-only, matching this class's ``eloglik``).
+        readout : callable
+            Readout module mapping latent states to observation means; must
+            expose a ``.weight`` attribute (the linear map ``C``), matching
+            ``eloglik``'s usage.
+
+        Returns
+        -------
+        Array, shape (observation_dim,)
+            ``(y - E[Cz])**2 + diag(C Cov(z) C^T)`` at this (batch, time) instance.
+        """
+        mean_z, cov_z = approx.unpack(moment)
+        mean_y = readout(t, mean_z)
+        C = readout.weight  # (d, m)
+        residual_sq = (y - mean_y) ** 2  # (d,)
+        propagated_var = jnp.einsum("dj,jk,dk->d", C, cov_z, C)  # (d,) = diag(C cov_z C^T)
+        return residual_sq + propagated_var
+
     # def set_static(self, static=True) -> None:
     #     """
     #     Set observation noise parameters as static (non-trainable).
@@ -768,3 +834,100 @@ class Gaussian(eqx.Module, strict=True):
     #         Whether to make parameters static.
     #     """
     #     self.__dataclass_fields__["unconstrained_cov"].metadata = {"static": static}
+
+
+def mstep_gaussian_cov(model, data, *, key, batch_size: int | None = None):
+    """Closed-form EM M-step update for a Gaussian-likelihood XFADS model's
+    observation covariance, given the model's *current* dynamics, readout, and
+    encoder (all held fixed) and a dataset. Returns a new model with
+    ``observation.likelihood.unconstrained_cov`` replaced by the M-step-optimal
+    value; every other attribute (including ``observation.likelihood.cov_floor``
+    -- there is none; only the always-on ``_MIN_VARIANCE``, see
+    ``constraints.py``) is unchanged.
+
+    Rationale: see :meth:`Gaussian.mstep_stat`'s docstring for why joint
+    gradient-based MLE of a Gaussian observation model's per-dimension noise
+    covariance is prone to a Heywood-case degeneracy, and why computing it
+    directly from the current posterior's residuals instead is immune to that
+    failure mode. This function performs the E-step (running the model forward
+    to get the posterior over data) and the M-step (aggregating
+    :meth:`Gaussian.mstep_stat` over the dataset) together.
+
+    Usage
+    -----
+    Intended for classic EM-style alternation with gradient-based optimization
+    of the remaining parameters: freeze ``observation.likelihood.unconstrained_cov``
+    via ``conf.freeze_paths`` so the optimizer's own gradient updates do not fight
+    this direct estimate, run a round of gradient-based training (Adam, L-BFGS,
+    ...), call this function to update the covariance from the resulting
+    posterior, and repeat::
+
+        conf.freeze_paths = ["observation.likelihood.unconstrained_cov"]
+        for _ in range(n_rounds):
+            model = train(model, data, conf=conf)
+            model = mstep_gaussian_cov(model, data, key=key)
+
+    Parameters
+    ----------
+    model : XFADS
+        Model with a ``GLM`` observation using a ``Gaussian`` likelihood.
+    data : tuple of Array
+        ``(t, y, u, c)``, as accepted by ``model(...)``.
+    key : Array
+        JAX PRNG key (passed through to the model's forward pass; the Gaussian
+        likelihood's ``eloglik``/``mstep_stat`` are analytic and do not use it,
+        but the encoder or other model components may).
+    batch_size : int or None, optional
+        Process the dataset in chunks of this many trials at a time (default:
+        all trials in a single batch). Use this if the full dataset does not
+        fit in memory for a single forward pass.
+
+    Returns
+    -------
+    XFADS
+        A new model with ``observation.likelihood.unconstrained_cov`` set to
+        the M-step-optimal value; all other attributes unchanged.
+
+    Raises
+    ------
+    NotImplementedError
+        If ``model.observation`` is not a ``GLM`` with a ``Gaussian`` likelihood.
+    """
+    observation = model.observation
+    likelihood = getattr(observation, "likelihood", None)
+    readout = getattr(observation, "readout", None)
+    if likelihood is None or readout is None or not isinstance(likelihood, Gaussian):
+        raise NotImplementedError(
+            "mstep_gaussian_cov requires model.observation to be a GLM with a "
+            f"Gaussian likelihood; got observation.likelihood={type(likelihood).__name__}"
+        )
+
+    t, y, u, c = data
+    n_trials = t.shape[0]
+    if batch_size is None:
+        batch_size = n_trials
+    approx = model.approx
+
+    stat_fn = jax.vmap(
+        jax.vmap(partial(likelihood.mstep_stat, approx=approx, readout=readout))
+    )  # (batch, time) -> (batch, time, observation_dim)
+
+    total_stat = jnp.zeros(y.shape[-1], dtype=y.dtype)
+    total_n = 0
+    for start in range(0, n_trials, batch_size):
+        stop = min(start + batch_size, n_trials)
+        tb, yb, ub, cb = t[start:stop], y[start:stop], u[start:stop], c[start:stop]
+        _natural, moment, _predicted = model(tb, yb, ub, cb, key=key)
+        stat = stat_fn(tb, moment, yb)  # (nb, T, d)
+        total_stat = total_stat + jnp.sum(stat, axis=(0, 1))
+        total_n += stat.shape[0] * stat.shape[1]
+
+    r_new = total_stat / total_n
+    # Invert cov() = _MIN_VARIANCE + constrain_positive(unconstrained_cov):
+    # unconstrained_cov = unconstrain_positive(max(r_new - _MIN_VARIANCE, _EPS)),
+    # matching Gaussian.__init__'s own convention for turning a target
+    # covariance into unconstrained_cov.
+    new_unconstrained_cov = unconstrain_positive(jnp.maximum(r_new - _MIN_VARIANCE, _EPS))
+    new_likelihood = eqx.tree_at(lambda lik: lik.unconstrained_cov, likelihood, new_unconstrained_cov)
+    new_observation = eqx.tree_at(lambda obs: obs.likelihood, observation, new_likelihood)
+    return eqx.tree_at(lambda m: m.observation, model, new_observation)
