@@ -870,13 +870,17 @@ def mstep_gaussian_cov(model, data, *, key, batch_size: int | None = None):
     Parameters
     ----------
     model : XFADS
-        Model with a ``GLM`` observation using a ``Gaussian`` likelihood.
+        Model whose ``observation`` exposes ``.likelihood`` (with an
+        ``mstep_stat(t, moment, y, approx, readout)`` method -- ``Gaussian``
+        provides one; a custom likelihood can too, without needing to
+        subclass ``Gaussian``, since dispatch here is duck-typed on the method,
+        not on ``Gaussian`` specifically) and ``.readout``.
     data : tuple of Array
         ``(t, y, u, c)``, as accepted by ``model(...)``.
     key : Array
-        JAX PRNG key (passed through to the model's forward pass; the Gaussian
-        likelihood's ``eloglik``/``mstep_stat`` are analytic and do not use it,
-        but the encoder or other model components may).
+        JAX PRNG key (passed through to the model's forward pass; ``Gaussian``'s
+        ``eloglik``/``mstep_stat`` are analytic and do not use it, but the
+        encoder or other model components may).
     batch_size : int or None, optional
         Process the dataset in chunks of this many trials at a time (default:
         all trials in a single batch). Use this if the full dataset does not
@@ -891,15 +895,16 @@ def mstep_gaussian_cov(model, data, *, key, batch_size: int | None = None):
     Raises
     ------
     NotImplementedError
-        If ``model.observation`` is not a ``GLM`` with a ``Gaussian`` likelihood.
+        If ``model.observation.likelihood`` has no ``mstep_stat`` method (e.g.
+        ``Poisson``, which has no free variance parameter to estimate this way).
     """
     observation = model.observation
     likelihood = getattr(observation, "likelihood", None)
     readout = getattr(observation, "readout", None)
-    if likelihood is None or readout is None or not isinstance(likelihood, Gaussian):
+    if likelihood is None or readout is None or not hasattr(likelihood, "mstep_stat"):
         raise NotImplementedError(
-            "mstep_gaussian_cov requires model.observation to be a GLM with a "
-            f"Gaussian likelihood; got observation.likelihood={type(likelihood).__name__}"
+            "mstep_gaussian_cov requires model.observation.likelihood to implement "
+            f"mstep_stat(...); got observation.likelihood={type(likelihood).__name__}"
         )
 
     t, y, u, c = data
