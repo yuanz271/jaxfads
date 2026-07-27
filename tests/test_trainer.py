@@ -466,3 +466,74 @@ def test_mstep_composes_with_user_freeze_paths(
     assert not jnp.allclose(
         trained_model.observation.likelihood.cov(), jnp.full((10,), 1e-4), atol=1e-2
     )
+
+
+def test_mstep_mode_epoch_updates_only_at_epoch_boundaries(
+    gaussian_model_conf, trainer_config, gaussian_sample_data
+):
+    """mstep_mode='epoch' must not update R during a given epoch's minibatch
+    training -- R stays at its initial value until that epoch's own
+    end-of-epoch mstep call, confirmed via on_epoch_end (which fires before
+    that epoch's own mstep update). By the end of training, R has been
+    updated."""
+    model = XFADS(gaussian_model_conf, jrnd.key(0))
+    # Capture the actual initial cov() (not the raw config value -- cov()
+    # always adds _MIN_VARIANCE on top of the constrained config value).
+    # device_get: train()'s donate="all" invalidates model's input buffers,
+    # so materialize this value on host first (same convention as
+    # test_train_freeze_paths_keeps_state_noise_fixed's noise0 capture).
+    wrong_cov = jax.device_get(model.observation.likelihood.cov())
+
+    seen = []
+
+    def on_epoch_end(m, info):
+        seen.append(m.observation.likelihood.cov())
+        return False
+
+    trainer_config.max_epoch = 2
+    trainer_config.batch_size = 16
+    trained_model = train(
+        model,
+        gaussian_sample_data,
+        conf=trainer_config,
+        on_epoch_end=on_epoch_end,
+        mstep_mode="epoch",
+    )
+
+    # Epoch 0's on_epoch_end fires before epoch 0's own end-of-epoch mstep
+    # update; gradient descent is always frozen off this path, so nothing
+    # else could have touched R -- it must be exactly unchanged.
+    chex.assert_trees_all_close(seen[0], wrong_cov, atol=0.0)
+
+    assert not jnp.allclose(
+        trained_model.observation.likelihood.cov(), wrong_cov, atol=1e-2
+    )
+
+
+@pytest.mark.parametrize("mstep_mode", ["minibatch", "epoch"])
+def test_mstep_applied_after_final_epoch_regardless_of_mode(
+    mstep_mode, gaussian_model_conf, trainer_config, gaussian_sample_data
+):
+    """Regardless of mstep_mode, mstep must be applied once more, from a
+    full-dataset forward pass, immediately after the final epoch's gradient
+    steps complete -- verified as a fixed point: an independent mstep call
+    on the returned model must reproduce (approximately) the same R value,
+    within the model's inherent mc_size=1 Monte Carlo sampling tolerance
+    (same reasoning as test_mstep_frozen_paths_always_excluded_from_gradients)."""
+    model = XFADS(gaussian_model_conf, jrnd.key(0))
+    trainer_config.max_epoch = 2
+    trainer_config.batch_size = 16
+
+    trained_model = train(
+        model, gaussian_sample_data, conf=trainer_config, mstep_mode=mstep_mode
+    )
+
+    t, y, u, c = gaussian_sample_data
+    _natural, moment, _predicted = trained_model(t, y, u, c, key=jrnd.key(321))
+    expected_observation = trained_model.observation.mstep(t, moment, y, trained_model.approx)
+
+    chex.assert_trees_all_close(
+        trained_model.observation.likelihood.cov(),
+        expected_observation.likelihood.cov(),
+        atol=0.1,
+    )

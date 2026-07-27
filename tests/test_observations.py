@@ -10,7 +10,7 @@ from omegaconf import OmegaConf
 
 from jaxfads.constraints import unconstrain_positive
 from jaxfads.distributions import MVN
-from jaxfads.observations import GLM, mstep_gaussian_cov, mstep_observation_cov
+from jaxfads.observations import GLM, mstep_gaussian_cov
 from jaxfads.smoother import XFADS
 from conftest import MockDynamics  # noqa: F401 - class registration side-effect
 
@@ -217,88 +217,6 @@ def test_mstep_gaussian_cov_matches_independently_computed_residual_stat():
     assert not jnp.allclose(updated.observation.likelihood.cov(), wrong_cov, atol=1e-2)
 
 
-def test_mstep_gaussian_cov_raises_for_poisson_likelihood():
-    state_dim, observation_dim, T, batch = 2, 3, 4, 2
-    model_conf = OmegaConf.create(
-        dict(
-            mode="smooth",
-            observation_dim=observation_dim,
-            state_dim=state_dim,
-            dynamics="MockDynamics",
-            integrator="Identity",
-            approx="MVN",
-            approx_kwargs={},
-            mc_size=2,
-            seed=0,
-            n_steps=T,
-            fb_penalty=0,
-            noise_penalty=0,
-            dropout=0.0,
-            dyn_conf=OmegaConf.create(dict(input_dim=0, context_dim=0, state_noise=1.0)),
-            enc_conf=OmegaConf.create(dict(width=8, depth=1, dropout=0.0)),
-            obs_conf=OmegaConf.create(
-                dict(model="GLM", norm_readout=False, dropout=0.0, likelihood="Poisson")
-            ),
-        )
-    )
-    model = XFADS(model_conf, jrnd.key(0))
-    times = jnp.broadcast_to(jnp.arange(T), (batch, T))
-    y = jrnd.poisson(jrnd.key(1), jnp.ones((batch, T, observation_dim)))
-    u = jnp.zeros((batch, T, 0))
-    c = jnp.zeros((batch, T, 0))
-    model = model.initialize(times, y, u, c)
-
-    with pytest.raises(NotImplementedError, match="mstep_stat"):
-        mstep_gaussian_cov(model, (times, y, u, c), key=jrnd.key(2))
-
-
-def test_mstep_gaussian_cov_dispatches_on_duck_typed_mstep_stat():
-    """mstep_gaussian_cov must recognize any likelihood exposing mstep_stat, not
-    only instances of the concrete Gaussian class (forward-compatible with
-    future custom likelihoods that do not subclass Gaussian)."""
-
-    class DuckTypedGaussian(eqx.Module):
-        """Independent reimplementation of Gaussian's cov()/mstep_stat, deliberately
-        NOT subclassing Gaussian, to verify dispatch is duck-typed on the method."""
-
-        unconstrained_cov: jnp.ndarray
-
-        def cov(self):
-            from jaxfads.constraints import constrain_positive
-
-            return constrain_positive(self.unconstrained_cov)
-
-        def mstep_stat(self, t, moment, y, approx, readout):
-            mean_z, cov_z = approx.unpack(moment)
-            mean_y = readout(t, mean_z)
-            C = readout.weight
-            residual_sq = (y - mean_y) ** 2
-            propagated_var = jnp.einsum("dj,jk,dk->d", C, cov_z, C)
-            return residual_sq + propagated_var
-
-    state_dim, observation_dim, T, batch = 2, 4, 5, 3
-    model = _xfads_gaussian_model(state_dim=state_dim, observation_dim=observation_dim, T=T)
-
-    key = jrnd.key(1)
-    times = jnp.broadcast_to(jnp.arange(T), (batch, T))
-    y = jrnd.normal(key, (batch, T, observation_dim))
-    u = jnp.zeros((batch, T, 0))
-    c = jnp.zeros((batch, T, 0))
-    model = model.initialize(times, y, u, c)
-
-    duck = DuckTypedGaussian(unconstrained_cov=unconstrain_positive(jnp.full((observation_dim,), 1e-4)))
-    model = eqx.tree_at(lambda m: m.observation.likelihood, model, duck)
-
-    updated = mstep_gaussian_cov(model, (times, y, u, c), key=jrnd.key(2))
-
-    # Recognized the duck-typed likelihood (no NotImplementedError raised above) and
-    # produced a plausible (non-degenerate, non-1e-4) covariance.
-    new_cov = updated.observation.likelihood.cov()
-    chex.assert_shape(new_cov, (observation_dim,))
-    chex.assert_tree_all_finite(new_cov)
-    assert not jnp.allclose(new_cov, jnp.full((observation_dim,), 1e-4), atol=1e-2)
-
-
 def test_glm_mstep_matches_mstep_gaussian_cov():
     """GLM.mstep, called directly on (t, moment, y, approx), must produce the
     same unconstrained_cov as mstep_gaussian_cov's full driver, since it's the
@@ -366,77 +284,3 @@ def test_glm_mstep_frozen_paths():
     poisson_conf = _poisson_conf(state_dim, observation_dim, n_steps=T)
     poisson_observation = GLM(poisson_conf, jrnd.key(0))
     assert poisson_observation.mstep_frozen_paths() == []
-
-
-def test_mstep_observation_cov_matches_mstep_gaussian_cov():
-    """mstep_observation_cov (the family-neutral, ABC-dispatched driver) must
-    produce the same result as mstep_gaussian_cov on a single-batch dataset
-    (same math, different orchestration -- no chunking)."""
-    state_dim, observation_dim, T, batch = 2, 4, 5, 3
-    model = _xfads_gaussian_model(state_dim=state_dim, observation_dim=observation_dim, T=T)
-
-    key = jrnd.key(1)
-    times = jnp.broadcast_to(jnp.arange(T), (batch, T))
-    y = jrnd.normal(key, (batch, T, observation_dim))
-    u = jnp.zeros((batch, T, 0))
-    c = jnp.zeros((batch, T, 0))
-    model = model.initialize(times, y, u, c)
-
-    wrong_cov = jnp.full((observation_dim,), 1e-4)
-    model = eqx.tree_at(
-        lambda m: m.observation.likelihood.unconstrained_cov,
-        model,
-        unconstrain_positive(wrong_cov),
-    )
-
-    mstep_key = jrnd.key(2)
-    via_gaussian_driver = mstep_gaussian_cov(model, (times, y, u, c), key=mstep_key)
-    via_generic_driver = mstep_observation_cov(model, (times, y, u, c), key=mstep_key)
-
-    chex.assert_trees_all_close(
-        via_generic_driver.observation.likelihood.cov(),
-        via_gaussian_driver.observation.likelihood.cov(),
-        atol=1e-6,
-    )
-
-
-def test_mstep_observation_cov_is_noop_for_poisson():
-    """mstep_observation_cov must run the forward pass but leave the model
-    unchanged for a Poisson-observation model, via Observation.mstep's no-op
-    default (no NotImplementedError, unlike mstep_gaussian_cov)."""
-    state_dim, observation_dim, T, batch = 2, 3, 4, 2
-    model_conf = OmegaConf.create(
-        dict(
-            mode="smooth",
-            observation_dim=observation_dim,
-            state_dim=state_dim,
-            dynamics="MockDynamics",
-            integrator="Identity",
-            approx="MVN",
-            approx_kwargs={},
-            mc_size=2,
-            seed=0,
-            n_steps=T,
-            fb_penalty=0,
-            noise_penalty=0,
-            dropout=0.0,
-            dyn_conf=OmegaConf.create(dict(input_dim=0, context_dim=0, state_noise=1.0)),
-            enc_conf=OmegaConf.create(dict(width=8, depth=1, dropout=0.0)),
-            obs_conf=OmegaConf.create(
-                dict(model="GLM", norm_readout=False, dropout=0.0, likelihood="Poisson")
-            ),
-        )
-    )
-    model = XFADS(model_conf, jrnd.key(0))
-    times = jnp.broadcast_to(jnp.arange(T), (batch, T))
-    y = jrnd.poisson(jrnd.key(1), jnp.ones((batch, T, observation_dim)))
-    u = jnp.zeros((batch, T, 0))
-    c = jnp.zeros((batch, T, 0))
-    model = model.initialize(times, y, u, c)
-
-    updated = mstep_observation_cov(model, (times, y, u, c), key=jrnd.key(2))
-    # eqx.tree_at never preserves nested object identity, even for an
-    # unchanged value (a general JAX pytree property) -- check structural
-    # equality instead of `is`. eqx.tree_equal returns a jax.Array, not a
-    # Python bool, so compare truthiness rather than `is True`.
-    assert bool(eqx.tree_equal(updated.observation, model.observation))

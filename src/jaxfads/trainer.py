@@ -540,6 +540,7 @@ def _run_training_loop(
     model_sharding,
     on_epoch_end=None,
     param_schedule=None,
+    mstep_mode="minibatch",
 ):
     """
     Run sharded training for a fixed number of epochs.
@@ -581,19 +582,30 @@ def _run_training_loop(
         schedule keyed on the step counter. The corresponding path(s) should
         also be listed in ``conf.freeze_paths`` so the optimizer's own
         gradient-based update does not fight the schedule.
+    mstep_mode : {"minibatch", "epoch"}
+        Cadence for replacing ``model.observation`` with
+        ``model.observation.mstep(...)``. ``"minibatch"`` (default): every
+        ``train_step``, from that minibatch's own forward pass.
+        ``"epoch"``: once per completed epoch, from a forward pass over the
+        whole ``train_set``. Either way, mstep is also always applied once
+        more, from a full-``train_set`` forward pass, immediately after the
+        final epoch's gradient steps complete, right before returning. See
+        :func:`train`'s docstring.
 
     Notes
     -----
-    Every ``train_step`` unconditionally replaces ``model.observation`` with
-    ``model.observation.mstep(...)`` computed from that minibatch alone (a
-    no-op for ``Observation``/``Likelihood`` implementations that don't
-    override ``mstep``, e.g. ``Poisson``). See :func:`train`'s docstring.
+    A no-op for ``Observation``/``Likelihood`` implementations that don't
+    override ``mstep`` (e.g. ``Poisson``).
 
     Returns
     -------
     eqx.Module
         The final-epoch model.
     """
+    if mstep_mode not in ("minibatch", "epoch"):
+        raise ValueError(
+            f"mstep_mode must be 'minibatch' or 'epoch', got {mstep_mode!r}"
+        )
 
     @eqx.filter_jit(donate="all")
     def train_step(model, opt_state, batch, key, step):
@@ -615,22 +627,23 @@ def _run_training_loop(
         updates, opt_state = optimizer.update(grads, opt_state, params)
         model = eqx.apply_updates(model, updates)
 
-        # Unconditional, every minibatch: replace model.observation with
-        # model.observation.mstep(...) computed from this minibatch alone
-        # (a no-op for Observations that don't override mstep, e.g.
-        # Poisson). Talks only through the Observation ABC's own mstep
-        # interface -- no import from the concrete-implementations module.
-        # Runs outside the differentiated eqx.filter_value_and_grad call
-        # above, so it never carries gradients.
-        key, mstep_key = jr.split(key)
-        mstep_t, mstep_y, mstep_u, mstep_c = batch
-        _natural, mstep_moment, _predicted = model(
-            mstep_t, mstep_y, mstep_u, mstep_c, key=mstep_key
-        )
-        new_observation = model.observation.mstep(
-            mstep_t, mstep_moment, mstep_y, model.approx
-        )
-        model = eqx.tree_at(lambda m: m.observation, model, new_observation)
+        if mstep_mode == "minibatch":
+            # Replace model.observation with model.observation.mstep(...)
+            # computed from this minibatch alone (a no-op for Observations
+            # that don't override mstep, e.g. Poisson). Talks only through
+            # the Observation ABC's own mstep interface -- no import from
+            # the concrete-implementations module. Runs outside the
+            # differentiated eqx.filter_value_and_grad call above, so it
+            # never carries gradients.
+            key, mstep_key = jr.split(key)
+            mstep_t, mstep_y, mstep_u, mstep_c = batch
+            _natural, mstep_moment, _predicted = model(
+                mstep_t, mstep_y, mstep_u, mstep_c, key=mstep_key
+            )
+            new_observation = model.observation.mstep(
+                mstep_t, mstep_moment, mstep_y, model.approx
+            )
+            model = eqx.tree_at(lambda m: m.observation, model, new_observation)
 
         return model, opt_state, step + 1, loss
 
@@ -653,8 +666,26 @@ def _run_training_loop(
     current_epoch = 0
     epoch_batch_losses: list = []
 
+    def apply_mstep(mstep_key):
+        """Full-``train_set`` mstep update: replace model.observation with
+        model.observation.mstep(...) from a forward pass over the whole
+        dataset. Talks only through the Observation ABC's mstep interface
+        -- no import from the concrete-implementations module. A no-op for
+        Observations that don't override mstep (e.g. Poisson).
+        """
+        nonlocal model
+        mstep_t, mstep_y, mstep_u, mstep_c = train_set
+        _natural, mstep_moment, _predicted = model(
+            mstep_t, mstep_y, mstep_u, mstep_c, key=mstep_key
+        )
+        new_observation = model.observation.mstep(
+            mstep_t, mstep_moment, mstep_y, model.approx
+        )
+        model = eqx.tree_at(lambda m: m.observation, model, new_observation)
+
     def finalize_epoch(epoch_idx, batch_losses) -> bool:
-        """Record the epoch's training loss and run the callback.
+        """Record the epoch's training loss, run the callback, and (in
+        ``mstep_mode="epoch"``) apply the once-per-epoch mstep update.
 
         Returns ``True`` when the callback requests an early stop.
         """
@@ -675,6 +706,9 @@ def _run_training_loop(
                 "train_losses": train_losses,
             }
             stop = bool(on_epoch_end(model, info))
+
+        if mstep_mode == "epoch":
+            apply_mstep(jr.fold_in(key, epoch_idx))
 
         return stop
 
@@ -703,6 +737,12 @@ def _run_training_loop(
     finally:
         pbar.stop()
 
+    # Always, regardless of mstep_mode: one more mstep update, from a
+    # full-train_set forward pass, immediately after the final epoch's
+    # gradient steps complete (covers early stop via on_epoch_end and
+    # KeyboardInterrupt too, not just normal completion).
+    apply_mstep(jr.fold_in(key, step))
+
     return model
 
 
@@ -715,6 +755,7 @@ def train(
     regularizer=None,
     optimizer=None,
     param_schedule=None,
+    mstep_mode="minibatch",
 ):
     """
     Training routine for XFADS models with multi-device support.
@@ -725,10 +766,10 @@ def train(
     those are epoch-level policy supplied via ``on_epoch_end`` (see
     :class:`EpochHandler`). The caller owns the train/validation split.
 
-    **Every minibatch step, unconditionally**, ``model.observation`` is
-    replaced by ``model.observation.mstep(...)`` computed from that
-    minibatch alone (a no-op for ``Observation``/``Likelihood``
-    implementations that don't override ``mstep``, e.g. ``Poisson``). For a
+    **Unconditionally**, ``model.observation`` is periodically replaced by
+    ``model.observation.mstep(...)`` (a no-op for ``Observation``/
+    ``Likelihood`` implementations that don't override ``mstep``, e.g.
+    ``Poisson``) -- see ``mstep_mode`` below for the cadence. For a
     Gaussian-likelihood model this means the observation noise covariance
     ``R`` is always estimated via the closed-form EM M-step, never by
     gradient descent -- ``model.observation.mstep_frozen_paths()`` is
@@ -784,6 +825,16 @@ def train(
         otherwise the optimizer's own gradient-based update will fight the
         schedule (e.g. via gradient noise or optimizer momentum, even where
         the raw gradient is itself zero).
+    mstep_mode : {"minibatch", "epoch"}, optional
+        Cadence for the always-on ``model.observation.mstep(...)`` update
+        described above. ``"minibatch"`` (default): every ``train_step``,
+        from that minibatch's own forward pass. ``"epoch"``: once per
+        completed epoch, from a forward pass over the whole ``train_data``.
+        Either way, mstep is also always applied once more, from a full-
+        ``train_data`` forward pass, immediately after the final epoch's
+        gradient steps complete, right before returning (covers early stop
+        via ``on_epoch_end`` and ``KeyboardInterrupt`` too, not just normal
+        completion).
 
     Returns
     -------
@@ -903,6 +954,7 @@ def train(
         model_sharding,
         on_epoch_end=on_epoch_end,
         param_schedule=param_schedule,
+        mstep_mode=mstep_mode,
     )
 
     dt = time.perf_counter() - t0

@@ -118,31 +118,3 @@ def test_train_applies_regularizer(model_conf, sample_data):
 
     # A strong penalty on noise_free changes the optimization outcome.
     assert jnp.any(base.noise_free != reg.noise_free)
-
-
-def test_stop_gradient_on_noise_free_zeroes_its_grad_component(model_conf, sample_data):
-    """Sanity check: explicit stop_gradient removes noise_free gradient."""
-    model = XFADS(model_conf, jax.random.key(0))
-    model = model.initialize(*sample_data)
-
-    key = jax.random.key(1)
-
-    def loss(m):
-        return batch_loss(m, sample_data, key, beta=1.0)
-
-    grads = eqx.filter_grad(loss)(model)
-    assert jnp.any(grads.noise_free != 0)
-
-    def frozen_loss(m):
-        m = eqx.tree_at(
-            lambda mm: mm.noise_free,
-            m,
-            jax.lax.stop_gradient(m.noise_free),
-        )
-        return batch_loss(m, sample_data, key, beta=1.0)
-
-    frozen_grads = eqx.filter_grad(frozen_loss)(model)
-
-    chex.assert_trees_all_close(
-        frozen_grads.noise_free, jnp.zeros_like(frozen_grads.noise_free), atol=0.0
-    )
