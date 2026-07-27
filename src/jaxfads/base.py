@@ -385,10 +385,11 @@ class Observation(SubclassRegistryMixin, ConfModule):
         covariance), given ``(t, moment, y)`` for the *entire* dataset (or
         an entire batch treated as such) and the current ``approx``. This
         is deliberately separate from gradient-based training: callers
-        (e.g. ``mstep_observation_cov``, ``train(...,
-        mstep_every_n_epochs=...)``) invoke it outside of any
-        differentiated computation, so its result must never carry
-        gradients back into the rest of the model.
+        (e.g. ``mstep_observation_cov``, or ``train()``'s own
+        ``train_step``, which applies this every minibatch
+        unconditionally) invoke it outside of any differentiated
+        computation, so its result must never carry gradients back into
+        the rest of the model.
 
         Default implementation is a no-op: returns ``self`` unchanged.
         Concrete subclasses that support this (e.g. ``GLM`` wrapping a
@@ -422,12 +423,12 @@ class Observation(SubclassRegistryMixin, ConfModule):
         excluded from gradient updates whenever :meth:`mstep`-driven
         updates are active.
 
-        Callers (e.g. ``train(..., mstep_every_n_epochs=...)``) use this
-        to automatically derive which leaves to freeze from the optimizer,
-        so that gradient descent does not fight a closed-form update
-        computed by :meth:`mstep`. No user-facing configuration is
-        required for this; ``train()`` folds these paths into its own
-        freeze mask automatically.
+        Callers (e.g. ``train()``, which does this unconditionally, every
+        training run) use this to automatically derive which leaves to
+        freeze from the optimizer, so that gradient descent does not fight
+        a closed-form update computed by :meth:`mstep`. No user-facing
+        configuration is required for this; ``train()`` folds these paths
+        into its own freeze mask automatically.
 
         Default implementation returns ``[]`` (nothing to freeze).
         Concrete subclasses that override :meth:`mstep` non-trivially

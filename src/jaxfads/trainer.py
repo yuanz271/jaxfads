@@ -34,7 +34,6 @@ from rich.progress import (
 
 from . import vi
 from .logging import get_logger
-from .observations import mstep_observation_cov
 
 
 logger = get_logger(__name__)
@@ -541,7 +540,6 @@ def _run_training_loop(
     model_sharding,
     on_epoch_end=None,
     param_schedule=None,
-    mstep_every_n_epochs=None,
 ):
     """
     Run sharded training for a fixed number of epochs.
@@ -583,10 +581,13 @@ def _run_training_loop(
         schedule keyed on the step counter. The corresponding path(s) should
         also be listed in ``conf.freeze_paths`` so the optimizer's own
         gradient-based update does not fight the schedule.
-    mstep_every_n_epochs : int or None
-        When set, calls ``mstep_observation_cov(model, train_set, key=...)``
-        after every ``mstep_every_n_epochs`` completed epochs, replacing
-        ``model`` with the result. See :func:`train`'s docstring.
+
+    Notes
+    -----
+    Every ``train_step`` unconditionally replaces ``model.observation`` with
+    ``model.observation.mstep(...)`` computed from that minibatch alone (a
+    no-op for ``Observation``/``Likelihood`` implementations that don't
+    override ``mstep``, e.g. ``Poisson``). See :func:`train`'s docstring.
 
     Returns
     -------
@@ -614,6 +615,23 @@ def _run_training_loop(
         updates, opt_state = optimizer.update(grads, opt_state, params)
         model = eqx.apply_updates(model, updates)
 
+        # Unconditional, every minibatch: replace model.observation with
+        # model.observation.mstep(...) computed from this minibatch alone
+        # (a no-op for Observations that don't override mstep, e.g.
+        # Poisson). Talks only through the Observation ABC's own mstep
+        # interface -- no import from the concrete-implementations module.
+        # Runs outside the differentiated eqx.filter_value_and_grad call
+        # above, so it never carries gradients.
+        key, mstep_key = jr.split(key)
+        mstep_t, mstep_y, mstep_u, mstep_c = batch
+        _natural, mstep_moment, _predicted = model(
+            mstep_t, mstep_y, mstep_u, mstep_c, key=mstep_key
+        )
+        new_observation = model.observation.mstep(
+            mstep_t, mstep_moment, mstep_y, model.approx
+        )
+        model = eqx.tree_at(lambda m: m.observation, model, new_observation)
+
         return model, opt_state, step + 1, loss
 
     # Initialize on a *copy* of the params so optimizers that store the initial
@@ -636,13 +654,10 @@ def _run_training_loop(
     epoch_batch_losses: list = []
 
     def finalize_epoch(epoch_idx, batch_losses) -> bool:
-        """Record the epoch's training loss, run the callback, and (if
-        configured) apply the periodic closed-form mstep update.
+        """Record the epoch's training loss and run the callback.
 
         Returns ``True`` when the callback requests an early stop.
         """
-        nonlocal model
-
         if batch_losses:
             train_loss = float(jnp.mean(jnp.stack(batch_losses)))
         else:
@@ -660,13 +675,6 @@ def _run_training_loop(
                 "train_losses": train_losses,
             }
             stop = bool(on_epoch_end(model, info))
-
-        if (
-            mstep_every_n_epochs is not None
-            and (epoch_idx + 1) % mstep_every_n_epochs == 0
-        ):
-            mstep_key = jr.fold_in(key, epoch_idx)
-            model = mstep_observation_cov(model, train_set, key=mstep_key)
 
         return stop
 
@@ -707,7 +715,6 @@ def train(
     regularizer=None,
     optimizer=None,
     param_schedule=None,
-    mstep_every_n_epochs=None,
 ):
     """
     Training routine for XFADS models with multi-device support.
@@ -717,6 +724,20 @@ def train(
     notion of validation, checkpointing, best models, or early stopping --
     those are epoch-level policy supplied via ``on_epoch_end`` (see
     :class:`EpochHandler`). The caller owns the train/validation split.
+
+    **Every minibatch step, unconditionally**, ``model.observation`` is
+    replaced by ``model.observation.mstep(...)`` computed from that
+    minibatch alone (a no-op for ``Observation``/``Likelihood``
+    implementations that don't override ``mstep``, e.g. ``Poisson``). For a
+    Gaussian-likelihood model this means the observation noise covariance
+    ``R`` is always estimated via the closed-form EM M-step, never by
+    gradient descent -- ``model.observation.mstep_frozen_paths()`` is
+    always excluded from the optimizer automatically, with no
+    ``conf.freeze_paths`` entry or opt-in flag required. See
+    [mstep_gaussian_cov](../docs/mstep_gaussian_cov.md) for the rationale
+    (this closed-form estimate is immune to a Heywood-case degeneracy that
+    gradient-based estimation of a Gaussian observation covariance is prone
+    to).
 
     Parameters
     ----------
@@ -763,22 +784,6 @@ def train(
         otherwise the optimizer's own gradient-based update will fight the
         schedule (e.g. via gradient noise or optimizer momentum, even where
         the raw gradient is itself zero).
-    mstep_every_n_epochs : int or None, optional
-        When set, calls ``mstep_observation_cov(model, train_data, key=...)``
-        automatically every ``mstep_every_n_epochs`` completed epochs (a
-        closed-form, non-SGD update for ``model.observation``'s own
-        parameters -- e.g. Gaussian observation noise covariance -- see
-        :func:`mstep_observation_cov`). This is a modification to how the
-        model's parameters get updated during optimization (the same
-        category as ``regularizer``/``optimizer``/``param_schedule``), not
-        epoch-level policy, so it is a dedicated parameter here rather than
-        routed through ``on_epoch_end``. ``None`` (default) disables it
-        entirely, with zero footprint on existing behavior. Whenever this is
-        set, ``train()`` automatically excludes
-        ``model.observation.mstep_frozen_paths()`` from gradient updates (so
-        gradient descent does not fight the closed-form update) -- no
-        corresponding ``conf.freeze_paths`` entry is required from the
-        caller.
 
     Returns
     -------
@@ -840,14 +845,15 @@ def train(
     # aligns with the params the optimizer sees inside the training loop.
     params = eqx.filter(model, eqx.is_inexact_array)
     freeze_mask = jax.tree.map(lambda _: False, params)
-    freeze_paths = [str(p) for p in conf.freeze_paths]
-    if mstep_every_n_epochs is not None:
-        # Automatically exclude whatever model.observation.mstep touches
-        # from gradient updates -- no conf.freeze_paths entry required from
-        # the caller (see mstep_every_n_epochs's docstring).
-        freeze_paths = freeze_paths + [
-            "observation." + p for p in model.observation.mstep_frozen_paths()
-        ]
+    # Always exclude whatever model.observation.mstep touches from gradient
+    # updates -- no conf.freeze_paths entry, no flag, required from the
+    # caller. mstep is applied to model.observation unconditionally, every
+    # minibatch (see train_step below), so gradient descent must never
+    # fight it, for any model (a no-op path list for Observations that
+    # don't override mstep, e.g. Poisson).
+    freeze_paths = [str(p) for p in conf.freeze_paths] + [
+        "observation." + p for p in model.observation.mstep_frozen_paths()
+    ]
     for path in freeze_paths:
         parts = tuple(path.split("."))
         _ = _resolve_attr_path(model, parts)  # fail fast if path is invalid
@@ -897,7 +903,6 @@ def train(
         model_sharding,
         on_epoch_end=on_epoch_end,
         param_schedule=param_schedule,
-        mstep_every_n_epochs=mstep_every_n_epochs,
     )
 
     dt = time.perf_counter() - t0

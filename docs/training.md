@@ -209,44 +209,33 @@ reparameterization (e.g. sqrt / inverse-softplus-style), so interpolating
 free-form values directly traces a different, distorted path through the
 constrained space than the intended schedule.
 
-## Automated Observation-Noise Updates (`mstep_every_n_epochs`)
+## Automated Observation-Noise Updates (`mstep`)
 
-For a Gaussian-likelihood model, the observation noise covariance `R` can be
+For a Gaussian-likelihood model, the observation noise covariance `R` is
 driven by a closed-form EM M-step instead of gradient descent, avoiding a
 Heywood-case degeneracy that plain gradient-based MLE of `R` is prone to
 (see [`mstep_gaussian_cov`](mstep_gaussian_cov.md) for the full rationale).
-`mstep_every_n_epochs` builds this into `train()` directly:
+This is **unconditional, with no flag**: every minibatch step,
+`model.observation` is replaced by `model.observation.mstep(t, moment, y,
+approx)` computed from that minibatch alone (a no-op for `Observation`/
+`Likelihood` implementations that don't override `mstep`, e.g. `Poisson`).
+There is nothing to opt into or configure -- for a Gaussian-likelihood
+model, `R` is always estimated this way, never by gradient descent.
 
-```python
-trained = train(model, data, conf=trainer_conf, mstep_every_n_epochs=1)
-```
+`model.observation.mstep_frozen_paths()` is always excluded from the
+optimizer automatically (folded into `train()`'s internal freeze mask), so
+gradient descent never fights this update -- no `conf.freeze_paths` entry is
+needed, unlike `param_schedule` above.
 
-When set, `train()` calls `mstep_observation_cov(model, train_data, key=...)`
-automatically after every `mstep_every_n_epochs` completed epochs, replacing
-`model.observation`'s parameters with the M-step-optimal value computed from
-a full forward pass over the training data. `None` (the default) disables
-this entirely, with zero effect on existing behavior.
-
-This is a modification to *how the model's parameters get updated during
-optimization* -- the same category as `regularizer`/`optimizer`/
-`param_schedule` -- not epoch-level policy, so it is its own `train()`
-parameter rather than something routed through `on_epoch_end`; a
-user-supplied `on_epoch_end` (checkpointing, early-stopping, ...) keeps
-working unmodified and independently, whether or not `mstep_every_n_epochs`
-is also set.
-
-**Unlike `param_schedule`, no `freeze_paths` entry is required.** `train()`
-asks `model.observation.mstep_frozen_paths()` which of its own attribute
-paths need excluding from gradient updates, and folds them into its internal
-freeze mask automatically -- so gradient descent never fights the closed-form
-update, without the caller needing to know or declare which path that is.
-
-This works for any `Observation` implementation that overrides `mstep`
-(currently `GLM` wrapping a `Gaussian` likelihood); it is a no-op for
-likelihoods without a closed-form update (e.g. `Poisson`). For datasets too
-large for a single forward pass, use [`mstep_gaussian_cov`](mstep_gaussian_cov.md)
-directly instead -- it supports `batch_size`-chunked scanning, which this
-automated path does not.
+Each minibatch's estimate is a noisy sample of the same quantity a
+full-dataset pass computes exactly (like SGD vs. full-batch gradient
+descent). For an exact, full-dataset recompute -- e.g. as a final
+correction, or for manual EM-style alternation -- two standalone functions
+are available (both unrelated to and unused by `train()` itself): the
+Gaussian-specific [`mstep_gaussian_cov`](mstep_gaussian_cov.md) (supports
+`batch_size`-chunked scanning for datasets too large for a single forward
+pass) and the family-neutral `mstep_observation_cov` (any `Observation`
+overriding `mstep`, no chunking).
 
 ## Multi-Device Training
 

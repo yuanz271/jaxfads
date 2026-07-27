@@ -311,8 +311,9 @@ def test_train_freeze_paths_invalid_path_raises(
 
 @pytest.fixture
 def gaussian_model_conf():
-    """Minimal Gaussian-likelihood model configuration, for mstep_every_n_epochs
-    tests (Poisson has no free covariance to estimate this way)."""
+    """Minimal Gaussian-likelihood model configuration, for testing the
+    always-on per-minibatch mstep update (Poisson has no free covariance to
+    estimate this way, so mstep is a no-op for it)."""
     return OmegaConf.create(
         {
             "mode": "smooth",
@@ -369,12 +370,11 @@ def gaussian_sample_data():
     return times, observations, controls, contexts
 
 
-def test_mstep_every_n_epochs_updates_r_and_freezes_it_from_gradients(
-    gaussian_model_conf, trainer_config, gaussian_sample_data
-):
-    """mstep_every_n_epochs=1 must (a) change unconstrained_cov away from its
-    deliberately-wrong initial value every epoch, and (b) automatically
-    exclude it from gradient updates, with no conf.freeze_paths entry."""
+def test_mstep_updates_r_unconditionally(gaussian_model_conf, trainer_config, gaussian_sample_data):
+    """Every minibatch, model.observation.mstep(...) must be applied
+    unconditionally (no flag) -- R must move substantially away from a
+    deliberately-wrong initial value after training, with no special
+    configuration required."""
     model = XFADS(gaussian_model_conf, jrnd.key(0))
     wrong_cov = jnp.full((10,), 1e-4)
     chex.assert_trees_all_close(
@@ -383,55 +383,49 @@ def test_mstep_every_n_epochs_updates_r_and_freezes_it_from_gradients(
 
     trainer_config.max_epoch = 2
     trainer_config.batch_size = 16
-    trained_model = train(
-        model, gaussian_sample_data, conf=trainer_config, mstep_every_n_epochs=1
-    )
+    trained_model = train(model, gaussian_sample_data, conf=trainer_config)
 
     new_cov = trained_model.observation.likelihood.cov()
-    # Changed substantially from the deliberately-wrong init (mstep did its job).
     assert not jnp.allclose(new_cov, wrong_cov, atol=1e-2)
     chex.assert_tree_all_finite(new_cov)
 
 
-def test_mstep_every_n_epochs_none_leaves_existing_behavior_unaffected(
+def test_mstep_frozen_paths_always_excluded_from_gradients(
     gaussian_model_conf, trainer_config, gaussian_sample_data
 ):
-    """Default (mstep_every_n_epochs=None) must behave exactly as before: R is
-    gradient-trained, not corrected by any closed-form update."""
-    trainer_config.max_epoch = 2
-    trainer_config.batch_size = 16
+    """model.observation.mstep_frozen_paths() must always be excluded from
+    gradient updates, with no conf.freeze_paths entry or flag -- i.e. R's
+    value is fully determined by mstep, not perturbed by gradient descent
+    on top of it. Verified indirectly: R after training must be close to
+    what an independent mstep call on the same (t, moment, y) would give
+    (up to the model's inherent mc_size=1 Monte Carlo sampling noise from
+    using a different PRNG key -- not exact reproduction of an internal
+    implementation detail). A gradient-descent-driven fight on top of mstep
+    would show up as a systematic bias much larger than this sampling
+    noise, not just a few percent."""
+    model = XFADS(gaussian_model_conf, jrnd.key(0))
+    trainer_config.max_epoch = 1
+    trainer_config.batch_size = 32  # single batch == whole dataset
 
-    # Fresh model per call: train_step's donate="all" invalidates the input
-    # model's buffers, so the same model object can't be reused across two
-    # separate train() calls (same convention as test_train_accepts_user_optimizer).
-    with_mstep = train(
-        XFADS(gaussian_model_conf, jrnd.key(0)),
-        gaussian_sample_data,
-        conf=trainer_config,
-        mstep_every_n_epochs=1,
-    )
-    without_mstep = train(
-        XFADS(gaussian_model_conf, jrnd.key(0)),
-        gaussian_sample_data,
-        conf=trainer_config,
-    )
+    trained_model = train(model, gaussian_sample_data, conf=trainer_config)
 
-    # The two runs must differ: one is gradient-trained R, the other is
-    # mstep-corrected R (freeze_paths is applied automatically only in the
-    # first case), so they should not coincide.
-    assert not jnp.allclose(
-        with_mstep.observation.likelihood.cov(),
-        without_mstep.observation.likelihood.cov(),
-        atol=1e-3,
+    t, y, u, c = gaussian_sample_data
+    _natural, moment, _predicted = trained_model(t, y, u, c, key=jrnd.key(123))
+    expected_observation = trained_model.observation.mstep(t, moment, y, trained_model.approx)
+
+    chex.assert_trees_all_close(
+        trained_model.observation.likelihood.cov(),
+        expected_observation.likelihood.cov(),
+        atol=0.1,
     )
 
 
-def test_mstep_every_n_epochs_composes_with_on_epoch_end(
+def test_mstep_composes_with_on_epoch_end(
     gaussian_model_conf, trainer_config, gaussian_sample_data
 ):
-    """A user-supplied on_epoch_end must keep working unmodified and
-    independently when mstep_every_n_epochs is also set -- no composition
-    required from the caller."""
+    """A user-supplied on_epoch_end must keep working unmodified, independent
+    of the always-on per-minibatch mstep update -- no composition required
+    from the caller."""
     model = XFADS(gaussian_model_conf, jrnd.key(0))
     trainer_config.max_epoch = 3
     trainer_config.batch_size = 16
@@ -443,22 +437,18 @@ def test_mstep_every_n_epochs_composes_with_on_epoch_end(
         return False
 
     trained_model = train(
-        model,
-        gaussian_sample_data,
-        conf=trainer_config,
-        on_epoch_end=on_epoch_end,
-        mstep_every_n_epochs=1,
+        model, gaussian_sample_data, conf=trainer_config, on_epoch_end=on_epoch_end
     )
 
     assert epochs_seen == [0, 1, 2]
     chex.assert_tree_all_finite(trained_model.observation.likelihood.cov())
 
 
-def test_mstep_every_n_epochs_composes_with_user_freeze_paths(
+def test_mstep_composes_with_user_freeze_paths(
     gaussian_model_conf, trainer_config, gaussian_sample_data
 ):
     """A user's own conf.freeze_paths entries (for an unrelated parameter)
-    must keep working correctly alongside the automatically-derived
+    must keep working correctly alongside the always-derived
     mstep_frozen_paths() entries -- the two sources of frozen paths compose,
     neither overwrites the other."""
     model = XFADS(gaussian_model_conf, jrnd.key(0))
@@ -468,48 +458,11 @@ def test_mstep_every_n_epochs_composes_with_user_freeze_paths(
     trainer_config.batch_size = 16
     trainer_config.freeze_paths = ["noise_free"]
 
-    trained_model = train(
-        model, gaussian_sample_data, conf=trainer_config, mstep_every_n_epochs=1
-    )
+    trained_model = train(model, gaussian_sample_data, conf=trainer_config)
 
-    # User's own frozen path is respected...
     chex.assert_trees_all_close(
         jax.device_get(trained_model.noise_free), noise0, atol=0.0
     )
-    # ...and the automatically-derived mstep path is also respected (R still
-    # gets updated by mstep, not fought by gradient descent).
     assert not jnp.allclose(
         trained_model.observation.likelihood.cov(), jnp.full((10,), 1e-4), atol=1e-2
-    )
-
-
-def test_mstep_every_n_epochs_cadence(gaussian_model_conf, trainer_config, gaussian_sample_data):
-    """mstep_every_n_epochs=2 must only fire after every 2nd completed epoch,
-    not every epoch: after 1 epoch, R must be unchanged from init; after 2
-    epochs, it must have been updated by mstep."""
-    wrong_cov = jnp.full((10,), 1e-4)
-    trainer_config.batch_size = 16
-
-    trainer_config.max_epoch = 1
-    after_one = train(
-        XFADS(gaussian_model_conf, jrnd.key(0)),
-        gaussian_sample_data,
-        conf=trainer_config,
-        mstep_every_n_epochs=2,
-    )
-    # With no freeze_paths auto-derivation firing yet, gradient descent alone
-    # (1 epoch, small step) should not move R far from its 1e-4 init.
-    chex.assert_trees_all_close(
-        after_one.observation.likelihood.cov(), wrong_cov, atol=1e-2
-    )
-
-    trainer_config.max_epoch = 2
-    after_two = train(
-        XFADS(gaussian_model_conf, jrnd.key(0)),
-        gaussian_sample_data,
-        conf=trainer_config,
-        mstep_every_n_epochs=2,
-    )
-    assert not jnp.allclose(
-        after_two.observation.likelihood.cov(), wrong_cov, atol=1e-2
     )
