@@ -186,9 +186,12 @@ diff.
 
 ## Future generalization (noted, out of scope here)
 
-Once `r_running_stat.md` ships `Observation.mstep`/`Likelihood.mstep`, this
-plan's `mstep_transition_stat`/`mstep_noise_shrink` are candidates to rename
-to `Approx.mstep`/`Approx.has_mstep`, converging on one `mstep`/`has_mstep`
-vocabulary across every pluggable component (`Observation`, `Approx`, and
-possibly `Dynamics` for subclasses whose map is linear-in-parameters).
-Deliberately deferred, not part of this plan's scope.
+`Observation.mstep`/`Observation.mstep_frozen_paths` have now shipped (see
+[mstep_gaussian_cov](mstep_gaussian_cov.md)). This plan's
+`mstep_transition_stat`/`mstep_noise_shrink` are candidates to converge on
+that same `mstep`/`mstep_frozen_paths` vocabulary, extending it to `Approx`
+(and possibly `Dynamics` for subclasses whose map is linear-in-parameters).
+Note `Q`'s own continuous per-step cadence should **not** be adopted by
+default given its runaway-collapse risk (see this doc's analysis above);
+only `R` has been shown safe for continuous cadence. Deliberately deferred,
+not part of this plan's scope.
