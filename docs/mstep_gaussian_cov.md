@@ -31,18 +31,17 @@ large, because the low-rank correction term lets the *joint* density favor
 this even though it does not reflect a genuine improvement in fit for that
 dimension.
 
-This was not a theoretical concern — it was found directly in a real
-downstream campaign (a plain shPLRNN dynamics model, `readout="linear"`, fit
-with L-BFGS after an Adam burn-in, free-train regime, no noise freezing): 2 of
-26 fits reached a wildly negative total loss (e.g. `-13334`, vs. the sane
-`~340-350` range for sibling seeds on the same data), traced to 5-8
-observation dimensions with `cov()` pinned at the float32-safety floor
-(`jaxfads.constraints._MIN_VARIANCE = 1e-6`) while their *actual* residual
-variance — measured independently as `mean[(y - reconstructed_mean)^2]` on
-the same data — was `~0.85-1.3`, a **10^3-10^6× mismatch**. The fitted
-parameter had completely decoupled from reconstruction quality; `_MIN_VARIANCE`
-prevented a literal float32 underflow (no NaN/Inf), but not this
-optimization-level exploit.
+This is not merely a theoretical concern: it has been observed directly in
+practice, with a fitted covariance reaching the float32-safety floor
+(`jaxfads.constraints._MIN_VARIANCE = 1e-6`) while the corresponding
+dimension's *actual* residual variance — measured independently as
+`mean[(y - reconstructed_mean)^2]` on the same data — was orders of
+magnitude larger. The fitted parameter had completely decoupled from
+reconstruction quality; `_MIN_VARIANCE` prevents a literal float32 underflow
+(no NaN/Inf), but not this optimization-level exploit. (Specific figures
+from the downstream campaign that surfaced this are project-specific data,
+not general library documentation, and are intentionally not reproduced
+here.)
 
 ## The fix
 
@@ -107,18 +106,15 @@ iteration, not per-minibatch — matching `mstep_gaussian_cov`'s own full-datase
     `mstep_stat` is recognized and used correctly, verifying the duck-typed
     dispatch actually works, not just that the `isinstance` check was relaxed.
   - 108/108 tests pass overall (105 pre-existing + 3 new).
-- **Real-data validation** (downstream project, not in this repo): loaded the
-  two degenerate models from the campaign above and confirmed
-  `mstep_gaussian_cov` recovers sane values (e.g. `0.87`-`9.67` for dimensions
-  previously pinned at `1e-6`) matching the independently-measured residual.
-  Then validated end-to-end in real training: re-ran the same two
-  (day, seed) combinations with the EM-alternation pattern above and got sane
-  final losses (`343.65`, `345.38`) matching the 18 originally-clean fits,
-  with `cov()` stable and well above the floor across all EM rounds.
-  Subsequently re-ran the **full 27-job campaign** (9 days × 3 seeds) with
-  this fix in place: all 27 converged cleanly, no repeat of the degenerate
-  loss, `cov_min` consistently in `0.08`-`0.18` across all jobs, tight
-  cross-seed agreement per day.
+- **Real-data validation** (downstream project, not in this repo, and not
+  reproducible from this repo alone): `mstep_gaussian_cov` was confirmed to
+  recover sane covariance values (matching independently-measured residuals)
+  on the previously-degenerate models, and a full re-run of the affected
+  campaign with the EM-alternation pattern above converged cleanly with no
+  recurrence of the degenerate loss. Specific figures (loss values, job/seed
+  counts, etc.) are project-specific data and are intentionally not
+  reproduced here — see the unit tests above for evidence reproducible
+  within this repo.
 
 ## Open questions for refinement
 
