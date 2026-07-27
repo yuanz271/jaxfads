@@ -283,6 +283,38 @@ class Likelihood(Protocol):
         """
         ...
 
+    def mstep(
+        self,
+        t: Array,
+        moment: Array,
+        y: Array,
+        approx: Approx,
+        readout: Callable[..., Array],
+    ) -> "Likelihood":
+        """
+        Closed-form, non-SGD parameter update from a full forward pass.
+
+        Optional: not every ``Likelihood`` needs a closed-form update (e.g.
+        ``Poisson`` has no free dispersion parameter to estimate this way).
+        ``GLM`` dispatches to this via ``hasattr`` rather than requiring
+        every ``Likelihood`` to implement it, since ``Likelihood`` is a
+        structural ``Protocol``, not an inheritable base with a runtime
+        default. Implementations (e.g. ``Gaussian``) must not let their
+        result carry gradients back into the rest of the model.
+        """
+        ...
+
+    def mstep_frozen_paths(self) -> list[str]:
+        """
+        Attribute paths (relative to this Likelihood) that must be excluded
+        from gradient updates whenever :meth:`mstep`-driven updates are
+        active.
+
+        Optional, same caveat as :meth:`mstep`: not every ``Likelihood``
+        implements this; ``GLM`` dispatches via ``hasattr``.
+        """
+        ...
+
 
 class GLM(Observation):
     """GLM observation model composed of a likelihood and readout.
@@ -375,6 +407,34 @@ class GLM(Observation):
             Expected log-likelihood E_{q(z_t)}[log p(y_t | z_t)].
         """
         return self.likelihood.eloglik(key, t, moment, y, approx, mc_size, self.readout)
+
+    def mstep(self, t: Array, moment: Array, y: Array, approx: Approx) -> "GLM":
+        """See :meth:`Observation.mstep`.
+
+        Dispatches to ``self.likelihood.mstep`` via ``hasattr`` rather than
+        requiring every ``Likelihood`` to implement it, since ``Likelihood``
+        is a structural ``Protocol`` (not an inheritable base with a
+        runtime default) -- see ``Likelihood.mstep``'s docstring. Falls
+        back to a no-op (``return self``) for likelihoods that don't
+        implement it (e.g. ``Poisson``).
+        """
+        if not hasattr(self.likelihood, "mstep"):
+            return self
+        new_likelihood = self.likelihood.mstep(t, moment, y, approx, self.readout)
+        return eqx.tree_at(lambda m: m.likelihood, self, new_likelihood)
+
+    def mstep_frozen_paths(self) -> list[str]:
+        """See :meth:`Observation.mstep_frozen_paths`.
+
+        Dispatches to ``self.likelihood.mstep_frozen_paths`` via ``hasattr``
+        (same reasoning as :meth:`mstep`), prepending ``"likelihood."`` to
+        each returned path since ``self.likelihood`` is nested one level
+        inside ``GLM``. Falls back to ``[]`` for likelihoods that don't
+        implement it.
+        """
+        if not hasattr(self.likelihood, "mstep_frozen_paths"):
+            return []
+        return ["likelihood." + p for p in self.likelihood.mstep_frozen_paths()]
 
     def set_readout(
         self, weight: Array | None = None, bias: Array | None = None
@@ -824,6 +884,41 @@ class Gaussian(eqx.Module, strict=True):
         propagated_var = jnp.einsum("dj,jk,dk->d", C, cov_z, C)  # (d,) = diag(C cov_z C^T)
         return residual_sq + propagated_var
 
+    def mstep(self, t: Array, moment: Array, y: Array, approx: Approx, readout) -> "Gaussian":
+        """Closed-form EM M-step update over a full forward pass's worth of
+        ``(t, moment, y)`` (all (batch, time) instances at once), reusing
+        :meth:`mstep_stat`'s per-instance math (see its docstring for the
+        Heywood-case rationale). Same result as :func:`mstep_gaussian_cov`
+        computing over a single batch, just packaged as a per-Likelihood
+        method rather than a standalone full-dataset driver.
+
+        Must never carry gradients: wraps its result in
+        ``jax.lax.stop_gradient`` defensively (this is always called
+        outside of any differentiated computation by its callers, so this
+        is belt-and-suspenders documentation of the invariant, not load
+        bearing today).
+        """
+        stat_fn = jax.vmap(
+            jax.vmap(partial(self.mstep_stat, approx=approx, readout=readout))
+        )
+        stat = stat_fn(t, moment, y)  # (batch, time, observation_dim)
+        r_new = jnp.mean(stat, axis=(0, 1))
+        # Invert cov() = _MIN_VARIANCE + constrain_positive(unconstrained_cov):
+        # unconstrained_cov = unconstrain_positive(max(r_new - _MIN_VARIANCE, _EPS)),
+        # matching mstep_gaussian_cov's own convention.
+        new_unconstrained_cov = unconstrain_positive(
+            jnp.maximum(r_new - _MIN_VARIANCE, _EPS)
+        )
+        new_unconstrained_cov = jax.lax.stop_gradient(new_unconstrained_cov)
+        return eqx.tree_at(lambda m: m.unconstrained_cov, self, new_unconstrained_cov)
+
+    def mstep_frozen_paths(self) -> list[str]:
+        """See :meth:`Observation.mstep_frozen_paths`. Relative to
+        ``self`` (i.e. relative to ``self.likelihood`` from ``GLM``'s
+        perspective).
+        """
+        return ["unconstrained_cov"]
+
     # def set_static(self, static=True) -> None:
     #     """
     #     Set observation noise parameters as static (non-trainable).
@@ -935,4 +1030,44 @@ def mstep_gaussian_cov(model, data, *, key, batch_size: int | None = None):
     new_unconstrained_cov = unconstrain_positive(jnp.maximum(r_new - _MIN_VARIANCE, _EPS))
     new_likelihood = eqx.tree_at(lambda lik: lik.unconstrained_cov, likelihood, new_unconstrained_cov)
     new_observation = eqx.tree_at(lambda obs: obs.likelihood, observation, new_likelihood)
+    return eqx.tree_at(lambda m: m.observation, model, new_observation)
+
+
+def mstep_observation_cov(model, data, *, key):
+    """Closed-form, non-SGD parameter update for ``model.observation`` via a
+    single full-dataset forward pass, dispatching through the
+    :class:`~jaxfads.base.Observation` ABC's :meth:`~jaxfads.base.
+    Observation.mstep` rather than duck-typing on a specific likelihood.
+
+    This is the family-neutral counterpart to :func:`mstep_gaussian_cov`:
+    where that function is Gaussian-specific (duck-typed on
+    ``mstep_stat``, supports ``batch_size``-chunked scanning for datasets
+    too large for one forward pass) and is left untouched, this function
+    works for *any* :class:`~jaxfads.base.Observation` implementation that
+    overrides :meth:`~jaxfads.base.Observation.mstep` (returning the model
+    unchanged, a no-op, for those that don't -- e.g. ``GLM`` wrapping
+    ``Poisson``), at the cost of no chunking support. Use
+    :func:`mstep_gaussian_cov` directly if a dataset doesn't fit in a
+    single forward pass.
+
+    Parameters
+    ----------
+    model : XFADS
+        Model whose ``observation`` may implement ``mstep``.
+    data : tuple of Array
+        ``(t, y, u, c)``, as accepted by ``model(...)``.
+    key : Array
+        JAX PRNG key, passed through to the model's forward pass.
+
+    Returns
+    -------
+    XFADS
+        A new model with ``observation`` replaced by the result of
+        ``model.observation.mstep(t, moment, y, model.approx)``; all other
+        attributes unchanged. Identical to ``model`` if ``observation``
+        does not override ``mstep``.
+    """
+    t, y, u, c = data
+    _natural, moment, _predicted = model(t, y, u, c, key=key)
+    new_observation = model.observation.mstep(t, moment, y, model.approx)
     return eqx.tree_at(lambda m: m.observation, model, new_observation)

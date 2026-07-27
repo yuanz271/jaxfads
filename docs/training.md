@@ -209,6 +209,45 @@ reparameterization (e.g. sqrt / inverse-softplus-style), so interpolating
 free-form values directly traces a different, distorted path through the
 constrained space than the intended schedule.
 
+## Automated Observation-Noise Updates (`mstep_every_n_epochs`)
+
+For a Gaussian-likelihood model, the observation noise covariance `R` can be
+driven by a closed-form EM M-step instead of gradient descent, avoiding a
+Heywood-case degeneracy that plain gradient-based MLE of `R` is prone to
+(see [`mstep_gaussian_cov`](mstep_gaussian_cov.md) for the full rationale).
+`mstep_every_n_epochs` builds this into `train()` directly:
+
+```python
+trained = train(model, data, conf=trainer_conf, mstep_every_n_epochs=1)
+```
+
+When set, `train()` calls `mstep_observation_cov(model, train_data, key=...)`
+automatically after every `mstep_every_n_epochs` completed epochs, replacing
+`model.observation`'s parameters with the M-step-optimal value computed from
+a full forward pass over the training data. `None` (the default) disables
+this entirely, with zero effect on existing behavior.
+
+This is a modification to *how the model's parameters get updated during
+optimization* -- the same category as `regularizer`/`optimizer`/
+`param_schedule` -- not epoch-level policy, so it is its own `train()`
+parameter rather than something routed through `on_epoch_end`; a
+user-supplied `on_epoch_end` (checkpointing, early-stopping, ...) keeps
+working unmodified and independently, whether or not `mstep_every_n_epochs`
+is also set.
+
+**Unlike `param_schedule`, no `freeze_paths` entry is required.** `train()`
+asks `model.observation.mstep_frozen_paths()` which of its own attribute
+paths need excluding from gradient updates, and folds them into its internal
+freeze mask automatically -- so gradient descent never fights the closed-form
+update, without the caller needing to know or declare which path that is.
+
+This works for any `Observation` implementation that overrides `mstep`
+(currently `GLM` wrapping a `Gaussian` likelihood); it is a no-op for
+likelihoods without a closed-form update (e.g. `Poisson`). For datasets too
+large for a single forward pass, use [`mstep_gaussian_cov`](mstep_gaussian_cov.md)
+directly instead -- it supports `batch_size`-chunked scanning, which this
+automated path does not.
+
 ## Multi-Device Training
 
 When multiple devices are available, training data is automatically sharded

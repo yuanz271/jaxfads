@@ -1,11 +1,16 @@
 # EM M-step for Gaussian observation covariance (`mstep_gaussian_cov`)
 
 Status: implemented, unit-tested, and validated against a real downstream
-training run; not yet wired into a convenience training loop. This document
-is a handoff for picking the work back up — problem, fix, validation
-evidence, and open refinement questions.
+training run. Now also wired into a convenience training-loop path: see
+`mstep_every_n_epochs` in [Training](training.md#automated-observation-noise-updates-mstep_every_n_epochs)
+and the family-neutral `mstep_observation_cov` function (open question #1
+below, resolved). This document remains a handoff for the underlying
+Gaussian-specific mechanics — problem, fix, validation evidence, and
+remaining refinement questions.
 
-See also: [Training](training.md), [Algorithm](algorithm.md).
+See also: [Training](training.md), [Algorithm](algorithm.md),
+[r_running_stat](r_running_stat.md) (the `mstep_every_n_epochs`/
+`mstep_observation_cov` design).
 
 ## The problem
 
@@ -117,15 +122,16 @@ iteration, not per-minibatch — matching `mstep_gaussian_cov`'s own full-datase
 
 ## Open questions for refinement
 
-1. **No native training-loop integration.** `mstep_gaussian_cov` is a
-   standalone function; every caller currently hand-rolls the alternation
-   loop (see the downstream project's
-   `scripts/python/jaxfads_dev/jaxfads_dev_train_adam_lbfgs.py` for a full
-   example, including adaptive round-length/stopping-criterion tuning that
-   isn't part of this repo). Worth considering a `trainer.py`-level
-   convenience wrapper (e.g. `em_train(model, data, conf, mstep_fn, n_rounds)`)
-   if this pattern turns out to be broadly useful beyond Gaussian
-   observation noise.
+1. **Resolved: native training-loop integration.** `train(..., 
+   mstep_every_n_epochs=N)` now calls a family-neutral driver,
+   `mstep_observation_cov`, automatically every `N` completed epochs (see
+   [Training](training.md#automated-observation-noise-updates-mstep_every_n_epochs)
+   and `docs/r_running_stat.md` for the full design). `mstep_gaussian_cov`
+   itself is untouched and remains the answer for `batch_size`-chunked
+   scanning of datasets too large for one forward pass, which the automated
+   path does not support. Round-cadence tuning (see #2 below) is still the
+   caller's responsibility via the `N` in `mstep_every_n_epochs`, not
+   auto-tuned.
 2. **Round cadence is caller policy, empirically tuned downstream, not
    documented here.** The downstream validation found that round length is a
    genuine, non-trivial tradeoff (too long wastes wall-clock on a stale `R`
@@ -139,13 +145,15 @@ iteration, not per-minibatch — matching `mstep_gaussian_cov`'s own full-datase
    accumulation**, not parallelized beyond a single forward pass per chunk.
    Fine at current scale (datasets of ~50-500 trials); revisit if used on
    much larger datasets.
-4. **Only `Gaussian` currently implements `mstep_stat`.** If a future
-   likelihood (e.g. a full-covariance or heavy-tailed Gaussian variant) is
-   added, it would need its own M-step derivation and `mstep_stat`
-   implementation — the duck-typed dispatch in `mstep_gaussian_cov` already
-   supports this without modification, but the function name itself
-   (`mstep_gaussian_cov`) is Gaussian-specific; a more general name might be
-   warranted if this expands (e.g. `mstep_observation_cov`).
+4. **Resolved: family-neutral naming.** `mstep_gaussian_cov` keeps its
+   Gaussian-specific name (unchanged, still duck-typed on `mstep_stat`), but
+   the new `mstep_observation_cov` function and `Observation.mstep`/
+   `Likelihood.mstep` ABC methods (see `docs/r_running_stat.md`) are the
+   family-neutral entry points going forward. If a future likelihood (e.g. a
+   full-covariance or heavy-tailed Gaussian variant) adds its own `mstep`, it
+   participates in `mstep_observation_cov`/`mstep_every_n_epochs`
+   automatically, without needing `mstep_gaussian_cov`-style duck-typed
+   dispatch of its own.
 5. **`_MIN_VARIANCE` (the private float32-safety floor in
    `constraints.py`) remains necessary independent of this fix** — it guards
    against literal numerical failure (log/reciprocal of an exact float32

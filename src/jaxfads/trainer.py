@@ -34,6 +34,7 @@ from rich.progress import (
 
 from . import vi
 from .logging import get_logger
+from .observations import mstep_observation_cov
 
 
 logger = get_logger(__name__)
@@ -540,6 +541,7 @@ def _run_training_loop(
     model_sharding,
     on_epoch_end=None,
     param_schedule=None,
+    mstep_every_n_epochs=None,
 ):
     """
     Run sharded training for a fixed number of epochs.
@@ -581,6 +583,10 @@ def _run_training_loop(
         schedule keyed on the step counter. The corresponding path(s) should
         also be listed in ``conf.freeze_paths`` so the optimizer's own
         gradient-based update does not fight the schedule.
+    mstep_every_n_epochs : int or None
+        When set, calls ``mstep_observation_cov(model, train_set, key=...)``
+        after every ``mstep_every_n_epochs`` completed epochs, replacing
+        ``model`` with the result. See :func:`train`'s docstring.
 
     Returns
     -------
@@ -630,10 +636,13 @@ def _run_training_loop(
     epoch_batch_losses: list = []
 
     def finalize_epoch(epoch_idx, batch_losses) -> bool:
-        """Record the epoch's training loss and run the callback.
+        """Record the epoch's training loss, run the callback, and (if
+        configured) apply the periodic closed-form mstep update.
 
         Returns ``True`` when the callback requests an early stop.
         """
+        nonlocal model
+
         if batch_losses:
             train_loss = float(jnp.mean(jnp.stack(batch_losses)))
         else:
@@ -642,6 +651,7 @@ def _run_training_loop(
 
         pbar.update(task_id, advance=1, loss=train_loss)
 
+        stop = False
         if on_epoch_end is not None:
             info = {
                 "epoch": epoch_idx,
@@ -649,8 +659,16 @@ def _run_training_loop(
                 "train_loss": train_loss,
                 "train_losses": train_losses,
             }
-            return bool(on_epoch_end(model, info))
-        return False
+            stop = bool(on_epoch_end(model, info))
+
+        if (
+            mstep_every_n_epochs is not None
+            and (epoch_idx + 1) % mstep_every_n_epochs == 0
+        ):
+            mstep_key = jr.fold_in(key, epoch_idx)
+            model = mstep_observation_cov(model, train_set, key=mstep_key)
+
+        return stop
 
     try:
         for batch, epoch, _batch_in_epoch in dataloader(
@@ -689,6 +707,7 @@ def train(
     regularizer=None,
     optimizer=None,
     param_schedule=None,
+    mstep_every_n_epochs=None,
 ):
     """
     Training routine for XFADS models with multi-device support.
@@ -744,6 +763,22 @@ def train(
         otherwise the optimizer's own gradient-based update will fight the
         schedule (e.g. via gradient noise or optimizer momentum, even where
         the raw gradient is itself zero).
+    mstep_every_n_epochs : int or None, optional
+        When set, calls ``mstep_observation_cov(model, train_data, key=...)``
+        automatically every ``mstep_every_n_epochs`` completed epochs (a
+        closed-form, non-SGD update for ``model.observation``'s own
+        parameters -- e.g. Gaussian observation noise covariance -- see
+        :func:`mstep_observation_cov`). This is a modification to how the
+        model's parameters get updated during optimization (the same
+        category as ``regularizer``/``optimizer``/``param_schedule``), not
+        epoch-level policy, so it is a dedicated parameter here rather than
+        routed through ``on_epoch_end``. ``None`` (default) disables it
+        entirely, with zero footprint on existing behavior. Whenever this is
+        set, ``train()`` automatically excludes
+        ``model.observation.mstep_frozen_paths()`` from gradient updates (so
+        gradient descent does not fight the closed-form update) -- no
+        corresponding ``conf.freeze_paths`` entry is required from the
+        caller.
 
     Returns
     -------
@@ -806,6 +841,13 @@ def train(
     params = eqx.filter(model, eqx.is_inexact_array)
     freeze_mask = jax.tree.map(lambda _: False, params)
     freeze_paths = [str(p) for p in conf.freeze_paths]
+    if mstep_every_n_epochs is not None:
+        # Automatically exclude whatever model.observation.mstep touches
+        # from gradient updates -- no conf.freeze_paths entry required from
+        # the caller (see mstep_every_n_epochs's docstring).
+        freeze_paths = freeze_paths + [
+            "observation." + p for p in model.observation.mstep_frozen_paths()
+        ]
     for path in freeze_paths:
         parts = tuple(path.split("."))
         _ = _resolve_attr_path(model, parts)  # fail fast if path is invalid
@@ -855,6 +897,7 @@ def train(
         model_sharding,
         on_epoch_end=on_epoch_end,
         param_schedule=param_schedule,
+        mstep_every_n_epochs=mstep_every_n_epochs,
     )
 
     dt = time.perf_counter() - t0

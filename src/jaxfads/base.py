@@ -377,6 +377,72 @@ class Observation(SubclassRegistryMixin, ConfModule):
         """
         ...
 
+    def mstep(self, t: Array, moment: Array, y: Array, approx: Approx) -> Observation:
+        """Closed-form, non-SGD parameter update from a full forward pass.
+
+        Computes a closed-form (EM M-step-style) update for this
+        Observation's own parameters (e.g. Gaussian observation noise
+        covariance), given ``(t, moment, y)`` for the *entire* dataset (or
+        an entire batch treated as such) and the current ``approx``. This
+        is deliberately separate from gradient-based training: callers
+        (e.g. ``mstep_observation_cov``, ``train(...,
+        mstep_every_n_epochs=...)``) invoke it outside of any
+        differentiated computation, so its result must never carry
+        gradients back into the rest of the model.
+
+        Default implementation is a no-op: returns ``self`` unchanged.
+        Concrete subclasses that support this (e.g. ``GLM`` wrapping a
+        ``Gaussian`` likelihood) override it; subclasses that don't
+        (e.g. ``GLM`` wrapping ``Poisson``) simply inherit this default.
+
+        Parameters
+        ----------
+        t : Array
+            Time indices for the dataset/batch, shape matching ``y``'s
+            leading axes.
+        moment : Array
+            Moment parameters of the posterior ``q(z_t)`` for every
+            (batch, time) instance, from a forward pass over ``t, y, u, c``.
+        y : Array
+            Observed data for every (batch, time) instance.
+        approx : Approx
+            Exponential-family approximation instance (needed to unpack
+            ``moment`` into mean/covariance; not owned by ``Observation``).
+
+        Returns
+        -------
+        Observation
+            A (possibly) updated Observation instance. Must not depend on
+            or produce gradients.
+        """
+        return self
+
+    def mstep_frozen_paths(self) -> list[str]:
+        """Attribute paths (relative to this Observation) that must be
+        excluded from gradient updates whenever :meth:`mstep`-driven
+        updates are active.
+
+        Callers (e.g. ``train(..., mstep_every_n_epochs=...)``) use this
+        to automatically derive which leaves to freeze from the optimizer,
+        so that gradient descent does not fight a closed-form update
+        computed by :meth:`mstep`. No user-facing configuration is
+        required for this; ``train()`` folds these paths into its own
+        freeze mask automatically.
+
+        Default implementation returns ``[]`` (nothing to freeze).
+        Concrete subclasses that override :meth:`mstep` non-trivially
+        should override this too, returning the paths :meth:`mstep`
+        actually writes to.
+
+        Returns
+        -------
+        list of str
+            Dot-separated attribute paths, relative to this Observation
+            instance (e.g. ``["likelihood.unconstrained_cov"]`` for a
+            ``GLM`` wrapping a ``Gaussian`` likelihood).
+        """
+        return []
+
 
 class Encoder(SubclassRegistryMixin, ConfModule):
     """Abstract base class for observation encoders.
