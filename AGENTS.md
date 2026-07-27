@@ -116,6 +116,20 @@ Invariant for callers:
     optimizer.
 - No built-in covariance-based noise regularization is applied by default.
 
+## Testing Workflow
+
+- Run the full test suite (`pytest tests/`) **only** right before pushing, or
+  when explicitly asked — not automatically after every commit/edit.
+- During iteration, scope test runs to the files that exercise the changed
+  code (e.g. `pytest tests/test_trainer.py tests/test_observations.py` for
+  `trainer.py`/`observations.py` changes; include `tests/test_smoother.py`
+  for changes touching `base.py`'s `Observation`/`Approx`/`Dynamics` ABCs,
+  since `smoother.py`/`XFADS` sits directly on top of them).
+- Do not run a scoped set and then the full suite back-to-back for the same,
+  unchanged code — that pays both costs for no additional information. If a
+  full-suite run is warranted (about to push, or asked for), it replaces the
+  scoped run for that checkpoint, it doesn't follow it.
+
 ## Python rules
 
 Python-specific development rules, tooling, and workflows are defined in:
