@@ -223,53 +223,83 @@ difference (see below):
 
 ```python
 class Approx:
-    def mstep(self, moment_t, moment_tm1, transition_fn, noise_free, *,
-               prior, prior_dof) -> Array:
-        """Default: no-op, returns noise_free unchanged -- concrete,
-        non-abstract, mirroring Observation.mstep's existing no-op default
-        exactly, so callers never need a hasattr check on either side."""
-        return noise_free
-
-    def mstep_frozen_paths(self) -> list[str]:
-        """Default: no-op, empty list."""
-        return []
+    def shrink(self, raw_stat, prior, prior_dof) -> Array:
+        """MAP-shrink a raw sufficient statistic toward `prior`, encoded
+        as a free-form array. Shape and meaning of raw_stat/prior are
+        defined entirely by the subclass (e.g. MVN: a covariance matrix)
+        -- not every Approx family need define this meaningfully (a
+        hypothetical discrete-state family might have no shrinkable
+        dispersion concept at all). Default: no-op, returns raw_stat
+        unchanged."""
+        return raw_stat
 
 
 class MVN(Approx):
-    def mstep(self, moment_t, moment_tm1, transition_fn, noise_free, *,
-               prior, prior_dof):
-        """v1 statistic (no cross-covariance term, see below) + MAP
-        shrinkage toward prior; returns an updated free-form array via
-        self.free_from_kw(...)/self.canon_to_free(...) -- see the
-        contract-difference note below for why this returns an Array, not
-        a new MVN instance."""
+    def shrink(self, raw_stat, prior, prior_dof):
+        """Here, and only here, raw_stat/prior are covariance matrices.
+        (n * raw_stat + prior_dof * prior) / (n + prior_dof), re-encoded
+        via self.free_from_kw(...). n comes from raw_stat's own batch/time
+        dimensions, supplied by the caller alongside raw_stat."""
         ...
 
-    def mstep_frozen_paths(self) -> list[str]:
-        return ["noise_free"]
+
+def mstep_transition_stat(approx, moment_t, moment_tm1, transition_fn) -> Array:
+    """Standalone, not a method on Approx or Dynamics -- needs both
+    approx.unpack (distribution-only) and transition_fn (dynamics-aware),
+    so belongs to neither; same shape of problem as
+    core.expected_predictive_moment, which is the direct precedent for
+    solving it this way. v1 formula: r = m' - transition_fn(m), raw_stat =
+    outer(r,r) + P' + J@P@J.T, J = jax.jacrev(transition_fn)(m), no
+    cross-covariance term (see below)."""
+    ...
 
 
 class XFADS:
     def mstep(self, t, y, u, c, *, key, prior, prior_dof) -> "XFADS":
         """Composes both components' updates in one call -- the single,
         discoverable entry point (model = model.mstep(data, key=...))
-        instead of separate driver functions per parameter."""
+        instead of separate driver functions per parameter. The only
+        place that knows noise_free is an attribute name, and that this
+        whole call is about transition noise specifically -- neither
+        Approx nor the standalone stat function needs to know either."""
         _, moment, _ = self(t, y, u, c, key=key)
         new_observation = self.observation.mstep(t, moment, y, self.approx)
-        new_noise_free = self.approx.mstep(
-            moment[:, 1:, :], moment[:, :-1, :], self.transition,
-            self.noise_free, prior=prior, prior_dof=prior_dof,
+        raw_stat = mstep_transition_stat(
+            self.approx, moment[:, 1:, :], moment[:, :-1, :], self.transition,
         )
+        new_noise_free = self.approx.shrink(raw_stat, prior, prior_dof)
         return eqx.tree_at(
             lambda m: (m.observation, m.noise_free), self,
             (new_observation, new_noise_free),
         )
 ```
 
-**Where it lives**: settled -- `Approx.mstep`/`Approx.mstep_frozen_paths`,
-mirroring `Observation.mstep`'s ABC-level placement exactly (`Q`'s
-parameterization already lives on `Approx` today). No separate sub-object;
-nothing in the experiments argued for one.
+**Where it lives**: `Approx.shrink` -- a narrowly-scoped, genuinely
+distribution-only capability (blend and re-encode an opaque
+statistic-shaped array in my own family, same category as
+`canon_to_free`/`free_to_canon`), not an `mstep`-branded method. It never
+sees `transition_fn`, never sees the string `"noise_free"`, and doesn't
+know it's being used for process noise specifically -- addresses a real
+concern raised mid-design: `Approx` is meant to be static and
+distribution-only, not aware that "noise" as a modeling concept exists.
+An earlier draft of this section had `Approx.mstep` own the whole
+computation (statistic + shrinkage + noise_free's name) directly,
+mirroring `Observation.mstep`'s placement one level too literally; that
+conflated "distribution-family math" with "knows about transition noise,"
+which this split avoids. The transition/dynamics-aware statistic
+computation (`mstep_transition_stat`) lives outside `Approx` entirely, as
+a standalone function, precisely because it needs to know about
+`transition_fn`, which is not a distribution-family concept.
+
+**Casualty of this split, accepted rather than forced**:
+`Approx.mstep_frozen_paths` (declaring `["noise_free"]`) doesn't survive
+cleanly -- it would require `Approx` to know that external attribute name,
+exactly the leak this split removes. Since automatic `train()`-integration/
+cadence-control is already deferred (see Steps toward implementation),
+auto-derived freeze-paths for `Q` are deferred alongside it, not solved
+with a workaround now. Callers pass `freeze_paths=["noise_free"]` to
+`train()` explicitly for now, exactly as the validated prototype scripts
+already do.
 
 **Deliberate contract difference from `Observation.mstep`, stated
 explicitly so it isn't mistaken for an inconsistency**: `Observation.mstep`
@@ -277,20 +307,11 @@ returns a *new `Observation`* because `R` is stored inside `Gaussian`/
 `GLM`'s own pytree state. `Q` is not stored inside `Approx` at all --
 `Approx` (`MVN`) holds no trainable state; `noise_free` lives directly on
 `XFADS` and is only interpreted via `approx.canon_to_moment(approx.
-free_to_canon(...))` at the point of use. So `Approx.mstep` returns the raw
-updated array, and `XFADS.mstep` is what writes it back onto
-`model.noise_free` -- same vocabulary, genuinely different return type,
-because of a genuine structural difference in where the two parameters
-live, not an oversight.
-
-**Why `transition_fn` as an external argument to `Approx.mstep` is fine,
-not an architectural smell** (a concern raised and resolved mid-design):
-`Observation.mstep(t, moment, y, approx)` already takes `approx` as an
-external argument, for the same reason -- `Observation` doesn't own
-`Approx` either, but needs it. Reaching across component boundaries via
-explicit arguments, orchestrated by whichever caller has access to
-everything (`XFADS.mstep` here), is the established shape of this
-vocabulary already, not something new being introduced for `Q`.
+free_to_canon(...))` at the point of use. So `Approx.shrink` returns the
+raw updated array, and `XFADS.mstep` is what writes it back onto
+`model.noise_free` -- consistent with `Observation.mstep`'s underlying
+reasoning (the component that owns the storage returns/produces the
+updated value in its own storage's shape), not an inconsistency.
 
 `prior`/`prior_dof` are **required keyword arguments, no default value**
 at the `Approx`/`XFADS` level -- deliberately not even the `prior=1.0,
@@ -307,13 +328,14 @@ layout, not a trivial transform -- on every forward pass) exists
 specifically to give an unconstrained gradient optimizer something safe to
 optimize. If `Q` is never gradient-optimized once `mstep` is the
 *permanent* update mechanism (not just the current experimental one --
-`Q` frozen from gradient updates via `mstep_frozen_paths`, only touched by
-periodic `mstep` calls), that round-trip becomes pure overhead paid every
-forward pass for a capability nothing uses anymore.
+`Q` frozen from gradient updates via an explicit `freeze_paths=
+["noise_free"]`, only touched by periodic `XFADS.mstep` calls), that
+round-trip becomes pure overhead paid every forward pass for a capability
+nothing uses anymore.
 
 **Not scoped into the current implementation plan** -- it's conditional on
 `mstep` proving out as the permanent mechanism (not yet certain), and it
-touches more than `Approx.mstep`'s own signature: `noise_free`'s
+touches more than `Approx.shrink`'s own signature: `noise_free`'s
 initialization (`dyn_conf.state_noise` -> `free_from_kw`), every consumer
 in `core.py` (`_site_filter`/`nofilt`/`_bismooth`'s `approx.
 canon_to_moment(approx.free_to_canon(model.noise_free))`), and
@@ -321,7 +343,7 @@ canon_to_moment(approx.free_to_canon(model.noise_free))`), and
 natural (constrained) space, converting to free-form only at the end"
 (`docs/training.md`) -- a representation change needs that updated too, or
 it breaks silently. **Nothing about the current design blocks this later**:
-`MVN.mstep`'s internal computation already happens in canon/native space
+`MVN.shrink`'s internal computation already happens in canon/native space
 (the statistic and shrinkage are covariance-shaped quantities, not
 free-form ones) -- the free-form conversion is only the last line before
 returning, a one-line change to remove if/when `noise_free`'s storage
@@ -411,42 +433,55 @@ ship the core, correctness-tested mechanism as a standalone utility first;
 train()-integration and further real-world validation follow as separate,
 later steps, not blockers.
 
-1. **Placement is settled**: `Approx.mstep`/`Approx.mstep_frozen_paths`,
-   concrete no-op defaults on the ABC exactly mirroring `Observation.
-   mstep`'s existing pattern (see Design's "Final design" subsection).
-   `MVN` overrides both.
-2. **Implement `MVN.mstep`**: the v1 statistic exactly as used in the
-   experiments (`r = m' - transition_fn(m)`, `raw_stat = outer(r,r) + P' +
-   J@P@J.T`, `J = jax.jacrev(transition_fn)(m)`, no cross-covariance term),
-   decoupled from `Approx.transition_points` entirely, followed by the
-   MAP-shrinkage blend `(n·raw_stat + prior_dof·prior)/(n+prior_dof)`,
-   returning the result as a free-form array via `self.free_from_kw(...)`/
-   `self.canon_to_free(...)`. `prior`/`prior_dof` are required keyword
+1. **Placement is settled**: `Approx.shrink` (narrowly-scoped,
+   distribution-only covariance/statistic-shrinkage primitive, concrete
+   no-op default), `mstep_transition_stat` as a standalone function
+   (not a method on `Approx` or `Dynamics` -- needs both, belongs to
+   neither, same shape as `core.expected_predictive_moment`), and
+   `XFADS.mstep` as the composing entry point that alone knows about
+   `noise_free`'s name and that this is about transition noise (see
+   Design's "Final design" subsection for the reasoning and the rejected
+   `Approx.mstep`-owns-everything alternative).
+2. **Implement `MVN.shrink`**: the MAP-shrinkage blend
+   `(n·raw_stat + prior_dof·prior)/(n+prior_dof)` for covariance-shaped
+   `raw_stat`/`prior`, returning the result as a free-form array via
+   `self.free_from_kw(...)`. `prior`/`prior_dof` are required keyword
    arguments, no default (see Design).
-3. **Implement `XFADS.mstep`**: composes `self.observation.mstep(...)` and
-   `self.approx.mstep(...)` into one call, as sketched in Design -- this
-   *is* the usable entry point for an alternating-EM loop (`for round in
-   range(n_rounds): model = train(model, data, conf=freeze_q_conf); model
-   = model.mstep(data, key=..., prior=..., prior_dof=...)`), matching
-   exactly what was validated, without needing deeper `train()`-integration
-   first (that's the separate, deferred cadence-control work below).
-4. **Unit tests**, correctness-focused (mirroring the 3 existing
-   `mstep_gaussian_cov` tests' shape, adapted): `MVN.mstep`'s statistic
-   matches an independently computed reference on a small linear case; the
-   shrinkage blend matches its closed-form definition at known inputs;
-   `Approx.mstep`'s no-op default returns its input unchanged for a
-   non-overriding `Approx`; `XFADS.mstep` composes both components'
-   updates correctly. Skip exhaustive edge-case/negative-path tests per
-   this repo's established test-purge philosophy.
-5. **Scoped test run + lint** on touched files before considering this
+3. **Implement `mstep_transition_stat`**: the v1 statistic exactly as
+   used in the experiments (`r = m' - transition_fn(m)`, `raw_stat =
+   outer(r,r) + P' + J@P@J.T`, `J = jax.jacrev(transition_fn)(m)`, no
+   cross-covariance term), decoupled from `Approx.transition_points`
+   entirely, using only `approx.unpack` (distribution-only) plus
+   `transition_fn` (externally supplied).
+4. **Implement `XFADS.mstep`**: composes `self.observation.mstep(...)`,
+   `mstep_transition_stat(...)`, and `self.approx.shrink(...)` into one
+   call, as sketched in Design -- this *is* the usable entry point for an
+   alternating-EM loop (`for round in range(n_rounds): model = train(model,
+   data, conf=freeze_q_conf); model = model.mstep(data, key=..., prior=...,
+   prior_dof=...)`), matching exactly what was validated, without needing
+   deeper `train()`-integration first (that's the separate, deferred
+   cadence-control work below).
+5. **Unit tests**, correctness-focused (mirroring the 3 existing
+   `mstep_gaussian_cov` tests' shape, adapted): `mstep_transition_stat`
+   matches an independently computed reference on a small linear case;
+   `MVN.shrink`'s blend matches its closed-form definition at known
+   inputs; `Approx.shrink`'s no-op default returns its input unchanged
+   for a non-overriding `Approx`; `XFADS.mstep` composes all three
+   correctly. Skip exhaustive edge-case/negative-path tests per this
+   repo's established test-purge philosophy.
+6. **Scoped test run + lint** on touched files before considering this
    landed (`tests/test_distribution.py`, `tests/test_algorithm.py` if
    `core.py`/`base.py` are touched, plus the new test file) -- full suite
    only before push, per `AGENTS.md`.
-6. **Deferred, explicitly not blocking Step 1-5 landing**:
+7. **Deferred, explicitly not blocking Step 1-6 landing**:
+   - **Automatic freeze-path derivation for `Q`** (an `Approx`-level
+     `mstep_frozen_paths`-equivalent) -- doesn't survive the `Approx`/
+     `XFADS` split cleanly (see Design's "casualty" note); callers pass
+     `freeze_paths=["noise_free"]` to `train()` explicitly for now.
    - **Automatic cadence control inside `train()` itself** (analogous to
      `R`'s `mstep_mode`, auto-calling `model.mstep(...)` at some cadence
      without the caller writing the round loop by hand) -- distinct from
-     `XFADS.mstep` itself landing (Step 3), which is already usable
+     `XFADS.mstep` itself landing (Step 4), which is already usable
      manually in exactly the loop shape that was validated. Automatic
      cadence needs the same trainer-internal surgery `R`'s integration
      required -- the public `on_epoch_end` hook can't feed a modified
@@ -469,7 +504,7 @@ later steps, not blockers.
   single seed.
 
 **Still pending, tracked as Open questions below, not blocking initial
-implementation**: unit tests for the actual library implementation (Step 4
+implementation**: unit tests for the actual library implementation (Step 5
 above, distinct from the ad hoc prototype scripts); multi-seed replication;
 VDP/oscillator-bank coverage; a with/without cross-covariance-term
 ablation; a cadence sweep (round-based only tested so far); a
@@ -520,11 +555,17 @@ without hand-tuned annealing, once `train()` integration exists.
 
 ## Future generalization (noted, out of scope here)
 
-The convergence onto `Observation`'s `mstep`/`mstep_frozen_paths`
-vocabulary (see [mstep_gaussian_cov](mstep_gaussian_cov.md)) is no longer
-future work -- it's the finalized design (see Design's "Final design"
-subsection). What remains genuinely future/out-of-scope: automatic cadence
-control inside `train()` (Steps toward implementation, item 6), extending
-the `mstep` contract to non-`MVN` `Approx` families, and the deferred
-`noise_free` storage-representation simplification (see Design) once
-`mstep` is confirmed as the permanent mechanism.
+`XFADS.mstep` converging onto `Observation`'s `mstep` vocabulary at the
+top-level entry point (see [mstep_gaussian_cov](mstep_gaussian_cov.md)) is
+no longer future work -- it's the finalized design (see Design's "Final
+design" subsection). Deliberately **not** converged, and not planned to
+be: `Approx.shrink` keeps its own name rather than being called `Approx.
+mstep`, and there is no `Approx.mstep_frozen_paths` -- both were rejected
+mid-design specifically to keep `Approx` unaware of `noise_free`'s
+existence (see Design's "casualty" note). What remains genuinely
+future/out-of-scope: automatic cadence control inside `train()` and
+auto-derived freeze-paths for `Q` (Steps toward implementation, item 7),
+extending the `shrink`/`mstep_transition_stat` contract to non-`MVN`
+`Approx` families, and the deferred `noise_free` storage-representation
+simplification (see Design) once `mstep` is confirmed as the permanent
+mechanism.
