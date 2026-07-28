@@ -264,25 +264,47 @@ def mstep_transition_stat(approx, moment_t, moment_tm1, transition_fn) -> Array:
 
 
 class XFADS:
-    def mstep(self, t, y, u, c, *, key, prior) -> "XFADS":
+    # noise_prior: Any = eqx.field(static=True) -- class-level field,
+    # alongside noise_free. Set once in __init__ from conf.noise_prior/
+    # conf.noise_prior_dof (both optional, default None -> self.noise_prior
+    # = None, the structural no-shrinkage default, same None/not-None
+    # pattern as self.beta_encoder). Static, and storing plain Python
+    # values rather than jnp arrays, is load-bearing, not stylistic: a
+    # non-static field holding jnp.asarray(...) values would be a genuine
+    # float-array pytree leaf, which train()'s own eqx.filter(model, eqx.
+    # is_inexact_array) would silently pick up as trainable with no
+    # freeze_paths entry protecting it (caught after the fact by checking
+    # this against train()'s actual filtering code, not assumed).
+
+    def mstep(self, t, y, u, c, *, key) -> "XFADS":
         """Composes both components' updates in one call -- the single,
-        discoverable entry point (model = model.mstep(data, key=..., prior=...))
+        discoverable entry point (model = model.mstep(data, key=...))
         instead of separate driver functions per parameter. The only
         place that knows noise_free is an attribute name, and that this
         whole call is about transition noise specifically -- neither
         Approx nor the standalone stat function needs to know either.
-        `prior`'s structure is opaque to XFADS too -- just forwarded to
-        whatever self.approx.shrink expects."""
+
+        No `prior` call argument at all -- least-knowledge: this method's
+        caller (and, eventually, train()) should not need to know a prior
+        exists. Instead, prior/prior_dof are read once at construction
+        into self.noise_prior (not on Approx, since Approx (self.approx)
+        is a stateless property freshly reconstructed from
+        conf.approx_kwargs on every access -- not a natural home for a
+        specific model's chosen hyperparameter value). Skips the
+        noise_free update entirely if self.noise_prior is None."""
+        approx = self.approx
         _, moment, _ = self(t, y, u, c, key=key)
-        new_observation = self.observation.mstep(t, moment, y, self.approx)
+        new_observation = self.observation.mstep(t, moment, y, approx)
+        model = eqx.tree_at(lambda m: m.observation, self, new_observation)
+
+        if self.noise_prior is None:
+            return model
+
         raw_stat = mstep_transition_stat(
-            self.approx, moment[:, 1:, :], moment[:, :-1, :], self.transition,
+            approx, moment[:, 1:, :], moment[:, :-1, :], self.transition,
         )
-        new_noise_free = self.approx.shrink(raw_stat, prior)
-        return eqx.tree_at(
-            lambda m: (m.observation, m.noise_free), self,
-            (new_observation, new_noise_free),
-        )
+        new_noise_free = approx.shrink(raw_stat, self.noise_prior)
+        return eqx.tree_at(lambda m: m.noise_free, model, new_noise_free)
 ```
 
 **Where it lives**: `Approx.shrink` -- a narrowly-scoped, genuinely
@@ -324,9 +346,45 @@ raw updated array, and `XFADS.mstep` is what writes it back onto
 reasoning (the component that owns the storage returns/produces the
 updated value in its own storage's shape), not an inconsistency.
 
-`prior` is a **required keyword argument, no default value**, at both the
-`Approx` and `XFADS` level -- deliberately not even `(1.0, 0.1n)` (the
-`(value, prior_dof)` pair that worked in the experiments), since tuning
+**Where `prior` actually lives**: `XFADS`'s own `conf` (`conf.noise_prior`/
+`conf.noise_prior_dof`), not `Approx`'s constructor and not `XFADS.mstep`'s
+call signature. An earlier pass of this design put it on `MVN`'s
+constructor (`MVN(..., noise_prior=..., noise_prior_dof=...)`), matching
+how `use_sigma_points` already works -- rejected once it was checked
+against `XFADS.approx`'s actual implementation: `approx` is a computed
+property, freshly reconstructed from `conf.approx_kwargs` on *every*
+access, not persistent stored state, so it's not a natural home for a
+specific model's chosen hyperparameter (as opposed to `use_sigma_points`,
+which genuinely is exponential-family-structural config, not a
+model-specific numeric choice). It also isn't where the already-tracked
+`dyn_conf.state_noise` relocation fix says this kind of thing belongs (a
+top-level `XFADS`-owned config field, not nested in `approx_kwargs`).
+`Approx.shrink(raw_stat, prior)` still takes `prior` as a call argument
+(opaque, as originally designed) -- `XFADS.mstep` is what supplies it, as
+`self.noise_prior`.
+
+**`self.noise_prior` is read from `conf` once, at construction, into a
+proper `eqx.field(static=True)`** -- not re-read via `conf.get(...)`
+inside `mstep()` on every call (an earlier pass did this; harmless but
+needlessly indirect), and *not* stored as `jnp.asarray(...)` values on an
+ordinary field. That second detail is load-bearing, not stylistic: caught
+by checking against `train()`'s actual parameter-filtering code, not
+assumed -- `train()` selects trainable leaves via `eqx.filter(model, eqx.
+is_inexact_array)`. A non-static field holding float-array values would be
+a genuine trainable leaf, silently receiving gradient updates with no
+`freeze_paths` entry protecting it (nothing adds `"noise_prior"` to any
+freeze list). Marking it `eqx.field(static=True)` (same as `conf` itself)
+and storing plain Python values (via a small recursive helper converting
+OmegaConf `ListConfig`/lists to hashable tuples, since static fields
+participate in the pytree's aux data/treedef, which must be hashable for
+JIT-cache correctness) excludes it from trainability *structurally* --
+verified via `eqx.filter(model, eqx.is_inexact_array)` leaving it
+untouched, and via two independently constructed models with identical
+`noise_prior` config producing equal treedefs (confirming hashability).
+
+`prior` is a **required argument to `Approx.shrink`, no default value**
+(deliberately not even `(1.0, 0.1n)`, the `(value, prior_dof)` pair that
+worked in the experiments), since tuning
 this is explicitly out of scope and those values were picked once, not
 validated as good defaults. Baking them in as a default would silently
 imply recommendation; callers must supply `prior` explicitly, in whatever
@@ -455,6 +513,14 @@ implementation, worth recording rather than silently fixing:
   `u[:-1], c[:-1]` convention) -- `transition_fn` cannot be evaluated
   without them. The original sketch below omitted them; not a design
   change, just an incomplete first draft of the signature.
+- `self.noise_prior` (where `prior` actually lives -- see Design's "Final
+  design" subsection) must be `eqx.field(static=True)` storing plain
+  Python values, not an ordinary field holding `jnp.asarray(...)` values --
+  the latter would make it a genuine trainable leaf under `train()`'s own
+  `eqx.filter(model, eqx.is_inexact_array)`, with no `freeze_paths` entry
+  protecting it. Caught by checking against `train()`'s actual filtering
+  code, not assumed; verified via `eqx.filter`, and via treedef equality
+  across independently constructed models (confirming hashability).
 
 Sequencing mirrored `mstep_gaussian_cov`'s own precedent: ship the core,
 correctness-tested mechanism as a standalone utility first;
