@@ -1,12 +1,16 @@
 # Plan: M-step for transition/process noise (`mstep` on the noise-owning component)
 
-Status: proposed, not implemented; design substantially refined through
-extended discussion (see below), but **still higher risk than the R
-estimator** — read the runaway-loop analysis below before implementing, and
-build the synthetic validation harness (Step 1) before writing any
-production code. Several claims below are stated as **hypotheses to test
-in that harness**, not established conclusions — flagged explicitly where
-relevant.
+Status: **empirically validated on synthetic data (known-z and latent-z
+Lorenz), not yet implemented in the library.** Two independent experiments
+(`benchmarks/mstep_known_z_baseline.py`, `benchmarks/mstep_lorenz_latent.py`)
+both support the same mechanism: keep `Q` inside the training loss (never
+fully decoupled), update it periodically via a **MAP-shrunk M-step toward a
+genuinely informative prior** rather than either free gradient descent or
+a numerical-safety-only floor. This reverses an earlier draft of this plan
+(see Design) that concluded the prior should be non-informative. Remaining
+work before implementation: multi-seed replication (only single-seed runs
+so far), broader system coverage (only Lorenz tested; VDP/oscillator-bank
+not yet run), and the actual `train()` integration.
 
 See also: [mstep_gaussian_cov](mstep_gaussian_cov.md), [transition_points](transition_points.md).
 
@@ -24,8 +28,10 @@ Consequence: **every design choice below should be validated against "does
 this produce accurate `f`," not "does this produce an accurate `Q`."** `Q`'s
 own trajectory (does it end up over- or under-estimated relative to
 whatever the "true" value might be) is a *diagnostic* for understanding
-training dynamics, never the pass/fail criterion. This resolves several
-tensions that only existed under the older framing — see Design.
+training dynamics, never the pass/fail criterion. Confirmed directly by
+experiment (see Validation plan): the condition with the *worst* `Q`
+accuracy of the three tested was not the condition with the worst `f`
+accuracy, and vice versa.
 
 ## Problem
 
@@ -59,11 +65,35 @@ with the rest of the model (dynamics, encoder, readout), via
    dynamics network `f` to explain trajectory variance directly rather than
    attributing it to noise. The actual risk is `Q` becoming small *before*
    `f` is competent enough to explain that variance, which then damages the
-   encoder/dynamics/readout jointly (an empirically observed failure mode,
-   not just a theoretical one). So the design goal is **pacing** `Q`'s
+   encoder/dynamics/readout jointly. So the design goal is **pacing** `Q`'s
    descent to track `f`'s genuine improvement — not preventing descent
    altogether, and not chasing an absolutely "correct" `Q` value either
    (see the success-metric section above).
+
+### Empirical finding: the dominant observed failure mode is overestimation, not collapse
+
+Both experiments (known-z, `--log-q0 0.0` giving `Q` init `≈0.69`; latent-z
+Lorenz, `Q` init `1.0`) show joint gradient optimization of `f` and `Q`
+converging toward a **substantially overestimated** `Q` (`~0.37`–`0.70` vs.
+true `0.01`), slowly and monotonically, with **no sign of the runaway
+collapse-toward-zero this Problem section originally focused on**, within
+realistic training budgets (30–150 epochs / rounds tested).
+
+The mechanism (conjectured, matches both experiments): **explaining
+residual variance via a free noise parameter is a much easier optimization
+move than improving a whole dynamics network** — increasing `Q` is a
+trivial one-parameter fit that immediately reduces the joint NLL; improving
+`f` requires real gradient progress through a harder, higher-dimensional
+problem. Free joint optimization takes the easy path by default.
+
+This does not mean the collapse pathology below is fictitious — it remains
+a documented, general phenomenon in the classical EM-for-SSM literature,
+and in the deep-learning-era literature for this exact model class (see
+below) — only that it was not what was observed to dominate in these
+specific experiments, at these training budgets. Both risks (collapse and
+overestimation-driven stalling) are real reasons free joint gradient
+optimization of `Q` is unreliable; the validated mechanism (see Design)
+addresses both by construction, not by choosing one to worry about.
 
 ### Why a naive residual-based estimator does not automatically fix (2)
 
@@ -81,78 +111,110 @@ smaller Q -> tighter KL penalty on q(z_t) deviating from f(z̄_{t-1})
 
 `Q = 0` is a fixed point of this loop by construction. Whether it is
 *attracting* depends on the ratio of "informativeness of `y`" to "precision
-imposed by `Q`" at each step — small in low-SNR regimes, i.e. exactly the
-regime this feature is meant to help with. This is a documented phenomenon
-in the classical linear-Gaussian SSM/EM literature: EM-based `Q` estimation
-for Kalman-filter-type models is known to be able to converge to a
-degenerate/singular `Q`, causing identifiability loss and instability under
-uninformative observations — not a hypothetical specific to this repo, and
-not specific to a variational/deep-learning setting either (the same
-fixed-point exists in classical linear-Gaussian EM). More recent evidence
-from the deep-learning-era literature on this same class of models (latent
-neural SDEs trained via ELBO/KL objectives) documents the opposite-sounding
-but same-underlying-phenomenon finding: **systematic underestimation of the
+imposed by `Q`" at each step — small in low-SNR regimes. This is a
+documented phenomenon in the classical linear-Gaussian SSM/EM literature:
+EM-based `Q` estimation for Kalman-filter-type models is known to be able
+to converge to a degenerate/singular `Q` under uninformative observations —
+not a hypothetical specific to this repo. More recent evidence from the
+deep-learning-era literature on this same class of models (latent neural
+SDEs trained via ELBO/KL objectives) documents the opposite-sounding but
+same-underlying-phenomenon finding: **systematic underestimation of the
 diffusion/process-noise term is a known, general issue** in this model
 class (Heck, Gelbrecht, Schaub & Boers, "Improving the noise estimation of
 latent neural stochastic differential equations," *Chaos* 2025,
 arXiv:2412.17499) — addressed there via an explicit additive loss penalty
 on small diffusion size, a *one-sided* regularizer (only ever pushes `Q`
-up). Not adopted here as the primary mechanism: it fights the
-underestimation bias unconditionally, including the cases where that bias
-is genuinely wanted, and it does nothing for the opposite failure (residual
-inflated by `f`'s own remaining bias early in training). The mechanism
-adopted instead (see Design) is directionally similar but self-regulating,
-not a fixed-strength penalty.
+up). **Not adopted here**, and the experiments give a concrete reason
+beyond the original objection (that it fights the wanted bias
+unconditionally): a one-sided penalty can't help with the overestimation
+failure mode that turned out to dominate in practice, only the
+underestimation one.
 
 **Even with fully known, non-latent `z`, jointly gradient-optimizing `f`
 and `Q` has the same fundamental degeneracy** — a separate, more basic
-justification for residual-based estimation that doesn't depend on any of
-the latent-inference subtlety above. A sufficiently flexible `f` can drive
-residuals toward zero by memorizing specific training transitions;
-jointly-gradient-optimized `Q` then chases that residual down, with the
-likelihood diverging as `Q→0` at an exactly-fit point — structurally
+justification for residual-based estimation that doesn't depend on any
+latent-inference subtlety. A sufficiently flexible `f` can drive residuals
+toward zero by memorizing specific training transitions; jointly-
+gradient-optimized `Q` then chases that residual down — structurally
 identical to factor analysis's Heywood case, just with `f`/`Q` playing the
 role `C`/`R` play for observations. A residual-based M-step fixes this part
 the same way it fixed `R`: `Q` can't *decouple* from the residual it's
 supposed to equal, because it's computed as that residual by construction.
-The latent-`z` complication above is a *distinct, additional* risk on top
-of this — unlike `R`'s exogenous `y`, the "data" (smoothed `z`) an M-step
-for `Q` computes from is itself shaped by `Q` through the inference
-machinery, so the decoupling protection that's airtight for `R` is weaker
-(not absent) here. This is exactly what Step 1's synthetic harness needs to
-test directly: does the M-step behave cleanly in the known-`z` regime
-(should, per this argument, and checkable there as a standard
-generalization/overfitting question — does `f` fit held-out transitions or
-just memorize training ones), and does that protection survive once `z` is
-latent and entangled with `Q` via smoothing?
-
-**Consequence for cadence — open question, not yet resolved either way.**
-The original reasoning here (avoid fast per-minibatch EMA, since it only
-slows collapse rather than preventing it) still holds for a *naive*
-residual estimator with no real anchor. Whether the mechanisms in Design
-(the cross-covariance-omission's self-regulating bias, primarily) damp this
-adequately at a fast cadence is an open question for Step 1's cadence
-sweep, not a settled requirement either way.
+The latent-`z` complication is a *distinct, additional* risk on top of
+this — unlike `R`'s exogenous `y`, the "data" (smoothed `z`) an M-step for
+`Q` computes from is itself shaped by `Q` through the inference machinery.
+**Tested directly (see Validation plan)**: both the known-z and latent-z
+experiments show the same qualitative pattern (joint optimization stalls at
+an overestimated `Q`; the M-step-based alternating approach recovers a
+better `Q` and, more importantly, better `f`), suggesting the latent-z
+entanglement doesn't qualitatively change the picture, at least at the
+scale tested.
 
 ## Design
 
-Two-method, duck-typed, **optional** extension, mirroring `Gaussian.
-mstep_stat`'s pattern (a future non-Gaussian noise family is free to
-implement neither, one, or both with entirely different math). Full
-`mstep`/`train()` integration is the target, matching `R`'s precedent
-exactly (not a standalone-only utility) — see "Integration into `train()`"
-below.
+### The validated mechanism: alternating EM, `Q` kept in the loss, MAP-shrunk toward an informative prior
 
-**Where it lives**: leaning toward `Approx` directly (mirroring `Observation.
-mstep`'s ABC-level placement), since `Q`'s parameterization already lives
-there today (`approx.canon_to_moment(approx.free_to_canon(model.noise_free))`)
-— not yet a final decision; a small, dedicated sub-object (mirroring how
-`Gaussian` sits inside `GLM`) is the alternative if a future non-Gaussian
-noise family wants sufficiently different math that a family-specific
-component makes more sense than a method directly on `Approx`.
+**This reverses an earlier draft's conclusion.** An earlier version of this
+section decided the prior/floor should be non-informative (numerical-safety
+only, `_MIN_VARIANCE`-scale), reasoning that a genuinely informative prior
+would need a substantial blend weight that could itself anchor early
+training too tightly. That reasoning wasn't wrong in the abstract, but the
+actual experiments show the informative-prior mechanism, applied
+correctly, wins:
+
+- **Known-z** (`benchmarks/mstep_known_z_baseline.py`, `q_true=0.01`,
+  150 epochs / 5 rounds): plain joint MLE (`Approach A`) reaches
+  `Q≈0.371`, flow-field RMSE `0.0257`. Fully decoupling `Q` from `f`'s loss
+  (`Approach B`: plain MSE for `f`, then a floor-only M-step) reaches a
+  more accurate `Q≈0.0113` but a *worse* flow-field RMSE `0.0356`.
+  **Alternating EM** (`Approach C`: `Q` stays in the joint NLL loss the
+  whole time, scaling `f`'s gradient by `1/Q` exactly as in A, but `Q`
+  itself is replaced every 30 epochs by `(n·raw_stat + prior_dof·prior)/
+  (n+prior_dof)` with `prior=1.0, prior_dof=0.1n`) reaches `Q≈0.101` (3.7x
+  closer to truth than A) **and** the best-or-near-best flow-field RMSE
+  `0.0266` (nearly matching A, clearly beating B).
+- **Latent-z Lorenz** (`benchmarks/mstep_lorenz_latent.py`, real XFADS
+  model with posterior inference, `q_true=0.01`, 100 epochs / 5 rounds):
+  A reaches `Q≈0.703`, flow-field RMSE `0.542`. B (`Q` frozen constant at
+  its init value for all 100 epochs, M-step applied once at the end)
+  reaches `Q≈1.056`, flow-field RMSE `0.638` (worse on both counts — the
+  single-shot-at-the-end design applies the M-step to an undertrained `f`,
+  and freezing `Q` constant denies `f` any of A's gradual-easing dynamic).
+  **Alternating EM** (same design as known-z's C, `prior=1.0,
+  prior_dof_frac=0.1`, 5 rounds of 20 epochs) reaches `Q≈1.321` (worse
+  than A on this axis, with a genuinely interesting per-dimension split —
+  the x/y dimensions shrink over rounds while z grows, plausibly reflecting
+  Lorenz's z-coordinate having the largest local range/fastest dynamics,
+  not yet independently confirmed) but the **best flow-field RMSE of all
+  three, `0.318`** — roughly 40% better than A, 50% better than B.
+
+Both experiments point the same direction: **decoupling `Q` from the loss
+entirely (B) is worse than keeping it in the loss (A, C) on the metric that
+matters, even though B's own `Q` estimate can be more numerically
+accurate.** And **controlling `Q`'s value via periodic MAP-shrunk updates
+(C) beats free gradient descent (A) on `f`-accuracy**, in the latent-z case
+clearly, in the known-z case by a smaller margin while getting a much
+better `Q` too. Caveats, not yet resolved: single-seed runs only; the
+`prior=1.0, prior_dof_frac=0.1` hyperparameters were picked once, not
+swept; only Lorenz has been tested in the latent-z setting.
+
+### A converging conjecture: free `Q` benefits SGD as an extra parameter, independent of its value
+
+Motivated by the B-vs-C gap in both experiments: B removes `Q` from `f`'s
+loss entirely (plain MSE), while C keeps it in the loss (still scaling
+`f`'s gradient by `1/Q`) but controls its value differently. C beats B on
+`f`-accuracy in both experiments, despite A/C's `Q` not obviously being
+"correct" in either case. This suggests **the benefit isn't specifically
+about `Q`'s value being right — it's about `Q` being a live, present
+parameter in the optimization at all**, consistent with the general
+observation that free/adaptive per-parameter scaling (of which a trainable
+noise term is one instance) often helps gradient-based optimization
+independent of what that scaling factor converges to. Not independently
+verified beyond these two experiments; stated here as a working hypothesis
+the alternating-EM design is consistent with, not a proven mechanism.
 
 ```
-class Approx:  # or a small dedicated sub-object -- see above
+class Approx:  # or a small dedicated sub-object -- see below
     def mstep_transition_stat(self, moment_smoothed_t, moment_smoothed_tm1,
                                transition_fn) -> Array:
         """Per-(batch,time) sufficient statistic for the transition-noise
@@ -165,291 +227,140 @@ class Approx:  # or a small dedicated sub-object -- see above
         approximation: no cross-covariance term (see below) -- computed
         directly from the two marginal smoothed moments and f evaluated at
         the smoothed mean, using a Jacobian-based (jax.jacrev(f)) correction
-        for propagating Cov(z_{t-1}) through f's local linearization.
-        Optional -- absence means this Approx does not support a
-        closed-form transition-noise M-step."""
+        for propagating Cov(z_{t-1}) through f's local linearization."""
 
-    def mstep_noise_shrink(self, raw_stat, floor) -> Any:
-        """Combine the aggregated raw statistic with a numerical-safety
-        floor -- NOT a meaningful Bayesian prior (see below). Candidate
-        implementations: a straightforward jnp.maximum(raw_stat, floor)
-        clip, or a shrinkage blend with a deliberately small/minimal weight
-        on the floor term. Kept as its own method because the combination
-        rule may still be family-specific even though it no longer needs to
-        encode genuine prior belief."""
+    def mstep_noise_shrink(self, raw_stat, prior, prior_dof, n) -> Any:
+        """MAP-shrinkage blend toward a genuinely informative prior:
+        (n * raw_stat + prior_dof * prior) / (n + prior_dof). Validated
+        experimentally with prior=1.0 (a moderate, not-tuned value) and
+        prior_dof = 0.1 * n -- neither swept, both worth revisiting."""
 ```
 
-### The prior/floor is for numerical safety only, not a meaningful anchor
+**Where it lives**: leaning toward `Approx` directly (mirroring `Observation.
+mstep`'s ABC-level placement), since `Q`'s parameterization already lives
+there today — not yet a final decision; a small, dedicated sub-object
+(mirroring how `Gaussian` sits inside `GLM`) is the alternative.
 
-Resolved after discussion: **do not build a data-derived "belief" prior**
-(an earlier draft of this plan proposed anchoring to `R`'s scale, or to a
-pre-dynamics-fit residual variance — both rejected). Given the success
-metric is accurate `f`, not accurate `Q`, there's no need for the floor
-value to represent a defensible Bayesian belief about `Q`'s true scale —
-it only needs to keep the M-step's arithmetic away from literal numerical
-failure (log/inverse of an exact-zero `Q`), exactly the same narrow role
-`_MIN_VARIANCE` plays for `R` (`constraints.py`). This collapses what were
-previously two separate mechanisms (an informative prior + an independent
-hard floor) into one.
+### Cadence: round/epoch-based, not continuous per-minibatch (matches what was actually tested)
 
-**Tuning this value is explicitly out of scope, and it is not meant to be
-calibrated per dataset.** The intended policy is "smallest value that avoids
-underflow" — the same philosophy as `_MIN_VARIANCE` itself
-(`jnp.finfo(dtype).eps`-scale), not a moderate, "reasonable-looking"
-constant. Whatever is actually optimal is inherently data-dependent, and
-finding that optimum is not this plan's job; picking the smallest safe
-value sidesteps needing to. In practice this likely means reusing
-`_MIN_VARIANCE` directly rather than introducing a second, separate
-constant for `Q`.
+The validated experiments use a **round-based cadence**: `N` epochs of
+ordinary training with `Q` held fixed (via `freeze_paths=["noise_free"]`,
+so it still scales `f`'s gradient but isn't itself gradient-updated),
+then one M-step-shrinkage update, repeated for a fixed number of rounds.
+This matches `R`'s `mstep_mode="epoch"` cadence conceptually, not
+`"minibatch"` — continuous per-minibatch updates were not tested here and
+should not be assumed safe by analogy to `R` (see Open questions).
 
-**Important consequence for any residual "shrinkage" weight**: if this
-floor value is tiny (as it should be, being purely a safety net), any
-weight given to it in a blend must also be small — a tiny floor combined
-with a *substantial* blend weight would anchor early training close to
-that tiny value, directly reintroducing "starts too small too early."
-There is therefore **no meaningful self-pacing to be had from a
-floor/prior weighting mechanism** in this design — self-pacing, if it
-exists at all, has to come from elsewhere (see next section). A plain
-`jnp.maximum(raw_stat, floor)` clip is the simplest correct
-implementation, and may be all that's needed; a soft blend with minimal
-weight is a reasonable alternative if a smoother/differentiable-everywhere
-combination is preferred, as long as its weight stays small enough not to
-anchor anything.
+Implementation-wise, this cadence could **not** be built via the public
+`on_epoch_end` hook (callbacks can't feed a modified model back into the
+training loop) — the prototype scripts call `train()` once per round with
+the previous round's output model as the next round's input, with `Q`
+frozen throughout each round via `freeze_paths` and replaced between
+rounds via `eqx.tree_at`. A real `train()`-integrated version needs
+trainer-internal surgery analogous to `R`'s `mstep_mode`, not just the
+public hook surface.
 
-### The cross-covariance omission — a self-regulating anti-collapse bias, adopted for v1
+### The cross-covariance omission — untested in isolation, but present in every validated result
 
 The classical closed-form M-step for `Q` (Shumway & Stoffer 1982, linear
-case) needs the *smoothed cross-covariance* `Cov(z_t, z_{t-1})`, not just
-the two marginal covariances — expanding `E[(z_t - Az_{t-1})(z_t-Az_{t-1})^T]`
-under the joint smoothed distribution requires `E[z_t z_{t-1}^T]`, which
-needs `Cov(z_t, z_{t-1})` whenever `z_t`/`z_{t-1}` are correlated (they
-generally are, under smoothing). **This repo's smoothing algorithm
-(exponential-family, additive-natural-parameter, not the classical
-mean/covariance RTS recursion) does not currently expose an analogous
-lag-one/cross-covariance quantity** (`core.py`'s `smooth()` returns only
-marginal per-timestep moments) — deriving it would be genuinely new,
-nontrivial machinery specific to this codebase's smoothing formalism, not
-a drop-in reuse of the classical RTS-smoother-gain formula.
+case) needs the *smoothed cross-covariance* `Cov(z_t, z_{t-1})`. **This
+repo's smoothing algorithm does not currently expose it** (`core.py`'s
+`smooth()` returns only marginal per-timestep moments); deriving it is
+genuinely new, nontrivial, XFADS-specific machinery.
 
-**v1 decision: omit the cross-covariance term**, accepting the resulting
-approximation error, because the error is directionally favorable and
-self-regulating rather than a fixed, arbitrary bias:
-
-- Dropping the (positive, under normal dynamics) cross term means the
-  approximation computes `Var(z_t) + A^2 Var(z_{t-1})` instead of the true
-  (smaller) `Var(z_t) + A^2 Var(z_{t-1}) - 2A\,Cov(z_t,z_{t-1})` — i.e. it
-  systematically **overestimates** the residual statistic, which is the
-  favorable direction relative to the collapse pathology this whole plan
-  worries about.
-- Crucially, the *magnitude* of this overestimation **scales with how
-  collapsed the posterior already is**: as `Q→0` and dynamics become
-  near-deterministic, `z_t` and `z_{t-1}` become *more* correlated
-  (`Cov(z_t,z_{t-1}) → A\cdot Var(z_{t-1})`), so the omitted term — and
-  therefore the compensating overestimation — grows exactly when collapse
-  risk is highest. This is a self-regulating counter-pressure, not a fixed
-  offset, requiring no hand-tuned strength parameter.
-- **Two costs, to be checked empirically, not assumed away**: (1) this is
-  a qualitative, directional argument — whether it's *strong enough* on its
-  own (with or without the floor/clip above) is unknown until measured;
-  (2) it does not vanish once `f` is fully competent — any stable dynamics
-  induces some `z_t`/`z_{t-1}` correlation, so the *converged* estimate
-  will be systematically somewhat inflated relative to the true `Q`, not
-  just protected during training. Per the success-metric framing, that's
-  only a real problem if it measurably hurts `f`'s accuracy — check via the
-  with/without-cross-covariance comparison in Steps/Validation, not by
-  reasoning about `Q`'s own bias in isolation.
-
-This is now the **primary candidate protection mechanism** against Problem
-2, superseding an earlier draft of this plan that relied on `n`-vs-
-`prior_dof` self-pacing from an informative shrinkage prior — that
-mechanism required a floor value informative enough to matter, which the
-previous section rules out. If the harness shows this alone is
-insufficient, revisit either (a) deriving the exact cross-covariance term,
-or (b) reintroducing some other explicit pacing mechanism (annealing,
-gating) — not by quietly making the floor informative again.
-
-**The v1 formula, written out precisely** (previously only described
-conceptually): with `m = mean(moment_smoothed_tm1)`, `P = Cov(moment_
-smoothed_tm1)`, `m' = mean(moment_smoothed_t)`, `P' = Cov(moment_smoothed_t)`,
-and `J = jax.jacrev(transition_fn)(m)`:
-
-```
-r = m' - transition_fn(m)
-raw_stat = outer(r, r) + P' + J @ P @ J.T
-```
-
-Note this is a first-order (Jacobian/delta-method) linearization of
-"propagate `P` through `f`" — conceptually similar to what `transition_points`
-does for the forward prediction step (UT is exact to second order for
-smooth `f`; this is only first-order), but computed independently via
-direct autodiff on `transition_fn`, not by calling `Approx.transition_points`
-or depending on its `mc_size`/dispatch machinery. That's what "decoupled"
-means here precisely: no shared code path or abstraction with the forward
-prediction step, not "conceptually unrelated math" — the M-step's own
-linearization can be cheaper (one Jacobian, not `2D+1` points) since it
-only needs a local correction around a single smoothed mean, not a
-globally accurate moment-matched propagation.
-
-### Integration into `train()`
-
-Full integration, matching `R`'s final design (not standalone-only): an
-`mstep` on the noise-owning component (see placement question above),
-called from `train()` analogous to `Observation.mstep`, with an equivalent
-of `mstep_mode`/cadence control. Given the higher risk profile here, this
-should land only after the synthetic harness (Steps 1-2) validates the
-mechanism — unlike `R`, where the mechanism's correctness was
-straightforward enough to validate via unit tests alone before wiring into
-`train()`.
+**v1 (used in all experiments above): omit the cross-covariance term.**
+Dropping it means the approximation computes `Var(z_t) + A^2Var(z_{t-1})`
+instead of the true (smaller) `Var(z_t) + A^2Var(z_{t-1}) -
+2A\,Cov(z_t,z_{t-1})` — systematically overestimating the residual
+statistic, with the overestimation growing as `z_t`/`z_{t-1}` become more
+correlated (i.e. as the posterior narrows toward determinism) — a
+self-regulating counter-pressure against collapse specifically, requiring
+no hand-tuned strength parameter. **Not tested in isolation**: every result
+in this doc uses this v1 approximation; there is no with/without-
+cross-covariance ablation yet, so its specific contribution (as opposed to
+the MAP-shrinkage/alternating-EM structure as a whole) is unconfirmed.
 
 ### Tracked, related fix (not part of this plan's core scope, but should land alongside it)
 
 `dyn_conf.state_noise` (a `Dynamics`-config field) currently seeds
 `model.noise_free`, even though `noise_free`'s parameterization is entirely
-owned by `Approx`, not by whichever `Dynamics` subclass is plugged in. This
-is a config-ownership leak: swapping `Dynamics` implementations shouldn't
+owned by `Approx`, not by whichever `Dynamics` subclass is plugged in.
+Config-ownership leak: swapping `Dynamics` implementations shouldn't
 implicitly carry a noise-init parameter unrelated to the dynamics plugin.
 Fix: relocate the init hyperparameter to a top-level `Approx`/`XFADS`-owned
-config field (sibling to `conf.state_dim`). This is a config-shape change
-and should be done explicitly/documented (README, `AGENTS.md`
-config-invariants section, changelog), not silently bundled into a code
-diff. Not blocking for the synthetic harness (Step 1 can use direct
-arguments/hardcoded values without this fix landing first) — worth deciding
-explicitly that it's deferred rather than assuming it blocks Step 1.
+config field (sibling to `conf.state_dim`), documented explicitly (README,
+`AGENTS.md`, changelog), not silently bundled into a code diff. Not
+blocking for further validation work — the prototype scripts use direct
+arguments, bypassing this entirely.
 
-## Required safeguards (non-negotiable)
+## Required safeguards
 
-- **A numerical-safety floor is needed, but it is *not* a Bayesian anchor**
-  — see Design. Keep it minimal; do not let it (or any blend weight
-  attached to it) become informative enough to anchor early training.
-- **Prefer an exogenous diagnostic to gate/monitor the update**: a k-step-
-  ahead forecast, decoded through the observation model and checked against
-  held-out `y`, is the only way to anchor `Q` to something outside the
-  self-referential loop (analogous to what `y` already provides for `R`
-  directly) — kept as a backstop given the latent-`z` entanglement risk,
-  even though the cross-covariance-omission bias may do most of the work.
-  Start as a logged monitor, not a blocking gate, for the first harness
-  pass; upgrade only if the monitor shows it's needed.
-- **Monitor the trend**: track `||Q||`, posterior variance, and (per the
-  success-metric framing) `f`'s own held-out forecast accuracy across
-  rounds/epochs — a monotonically shrinking `Q` with no corresponding
-  improvement in `f`'s accuracy is the collapse signature to watch for,
-  distinct from genuine convergence.
-
-**Open, not yet resolved either way (Step 1 must test, not assume):**
-- Whether `noise_schedule`-style hand-tuned annealing is still needed
-  alongside the cross-covariance-omission mechanism, or becomes redundant.
-- Whether cadence can safely be per-minibatch (matching `R`'s cadence), or
-  whether the original slow-cadence caution still applies.
-- Whether the cross-covariance omission alone is sufficient, or the exact
-  lag-one-covariance term needs to be derived after all.
-
-## Steps
-
-1. **Build a synthetic validation harness first**, reusing existing
-   infrastructure rather than new generators where possible:
-   - The Van der Pol (`examples/vdp_example.py`) and oscillator-bank
-     (`benchmarks/benchmark_highd_oscillator.py`) systems, both already
-     implemented — but currently **pure deterministic RK4 integration with
-     no stochastic noise injection at all**. Adding a known `Q_true` requires
-     modifying the generators (e.g. `z_next = rk4_step(z, dt) + sqrt(Q_true)
-     @ noise` per step, or an Euler-Maruyama-consistent step) — real,
-     necessary work, not just reuse.
-   - **Add a Lorenz system generator** (not currently in this repo) — the
-     actual motivating target system, same noise-injection treatment.
-   - Include a **fully-known-`z` mode** (no latent inference at all, `f`/`Q`
-     fit directly against ground-truth transitions) as the clean baseline —
-     isolates the joint-MLE-degeneracy argument (should work straightforwardly)
-     from the latent-`z` entanglement risk (may not).
-   - SNR: start with a single value (`SNR = Q_true / R = 1`) rather than a
-     full sweep, to get a first working comparison quickly; expand to a
-     sweep only if that single point doesn't already resolve the open
-     questions below.
-2. Implement `mstep_transition_stat` / `mstep_noise_shrink`, decoupled from
-   `Approx.transition_points`, with the cross-covariance term omitted (v1)
-   and the floor/clip as described in Design.
-3. Implement `train()` integration (cadence control analogous to
-   `mstep_mode`) and the tracked config-relocation fix (or explicitly defer
-   the latter — see Design).
-4. Run the harness with these specific, previously-unresolved comparisons,
-   using **`f`'s accuracy against the true dynamics as the primary metric**
-   (vector-field/forecast error against ground truth; `Q`'s own trajectory
-   as diagnostic only):
-   - Known-`z` baseline vs. latent-`z`: does `f` recover the true dynamics
-     cleanly in both, or only the former (i.e. does the latent-`z`
-     entanglement matter in practice)?
-   - With vs. without the cross-covariance term (approximate now,
-     exact/derived later if this comparison shows it matters): does
-     omitting it measurably hurt `f`'s accuracy, or is the self-regulating
-     bias good enough on its own?
-   - With vs. without `noise_schedule`-style annealing, on top of the
-     cross-covariance-omission mechanism: does annealing still add
-     anything, or is it now redundant?
-   - Cadence sweep (per-minibatch vs. slower rounds): does the mechanism
-     tolerate a fast cadence safely?
-   Report all comparisons explicitly, not just "did `f` converge well."
-5. Only after the synthetic harness passes, validate on a real downstream
-   Lorenz dataset without any hand-tuned annealing schedule — the actual
-   test of whether this plan achieves its stated goal.
-6. Document results, including any observed collapse cases, which
-   safeguard did or did not prevent them (measured via `f`'s accuracy, not
-   `Q`'s value), and the outcome of the comparisons in Step 4.
-
-## Validation plan
-
-- Unit tests for `mstep_transition_stat`/`mstep_noise_shrink` matching an
-  independently computed statistic (mirroring the exact-match /
-  `NotImplementedError` / duck-typed-dispatch pattern from the existing
-  `mstep_gaussian_cov` tests, adapted to this design's decoupled
-  computation).
-- **Known-`z` recovery test** — the clean baseline (Step 1); should recover
-  accurate `f` straightforwardly, checkable as a standard held-out
-  generalization test (does `f` fit unseen transitions, or has it
-  memorized training ones).
-- **Latent-`z`, synthetic-SSM recovery test (VDP, oscillator-bank, Lorenz)**
-  at `SNR=1` initially — the key discriminative test for whether the
-  cross-covariance-omission mechanism survives the entanglement the
-  known-`z` case doesn't have. Primary metric: `f`'s accuracy against the
-  true dynamics, not `Q`'s value.
-- **With/without cross-covariance term, with/without annealing, and a
-  cadence sweep** — all three explicitly reported regardless of outcome
-  (see Steps 4/6).
-- Real-data campaign (Lorenz specifically) re-run only after the synthetic
-  tests pass, without a hand-tuned annealing schedule — the actual test of
-  this plan's stated goal.
+- **`Q` should stay "in the loss" during training, never fully decoupled**
+  — the single clearest, most consistently validated finding. Full
+  decoupling (Approach B in both experiments) underperformed on `f`-
+  accuracy in both tests, even when its own `Q` estimate was more accurate.
+- **MAP-shrunk periodic updates toward a genuinely informative prior**,
+  not a numerical-safety-only floor — reverses the earlier draft's
+  conclusion (see Design). `prior=1.0, prior_dof_frac=0.1` validated as *a*
+  working choice, not necessarily a good one; not swept.
+- **Round/epoch-based cadence**, matching what was actually tested — do
+  not assume continuous per-minibatch updates are safe without testing
+  that specifically (see Open questions).
+- **A hard numerical floor is still worth keeping as an independent,
+  narrow guard** (`_MIN_VARIANCE`-style) against literal numerical failure,
+  even though the validated mechanism's prior is now informative rather
+  than floor-only — the floor and the informative prior serve different
+  purposes and aren't mutually exclusive.
+- **Monitor the trend**: track `||Q||`, posterior variance, and `f`'s own
+  held-out forecast accuracy across rounds — per-dimension divergence (as
+  seen in the Lorenz z-coordinate) is worth watching, not necessarily a red
+  flag by itself.
 
 ## Open questions
 
+- **Multi-seed replication** — both experiments are single-seed; the
+  magnitude (and even direction, in edge cases) of the A/B/C gap needs
+  confirming before treating this as settled.
+- **Broader system coverage** — only Lorenz has been tested; VDP and the
+  oscillator-bank benchmark (both already used elsewhere in this repo) are
+  not yet run through either harness script.
+- **Whether the cross-covariance omission's specific contribution matters**
+  — an explicit with/without ablation hasn't been run; all current results
+  include it.
+- **Whether continuous per-minibatch cadence is safe** — only round-based
+  cadence has been tested; do not assume `R`'s per-minibatch safety
+  transfers.
+- **Sensitivity to `prior`/`prior_dof_frac`** — picked once (`1.0`, `0.1`),
+  not swept; how much of the C-beats-A/B result depends on this specific
+  choice is unknown.
+- **The intended `SNR=Q_true/R=1` starting point was not actually hit** —
+  both experiments used `q_true=0.01` with observation noise implying
+  `SNR≈0.1`, not `1`. Not corrected yet; worth checking whether results
+  hold at the originally-intended SNR.
 - Final placement of `mstep`/`mstep_transition_stat`: directly on `Approx`,
-  or a small dedicated sub-object (see Design)?
-- Whether the cross-covariance-omission bias alone is sufficient (per the
-  with/without comparison), or the exact lag-one-covariance term needs to
-  be derived for this codebase's smoothing formalism after all.
-- Whether `noise_schedule`-style annealing is still needed alongside this
-  mechanism, or becomes redundant.
-- Whether cadence can safely be per-minibatch, or the original slow-cadence
-  caution still applies.
+  or a small dedicated sub-object.
 - Whether the design generalizes cleanly beyond `MVN` once a non-Gaussian
   noise family is attempted.
-- Whether the exogenous k-step-ahead diagnostic should ever become a hard
-  gate (blocking the update) rather than staying a logged monitor.
+- Whether the exogenous k-step-ahead diagnostic (proposed earlier as a
+  backstop) is still needed given how well the alternating-EM mechanism
+  performed without it in these experiments, or can be dropped.
 
 ## Dependencies
 
 - `transition_points.md`: **done** — shipped and `MVN` now defaults to
-  `use_sigma_points=True`, closing Problem 1 by default. Note this plan's
-  own M-step statistic is explicitly *not* built on top of it (see Design).
+  `use_sigma_points=True`, closing Problem 1 by default. This plan's own
+  M-step statistic is explicitly *not* built on top of it (see Design).
 - The tracked `dyn_conf.state_noise` config-relocation fix: real, but
-  explicitly deferred — not blocking for the synthetic harness (Step 1).
-- Deriving the exact lag-one/cross-covariance term (if the harness shows
-  the v1 approximation insufficient) is new, XFADS-specific machinery, not
-  a dependency on anything already planned elsewhere.
+  explicitly deferred.
+- Deriving the exact lag-one/cross-covariance term (if a future ablation
+  shows the v1 approximation insufficient) is new, XFADS-specific
+  machinery, not a dependency on anything already planned elsewhere.
 
 ## Future generalization (noted, out of scope here)
 
 `Observation.mstep`/`Observation.mstep_frozen_paths` have now shipped (see
 [mstep_gaussian_cov](mstep_gaussian_cov.md)). This plan's
 `mstep_transition_stat`/`mstep_noise_shrink` are candidates to converge on
-that same `mstep`/`mstep_frozen_paths` vocabulary (see the "Integration
-into `train()`" section above, which already targets this). Whether `Q`
-can safely adopt `R`'s continuous per-step cadence is an open question for
-Step 1 to resolve empirically, not a settled conclusion either way.
+that same `mstep`/`mstep_frozen_paths` vocabulary once `train()`
+integration is built, with a round/epoch-based cadence (see Design) as the
+validated starting point, not `R`'s continuous per-minibatch default.
