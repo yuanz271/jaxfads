@@ -232,3 +232,38 @@ def test_registry_lookup():
     from jaxfads.base import Approx
 
     assert Approx.get_subclass("MVN") is MVN
+
+
+@pytest.mark.parametrize("dim,rank", _RANK_CASES)
+def test_transition_points_sigma_points_shape_and_weights(dim, rank):
+    """MVN(use_sigma_points=True).transition_points returns 2*dim+1 points
+    and weights summing to 1, for both diag (rank=0) and full (rank=dim)
+    layouts."""
+    mvn = MVN(dim=dim, rank=rank, use_sigma_points=True)
+    mean = jrnd.normal(jrnd.key(0), (dim,))
+    cov = _random_cov(jrnd.key(1), dim, rank)
+    moment = mvn.pack(mean, cov)
+
+    points, weights = mvn.transition_points(jrnd.key(2), moment, mc_size=4)
+
+    chex.assert_shape(points, (2 * dim + 1, dim))
+    chex.assert_shape(weights, (2 * dim + 1,))
+    chex.assert_trees_all_close(jnp.sum(weights), 1.0, atol=1e-5)
+    chex.assert_trees_all_close(points[0], mean, atol=1e-5)
+
+
+@pytest.mark.parametrize("dim,rank", _RANK_CASES)
+def test_transition_points_explicit_mc_matches_base_contract(dim, rank):
+    """MVN(use_sigma_points=False) (opt-out; MVN defaults to True) still
+    reproduces the base class's plain Monte Carlo contract exactly:
+    mc_size samples, uniform weights 1/mc_size."""
+    mvn = MVN(dim=dim, rank=rank, use_sigma_points=False)
+    mean = jrnd.normal(jrnd.key(0), (dim,))
+    cov = _random_cov(jrnd.key(1), dim, rank)
+    moment = mvn.pack(mean, cov)
+    mc_size = 8
+
+    points, weights = mvn.transition_points(jrnd.key(2), moment, mc_size)
+
+    chex.assert_shape(points, (mc_size, dim))
+    chex.assert_trees_all_close(weights, jnp.full((mc_size,), 1.0 / mc_size), atol=1e-8)

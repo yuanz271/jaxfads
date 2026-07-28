@@ -40,7 +40,10 @@ def expected_predictive_moment(
     mc_size: int,
 ) -> Array:
     """
-    Compute expected predictive moment via Monte Carlo sampling.
+    Compute expected predictive moment via a weighted point set from
+    ``approx.transition_points`` (default: Monte Carlo; some ``Approx``
+    implementations may override with a deterministic point set, e.g.
+    unscented-transform sigma points -- see ``docs/transition_points.md``).
 
     Implements Eq (12): ``μ̄_t = E_{π(z_{t-1})}[μ_θ(z_{t-1})]``
     where ``μ_θ`` is the predictive moment function (Eq 4)
@@ -66,45 +69,54 @@ def expected_predictive_moment(
     approx : Approx
         Exponential family approximation instance.
     mc_size : int
-        Number of Monte Carlo samples.
+        Requested point/sample count; may be ignored by deterministic
+        ``transition_points`` overrides.
 
     Returns
     -------
     Array
-        Expected predictive moment parameters (i.e. averaged
+        Expected predictive moment parameters (i.e. weighted-averaged
         ``E[T(z_t) | z_{t-1}]``).
 
     Notes
     -----
-    The same ``key`` is intentionally reused for every MC sample when
+    The same ``key`` is intentionally reused for every point when
     evaluating ``f``.  This keeps any stochastic regularisation inside
     ``f`` (e.g. dropout) fixed within the expectation.
 
     Non-finite handling:
-    After computing per-sample predictive moment, any sample containing
-    NaN or Inf values is masked out before averaging.
-    If every sample is non-finite the result will itself be non-finite.
+    After computing per-point predictive moment, any point containing
+    NaN or Inf values is masked out (its weight zeroed) before the
+    weighted average. If every point is non-finite the result will itself
+    be non-finite.
     """
     key, subkey = jrnd.split(key)
-    z = approx.sample_by_moment(subkey, moment, mc_size)
-    u_bc = jnp.broadcast_to(u, shape=(mc_size,) + u.shape)
-    c_bc = jnp.broadcast_to(c, shape=(mc_size,) + c.shape)
+    z, weights = approx.transition_points(subkey, moment, mc_size)
+    n_points = z.shape[0]  # not mc_size -- deterministic policies may return
+    # a different, fixed point count (e.g. unscented-transform sigma points
+    # always return 2*dim + 1, regardless of the mc_size argument).
+    u_bc = jnp.broadcast_to(u, shape=(n_points,) + u.shape)
+    c_bc = jnp.broadcast_to(c, shape=(n_points,) + c.shape)
 
-    # Transition outputs for each MC sample
+    # Transition outputs for each point
     zs = jax.vmap(partial(f, key=key), in_axes=(0, 0, 0))(z, u_bc, c_bc)
 
-    # Per-sample predictive moment
+    # Per-point predictive moment
     predictive_moment_samples = jax.vmap(
         partial(approx.predictive_moment, noise=noise)
     )(zs)
 
-    # Non-finite safe averaging
-    valid = jnp.all(jnp.isfinite(predictive_moment_samples), axis=-1)  # (S,)
+    # Non-finite safe weighted averaging. Strict generalization of the
+    # former uniform-weight reduction (sum(safe)/n_valid): for weights
+    # w_i = 1/mc_size, sum(w_valid*safe)/sum(w_valid) reduces to that
+    # formula exactly.
+    valid = jnp.all(jnp.isfinite(predictive_moment_samples), axis=-1)  # (n_points,)
     safe = jnp.where(valid[:, None], predictive_moment_samples, 0.0)
-    n_valid = jnp.sum(valid)
+    w_valid = jnp.where(valid, weights, 0.0)
+    w_sum = jnp.sum(w_valid)
     avg = jnp.where(
-        n_valid > 0,
-        jnp.sum(safe, axis=0) / n_valid,
+        w_sum > 0,
+        jnp.sum(w_valid[:, None] * safe, axis=0) / w_sum,
         jnp.full(predictive_moment_samples.shape[-1:], jnp.nan),
     )
 

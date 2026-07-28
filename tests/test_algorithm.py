@@ -74,11 +74,23 @@ def test_filter_shapes_and_finite(diag):
         chex.assert_tree_all_finite(arr)
 
 
-def test_bismooth_shapes_and_finite(diag):
+def test_bismooth_shapes_and_finite():
+    """Pinned to use_sigma_points=False (not the shared `diag` fixture,
+    which now defaults to True): _bismooth is documented as not yet
+    production-ready (requires real backward dynamics; _DummyModel uses
+    Identity for both forward and backward as a placeholder), and
+    combining two identical forward/backward filtering passes can produce
+    a genuinely negative-definite natural-parameter sum here -- MC's tfd
+    sampling tolerates that silently, UT's explicit Cholesky correctly
+    does not. Unrelated to transition_points' own correctness; not
+    something to fix as part of that work."""
+    from jaxfads.distributions import MVN
+
     state_dim, T = 2, 5
-    model = _DummyModel(diag, state_dim)
+    approx = MVN(dim=state_dim, rank=state_dim, use_sigma_points=False)
+    model = _DummyModel(approx, state_dim)
     key = jr.key(1)
-    param_dim = diag.param_size()
+    param_dim = approx.param_size()
 
     alpha = jnp.zeros((T, param_dim))
     u = jnp.zeros((T, 0))
@@ -249,7 +261,10 @@ def test_expected_predictive_moment_partial_invalid():
     state_dim, mc_size = 4, 64
     key = jr.key(42)
 
-    approx = MVN(dim=state_dim, rank=state_dim)
+    # Pinned to use_sigma_points=False: this test is specifically about MC
+    # sample masking (see docstring); UT is covered separately by
+    # test_expected_predictive_moment_unscented_partial_invalid below.
+    approx = MVN(dim=state_dim, rank=state_dim, use_sigma_points=False)
     noise = approx.canon_to_moment(approx.free_to_canon(approx.free_from_kw(scale=1.0)))
 
     mp = approx.pack(jnp.zeros(state_dim), 25.0 * jnp.eye(state_dim))
@@ -282,6 +297,103 @@ def test_expected_predictive_moment_all_invalid(diag):
 
     chex.assert_shape(result, (diag.param_size(),))
     assert not jnp.all(jnp.isfinite(result))
+
+
+# -----------------------------------------------------------------------------
+# transition_points: unscented sigma points vs. plain MC
+# -----------------------------------------------------------------------------
+
+
+def test_transition_points_unscented_exact_for_linear_transition():
+    """Discriminative test for docs/transition_points.md: for a linear
+    transition, the unscented transform's predicted mean/covariance
+    exactly matches the true linear-Gaussian pushforward
+    (mean_true = A @ mean + b, cov_true = A @ cov @ A.T + Q); plain MC at
+    a matched point count does not (residual sampling error)."""
+    from jaxfads.distributions import MVN
+
+    state_dim = 3
+    key = jr.key(7)
+
+    approx_ut = MVN(dim=state_dim, rank=state_dim, use_sigma_points=True)
+    approx_mc = MVN(dim=state_dim, rank=state_dim, use_sigma_points=False)
+
+    A = 0.9 * jnp.eye(state_dim) + 0.05 * jr.normal(jr.key(1), (state_dim, state_dim))
+    b = jr.normal(jr.key(2), (state_dim,))
+
+    def f(z, u, c, *, key=None):
+        del u, c, key
+        return A @ z + b
+
+    mean = jr.normal(jr.key(3), (state_dim,))
+    cov_free = jr.normal(jr.key(4), (state_dim, state_dim))
+    cov = cov_free @ cov_free.T + 0.5 * jnp.eye(state_dim)
+    mp = approx_ut.pack(mean, cov)
+
+    noise = approx_ut.canon_to_moment(
+        approx_ut.free_to_canon(approx_ut.free_from_kw(scale=0.3))
+    )
+    _, Q = approx_ut.unpack(noise)
+
+    mean_true = A @ mean + b
+    cov_true = A @ cov @ A.T + Q
+
+    u, c = jnp.zeros(0), jnp.zeros(0)
+    mc_size_matched = 2 * state_dim + 1  # same f-evaluation count as UT
+
+    result_ut = expected_predictive_moment(
+        key, mp, u, c, f, noise, approx_ut, mc_size_matched
+    )
+    mean_ut, cov_ut = approx_ut.unpack(result_ut)
+    chex.assert_trees_all_close(mean_ut, mean_true, atol=1e-4)
+    chex.assert_trees_all_close(cov_ut, cov_true, atol=1e-4)
+
+    result_mc = expected_predictive_moment(
+        key, mp, u, c, f, noise, approx_mc, mc_size_matched
+    )
+    _, cov_mc = approx_mc.unpack(result_mc)
+    # MC at the same point count has residual sampling error -- it should
+    # not land anywhere near UT's tolerance for the same comparison.
+    assert not jnp.allclose(cov_mc, cov_true, atol=1e-4)
+
+
+def _coord_threshold_dynamics(
+    z: Array,
+    u: Array,
+    c: Array,
+    *,
+    key: Array | None = None,
+    coord: int = 0,
+    threshold: float = 1.0,
+) -> Array:
+    """Dynamics that return NaN when z[coord] > threshold."""
+    del u, c, key
+    invalid = z[coord] > threshold
+    return jnp.where(invalid, jnp.full_like(z, jnp.nan), z * 0.9)
+
+
+def test_expected_predictive_moment_unscented_partial_invalid():
+    """When exactly one of the 2*dim+1 deterministic sigma points produces
+    NaN, the weighted-masking reduction should still degrade correctly
+    (finite output) at this coarser, deterministic point count."""
+    from jaxfads.distributions import MVN
+
+    state_dim = 2
+    key = jr.key(11)
+
+    approx = MVN(dim=state_dim, rank=state_dim, use_sigma_points=True)
+    noise = approx.canon_to_moment(approx.free_to_canon(approx.free_from_kw(scale=1.0)))
+    mp = approx.pack(jnp.zeros(state_dim), jnp.eye(state_dim))
+    u, c = jnp.zeros(0), jnp.zeros(0)
+
+    # ut_alpha=1.0, ut_kappa=0.0 defaults -> c=dim=2, so the sigma points at
+    # mean=0, cov=I are (0,0), (+-sqrt(2),0), (0,+-sqrt(2)) -- exactly one
+    # of them (+sqrt(2), 0) has coord-0 > 1.0.
+    f = fpartial(_coord_threshold_dynamics, coord=0, threshold=1.0)
+
+    result = expected_predictive_moment(key, mp, u, c, f, noise, approx, mc_size=4)
+    chex.assert_shape(result, (approx.param_size(),))
+    assert jnp.all(jnp.isfinite(result))
 
 
 # -----------------------------------------------------------------------------

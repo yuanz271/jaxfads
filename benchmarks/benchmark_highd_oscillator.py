@@ -162,12 +162,43 @@ def main() -> None:
         covariates = jnp.zeros((args.n_trials, args.n_steps, 0))
         data = (times, obs, controls, covariates)
 
-        variants = [
-            ("DiagMVN", "MVN", {"rank": 0}),
-            ("FullMVN", "MVN", {}),
-        ] + [(f"LoRaMVN-r{r}", "MVN", {"rank": r}) for r in ranks if r <= dim]
+        # MVN defaults to use_sigma_points=True; every "plain MC" variant
+        # below pins use_sigma_points=False explicitly so this comparison
+        # stays meaningful regardless of MVN's own default.
+        variants = (
+            [
+                ("DiagMVN", "MVN", {"rank": 0, "use_sigma_points": False}, None),
+                ("FullMVN", "MVN", {"use_sigma_points": False}, None),
+            ]
+            + [
+                (f"LoRaMVN-r{r}", "MVN", {"rank": r, "use_sigma_points": False}, None)
+                for r in ranks
+                if r <= dim
+            ]
+            + [
+                # Deliberately below the mc_size >= dim+1 safety threshold
+                # (transition_points' rank-deficiency warning) -- an
+                # explicit comparison point, not relying on the sweep's
+                # own default (now fixed to a safe dim+1) to demonstrate
+                # the pathology by accident.
+                ("FullMVN-mc4-unsafe", "MVN", {"use_sigma_points": False}, 4),
+                # Deterministic unscented-transform sigma points instead of
+                # MC; mc_size is ignored (always 2*dim+1 points).
+                ("FullMVN-UT", "MVN", {"use_sigma_points": True}, None),
+            ]
+            + [
+                # use_sigma_points only affects transition_points, which
+                # branches on approx._layout.is_diag (True for rank=0,
+                # False for any rank>0) -- never on the specific rank
+                # value, so it composes with LoRa's low-rank encoder
+                # parameterization exactly like plain MC does.
+                (f"LoRaMVN-r{r}-UT", "MVN", {"rank": r, "use_sigma_points": True}, None)
+                for r in ranks
+                if r <= dim
+            ]
+        )
 
-        for variant_name, approx_name, approx_kwargs in variants:
+        for variant_name, approx_name, approx_kwargs, mc_size_override in variants:
             for seed in seeds:
                 conf = OmegaConf.create(
                     {
@@ -183,7 +214,18 @@ def main() -> None:
                         "fb_penalty": 0.0,
                         "noise_penalty": 0.01,
                         "dropout": 0.0,
-                        "mc_size": 4,
+                        # Safe margin against the transition_points
+                        # rank-deficiency warning (mc_size <= state_dim):
+                        # the MC spread term needs mc_size >= dim + 1 to be
+                        # full rank, scaled per dim rather than one fixed
+                        # value across the sweep. mc_size_override lets
+                        # specific variants (the deliberate "unsafe" MC
+                        # comparison point) opt out of this safety margin.
+                        "mc_size": (
+                            mc_size_override
+                            if mc_size_override is not None
+                            else dim + 1
+                        ),
                         "dyn_conf": {
                             "input_dim": 0,
                             "context_dim": 0,

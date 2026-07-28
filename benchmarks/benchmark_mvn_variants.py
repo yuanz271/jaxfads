@@ -50,12 +50,22 @@ def _build_data(*, n_trials: int, n_steps: int, dt: float, mu: float, obs_dim: i
 
 
 def _variant_rows(rank_list: list[int]):
+    # MVN defaults to use_sigma_points=True; pin False so this rank
+    # comparison isn't silently confounded by also switching propagation
+    # method (that's a different question, covered by
+    # benchmarks/benchmark_highd_oscillator.py).
     rows = [
-        dict(name="DiagMVN", approx="MVN", approx_kwargs={"rank": 0}),
-        dict(name="FullMVN", approx="MVN", approx_kwargs={}),
+        dict(name="DiagMVN", approx="MVN", approx_kwargs={"rank": 0, "use_sigma_points": False}),
+        dict(name="FullMVN", approx="MVN", approx_kwargs={"use_sigma_points": False}),
     ]
     for r in rank_list:
-        rows.append(dict(name=f"LoRaMVN-r{r}", approx="MVN", approx_kwargs={"rank": r}))
+        rows.append(
+            dict(
+                name=f"LoRaMVN-r{r}",
+                approx="MVN",
+                approx_kwargs={"rank": r, "use_sigma_points": False},
+            )
+        )
     return rows
 
 

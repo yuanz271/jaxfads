@@ -181,7 +181,15 @@ class MVN(Approx):
     ``rank=0``.
     """
 
-    def __init__(self, dim: int, rank: int):
+    def __init__(
+        self,
+        dim: int,
+        rank: int,
+        *,
+        use_sigma_points: bool = True,
+        ut_alpha: float = 1.0,
+        ut_kappa: float = 0.0,
+    ):
         dim = int(dim)
         rank = int(rank)
         if dim <= 0:
@@ -194,6 +202,9 @@ class MVN(Approx):
         structure: Literal["full", "diag"] = "diag" if rank == 0 else "full"
         self._layout = _Layout(dim=dim, structure=structure)
         self._rank = rank
+        self._use_sigma_points = use_sigma_points
+        self._ut_alpha = ut_alpha
+        self._ut_kappa = ut_kappa
 
     # ---------------------------------------------------------------------
     # sizes
@@ -345,6 +356,23 @@ class MVN(Approx):
         q = self._tfd_dist_from_moment(moment2)
         return tfd.kl_divergence(p, q, allow_nan_stats=False)
 
+    def transition_points(
+        self, key: Array, moment: Array, mc_size: int
+    ) -> tuple[Array, Array]:
+        """See base class.
+
+        Deterministic unscented-transform sigma points when
+        ``use_sigma_points=True`` (constructor kwarg); otherwise falls back
+        to the base class's plain Monte Carlo default via ``super()``, so
+        this class stays in sync with any future change to that default
+        instead of duplicating it.
+        """
+        if self._use_sigma_points:
+            return _unscented_transition_points(
+                self, key, moment, mc_size, alpha=self._ut_alpha, kappa=self._ut_kappa
+            )
+        return super().transition_points(key, moment, mc_size)
+
     # ---------------------------------------------------------------------
     # free ↔ canon
     # ---------------------------------------------------------------------
@@ -468,3 +496,57 @@ class MVN(Approx):
         """
         _, Q = self.unpack(noise)
         return self.pack(z, Q)
+
+
+# ---------------------------------------------------------------------------
+# unscented-transform transition points
+# ---------------------------------------------------------------------------
+
+
+def _unscented_transition_points(
+    approx: MVN,
+    key: Array,
+    moment: Array,
+    mc_size: int,
+    *,
+    alpha: float,
+    kappa: float,
+) -> tuple[Array, Array]:
+    """Deterministic ``2*dim + 1`` unscented-transform sigma points and
+    weights for ``approx``'s distribution.
+
+    Standalone, composable, independently testable -- ``MVN.
+    transition_points`` merely delegates to it when ``use_sigma_points=True``.
+    Ignores ``key`` and ``mc_size`` (point count is always ``2*dim + 1``, not
+    ``mc_size``-controlled). See ``docs/transition_points.md`` for the
+    derivation and the reasoning behind using a single weight set (no
+    separate covariance/``beta`` weights) and the ``alpha=1.0, kappa=0.0``
+    default (chosen for float32 numerical stability, not the smaller
+    ``alpha`` common in the UKF literature).
+    """
+    del key, mc_size
+    mean, cov = approx.unpack(moment)
+    dim = mean.shape[-1]
+
+    lam = alpha**2 * (dim + kappa) - dim
+    c = dim + lam
+
+    if approx._layout.is_diag:
+        sqrt_c_col = jnp.sqrt(c * jnp.diag(cov))  # (dim,)
+        spread = jnp.diag(
+            sqrt_c_col
+        )  # (dim, dim), columns = sqrt(c) * e_i * sqrt(var_i)
+    else:
+        chol = jnp.linalg.cholesky(cov + _EPS * jnp.eye(dim, dtype=cov.dtype))
+        spread = jnp.sqrt(c) * chol  # (dim, dim), columns are the spread directions
+
+    points = jnp.concatenate(
+        (mean[None, :], mean[None, :] + spread.T, mean[None, :] - spread.T),
+        axis=0,
+    )  # (2*dim + 1, dim)
+
+    w0 = jnp.asarray(lam / c, dtype=mean.dtype)
+    wi = jnp.full((2 * dim,), 1.0 / (2.0 * c), dtype=mean.dtype)
+    weights = jnp.concatenate((w0[None], wi), axis=0)
+
+    return points, weights
