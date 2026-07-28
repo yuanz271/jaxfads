@@ -357,6 +357,51 @@ def test_transition_points_unscented_exact_for_linear_transition():
     assert not jnp.allclose(cov_mc, cov_true, atol=1e-4)
 
 
+def test_mstep_transition_stat_matches_independent_reference():
+    """core.mstep_transition_stat's v1 formula (no cross-covariance term)
+    matches an independently computed reference on a small linear case:
+    outer(r, r) + P' + J @ P @ J.T with r = m' - f(m), J = jacrev(f)(m)."""
+    from jaxfads.distributions import MVN
+
+    state_dim = 2
+    approx = MVN(dim=state_dim, rank=state_dim)
+
+    A = jnp.array([[0.9, 0.1], [-0.2, 0.8]])
+    b = jnp.array([0.05, -0.05])
+
+    def f(z, u, c, *, key=None):
+        del u, c, key
+        return A @ z + b
+
+    n_pairs = 3
+    key = jr.key(0)
+    keys = jr.split(key, 4 * n_pairs)
+    means_tm1 = jr.normal(keys[0], (n_pairs, state_dim))
+    means_t = jr.normal(keys[1], (n_pairs, state_dim))
+
+    def _random_cov(k):
+        m = jr.normal(k, (state_dim, state_dim))
+        return m @ m.T + 0.1 * jnp.eye(state_dim)
+
+    covs_tm1 = jax.vmap(_random_cov)(keys[2 : 2 + n_pairs])
+    covs_t = jax.vmap(_random_cov)(keys[2 + n_pairs : 2 + 2 * n_pairs])
+
+    moment_tm1 = jax.vmap(approx.pack)(means_tm1, covs_tm1)[:, None, :]
+    moment_t = jax.vmap(approx.pack)(means_t, covs_t)[:, None, :]
+    u = jnp.zeros((n_pairs, 1, 0))
+    c = jnp.zeros((n_pairs, 1, 0))
+
+    got = core.mstep_transition_stat(
+        approx, moment_t, moment_tm1, u, c, f, key=jr.key(1)
+    )
+    chex.assert_shape(got, (n_pairs, 1, state_dim, state_dim))
+
+    for i in range(n_pairs):
+        r = means_t[i] - (A @ means_tm1[i] + b)
+        expected = jnp.outer(r, r) + covs_t[i] + A @ covs_tm1[i] @ A.T
+        chex.assert_trees_all_close(got[i, 0], expected, atol=1e-5)
+
+
 def _coord_threshold_dynamics(
     z: Array,
     u: Array,

@@ -1,9 +1,11 @@
+import jax
 import pytest
 from jax import numpy as jnp
 from jax import random as jrnd
 import chex
 import tensorflow_probability.substrates.jax.distributions as tfp
 
+from jaxfads.base import Approx
 from jaxfads.distributions import MVN
 
 # rank=0 → diagonal, rank=dim → full
@@ -267,3 +269,77 @@ def test_transition_points_explicit_mc_matches_base_contract(dim, rank):
 
     chex.assert_shape(points, (mc_size, dim))
     chex.assert_trees_all_close(weights, jnp.full((mc_size,), 1.0 / mc_size), atol=1e-8)
+
+
+def test_approx_shrink_default_is_noop():
+    """Approx.shrink's base-class default returns raw_stat unchanged for a
+    non-overriding Approx subclass."""
+
+    class _NoShrink(Approx):
+        def natural_to_moment(self, natural):
+            return natural
+
+        def moment_to_natural(self, moment):
+            return moment
+
+        def sample_by_moment(self, key, moment, mc_size):
+            return moment
+
+        def param_size(self):
+            return 1
+
+        def kl(self, moment1, moment2):
+            return jnp.array(0.0)
+
+        def free_to_canon(self, free):
+            return free
+
+        def canon_to_moment(self, canon):
+            return canon
+
+        def canon_to_free(self, canon):
+            return canon
+
+        def moment_to_canon(self, moment):
+            return moment
+
+        def predictive_moment(self, z, noise):
+            return z
+
+        def free_from_kw(self, **kwargs):
+            return jnp.array(0.0)
+
+    raw_stat = jnp.array([1.0, 2.0, 3.0])
+    out = _NoShrink().shrink(raw_stat, prior=None)
+    chex.assert_trees_all_close(out, raw_stat)
+
+
+@pytest.mark.parametrize("dim,rank", _RANK_CASES)
+def test_mvn_shrink_matches_closed_form(dim, rank):
+    """MVN.shrink's MAP-shrinkage blend matches its closed-form definition
+    at known inputs: (n*mean(raw_stat) + prior_dof*value) / (n+prior_dof),
+    re-encoded losslessly (round-trips through free_to_canon).
+    """
+    mvn = MVN(dim=dim, rank=rank)
+    n_pairs = 5
+    key = jrnd.key(0)
+    stats = jax.vmap(lambda k: _random_cov(k, dim, rank))(jrnd.split(key, n_pairs))
+
+    prior_value = 0.5
+    prior_dof = 2.0
+    prior = (prior_value, prior_dof)
+
+    free = mvn.shrink(stats, prior)
+    canon = mvn.free_to_canon(free)
+    got_cov = canon.chol @ canon.chol.T
+
+    mean_stat = jnp.mean(stats, axis=0)
+    expected_value = prior_value * jnp.eye(dim)
+    expected_cov = (n_pairs * mean_stat + prior_dof * expected_value) / (
+        n_pairs + prior_dof
+    )
+    if rank == 0:
+        expected_cov = jnp.diag(jnp.diagonal(expected_cov))
+
+    chex.assert_trees_all_close(got_cov, expected_cov, atol=1e-4)
+    chex.assert_trees_all_close(canon.loc, jnp.zeros(dim), atol=1e-6)

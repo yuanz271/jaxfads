@@ -266,6 +266,68 @@ class XFADS(ConfModule):
         observation = self.observation.initialize(t, y, u, c)
         return eqx.tree_at(lambda m: m.observation, self, observation)
 
+    def mstep(self, t, y, u, c, *, key, prior: Any = None) -> "XFADS":
+        """Closed-form, non-SGD parameter update from a full forward pass,
+        composing both ``self.observation``'s and ``self.approx``'s own
+        ``mstep``-style updates in one call -- the single entry point for
+        both, rather than separate driver functions per parameter.
+
+        This is the only place that knows ``noise_free`` is an attribute
+        name and that this call is about transition noise specifically --
+        neither ``self.approx`` nor :func:`~jaxfads.core.
+        mstep_transition_stat` needs to know either (see
+        ``docs/mstep_dynamics_noise.md``).
+
+        Parameters
+        ----------
+        t, y, u, c : Array
+            As accepted by ``__call__``.
+        key : Array
+            JAX PRNG key for the forward pass.
+        prior : Any, optional
+            Prior spec forwarded verbatim to ``self.approx.shrink`` --
+            opaque to ``XFADS`` itself, structure defined by the concrete
+            ``Approx`` (e.g. ``MVN.shrink`` expects a ``(value,
+            prior_dof)`` pair). ``None`` (default) means: update
+            ``self.observation`` only, leave ``noise_free`` untouched --
+            the same behavior as :func:`~jaxfads.observations.
+            mstep_observation_cov`. Deliberately not given any other
+            default (e.g. a specific ``(value, prior_dof)``), since tuning
+            this is out of scope and no such default has been validated as
+            a good one -- see ``docs/mstep_dynamics_noise.md``.
+
+        Returns
+        -------
+        XFADS
+            A new model with ``observation`` updated (if it overrides
+            ``mstep``) and, if ``prior`` is not ``None``, ``noise_free``
+            updated via ``self.approx.shrink``. All other attributes
+            unchanged.
+        """
+        approx = self.approx
+        _natural, moment, _predicted = self(t, y, u, c, key=key)
+        new_observation = self.observation.mstep(t, moment, y, approx)
+        model = eqx.tree_at(lambda m: m.observation, self, new_observation)
+
+        if prior is None:
+            return model
+
+        moment_tm1 = moment[:, :-1, :]
+        moment_t_ = moment[:, 1:, :]
+        u_tm1 = u[:, :-1, :]
+        c_tm1 = c[:, :-1, :]
+        raw_stat = core.mstep_transition_stat(
+            approx,
+            moment_t_,
+            moment_tm1,
+            u_tm1,
+            c_tm1,
+            self.transition,
+            key=key,
+        )
+        new_noise_free = approx.shrink(raw_stat, prior)
+        return eqx.tree_at(lambda m: m.noise_free, model, new_noise_free)
+
     @classmethod
     def load(cls, path: str | Path):
         """

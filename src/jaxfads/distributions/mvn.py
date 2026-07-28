@@ -30,6 +30,7 @@ from __future__ import annotations
 
 from typing import Literal, NamedTuple
 
+import jax
 from jax import Array
 from jax import numpy as jnp
 from tensorflow_probability.substrates.jax import distributions as tfd
@@ -480,6 +481,54 @@ class MVN(Approx):
         chol_diag = jnp.sqrt(diag)
         canon = MVNParam(loc=loc_arr, chol=jnp.diag(chol_diag))
         return self.canon_to_free(canon)
+
+    def shrink(self, raw_stat: Array, prior: tuple[Array, Array]) -> Array:
+        """See base class.
+
+        Here, and only here, ``raw_stat`` is covariance-shaped (any number
+        of leading batch/time axes, e.g. ``(N, T-1, D, D)`` from
+        :func:`~jaxfads.core.mstep_transition_stat`) and ``prior`` is a
+        ``(value, prior_dof)`` pair: MAP shrinkage
+        ``(n * mean(raw_stat) + prior_dof * value) / (n + prior_dof)``,
+        where ``n`` is the total count of leading-axis instances in
+        ``raw_stat`` (its own batch/time shape, not a separate argument).
+
+        ``value`` may be a scalar (isotropic), a ``(D,)`` vector (diagonal),
+        or a ``(D, D)`` matrix (full) -- broadcast to a full matrix before
+        blending.
+
+        Returns a free-form array via ``self.canon_to_free`` -- *not*
+        ``self.free_from_kw``, which only accepts a diagonal/scalar scale
+        for initialization and cannot round-trip an arbitrary full shrunk
+        covariance. ``loc`` is set to zero, matching how
+        :meth:`predictive_moment` already discards ``noise``'s ``loc``
+        component entirely.
+
+        Never carries gradients: wraps its result in
+        ``jax.lax.stop_gradient`` defensively, matching
+        ``Gaussian.mstep``'s same convention.
+        """
+        d = self._layout.dim
+        value, prior_dof = prior
+        value = jnp.asarray(value, dtype=raw_stat.dtype)
+        if value.ndim == 0:
+            value = value * jnp.eye(d, dtype=raw_stat.dtype)
+        elif value.ndim == 1:
+            value = jnp.diag(value)
+
+        flat_stat = raw_stat.reshape(-1, d, d)
+        n = flat_stat.shape[0]
+        mean_stat = jnp.mean(flat_stat, axis=0)
+
+        shrunk = (n * mean_stat + prior_dof * value) / (n + prior_dof)
+        shrunk = 0.5 * (shrunk + shrunk.T)
+        if self._layout.is_diag:
+            shrunk = jnp.diag(jnp.diagonal(shrunk))
+
+        chol = jnp.linalg.cholesky(shrunk + _EPS * jnp.eye(d, dtype=shrunk.dtype))
+        canon = MVNParam(loc=jnp.zeros(d, dtype=shrunk.dtype), chol=chol)
+        free = self.canon_to_free(canon)
+        return jax.lax.stop_gradient(free)
 
     # ---------------------------------------------------------------------
     # predictive moments

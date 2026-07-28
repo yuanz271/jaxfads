@@ -171,6 +171,24 @@ class Approx(SubclassRegistryMixin, ABC):
         moment = self.canon_to_moment(canon)
         return self.moment_to_natural(moment)
 
+    def shrink(self, raw_stat: Any, prior: Any = None) -> Array:
+        """MAP-shrink a raw sufficient statistic toward ``prior``, returning
+        the result encoded as a free-form array.
+
+        Deliberately opaque at this level: the shape/meaning of ``raw_stat``
+        and the structure of ``prior`` itself (a single value? a
+        ``(value, strength)`` pair? something else entirely for a
+        non-conjugate scheme?) are defined entirely by the subclass -- not
+        every ``Approx`` family need define this meaningfully (e.g. a
+        hypothetical discrete-state family might have no shrinkable
+        dispersion concept at all). See ``docs/mstep_dynamics_noise.md``
+        for the design and ``MVN.shrink`` for the one concrete
+        implementation today.
+
+        Default: no-op, returns ``raw_stat`` unchanged.
+        """
+        return raw_stat
+
     def transition_points(
         self, key: Array, moment: Array, mc_size: int
     ) -> tuple[Array, Array]:

@@ -4,6 +4,7 @@ from tempfile import TemporaryDirectory
 from jax import Array, random as jr
 from jax import numpy as jnp
 from omegaconf import OmegaConf, DictConfig
+import chex
 import equinox as eqx
 import pytest
 from jaxfads.base import Encoder
@@ -469,3 +470,88 @@ def test_xfads_nofilt_mode():
     assert jnp.isfinite(nature).all()
     assert jnp.isfinite(post_mom).all()
     assert jnp.isfinite(prior_mom).all()
+
+
+def _gaussian_model(T, y_size, z_size):
+    model_conf = OmegaConf.create(
+        dict(
+            mode="smooth",
+            observation_dim=y_size,
+            state_dim=z_size,
+            dynamics="MockDynamics",
+            integrator="Identity",
+            approx="MVN",
+            approx_kwargs={},
+            mc_size=2,
+            seed=0,
+            n_steps=T,
+            fb_penalty=0,
+            noise_penalty=0,
+            dropout=0.0,
+            dyn_conf=OmegaConf.create(
+                dict(input_dim=0, context_dim=0, state_noise=1.0)
+            ),
+            enc_conf=OmegaConf.create(dict(width=8, depth=1, dropout=0.0)),
+            obs_conf=OmegaConf.create(
+                dict(
+                    model="GLM",
+                    likelihood="Gaussian",
+                    cov=[1e-3] * y_size,
+                    norm_readout=False,
+                    readout_init="fa",
+                    readout_init_conf=dict(obs_noise_var=0.0),
+                )
+            ),
+        )
+    )
+    return XFADS(model_conf, jr.key(0))
+
+
+def test_mstep_prior_none_updates_observation_only():
+    """XFADS.mstep(..., prior=None) (the default) updates observation only
+    -- noise_free stays untouched -- matching
+    observations.mstep_observation_cov's own behavior."""
+    T, y_size, z_size = 5, 4, 3
+    model = _gaussian_model(T, y_size, z_size)
+
+    times = jnp.broadcast_to(jnp.arange(T), (2, T))
+    y = jr.normal(jr.key(1), (2, T, y_size))
+    u = jnp.zeros((2, T, 0))
+    c = jnp.zeros((2, T, 0))
+    model = model.initialize(times, y, u, c)
+
+    new_model = model.mstep(times, y, u, c, key=jr.key(2))
+
+    assert not jnp.allclose(
+        new_model.observation.likelihood.unconstrained_cov,
+        model.observation.likelihood.unconstrained_cov,
+    )
+    chex.assert_trees_all_close(new_model.noise_free, model.noise_free)
+
+
+def test_mstep_prior_given_updates_both_observation_and_noise():
+    """XFADS.mstep(..., prior=(value, prior_dof)) updates both
+    observation (via Observation.mstep) and noise_free (via
+    approx.shrink), returning a finite, valid covariance for noise_free."""
+    T, y_size, z_size = 5, 4, 3
+    model = _gaussian_model(T, y_size, z_size)
+
+    times = jnp.broadcast_to(jnp.arange(T), (2, T))
+    y = jr.normal(jr.key(1), (2, T, y_size))
+    u = jnp.zeros((2, T, 0))
+    c = jnp.zeros((2, T, 0))
+    model = model.initialize(times, y, u, c)
+
+    new_model = model.mstep(times, y, u, c, key=jr.key(2), prior=(1.0, 0.1))
+
+    assert not jnp.allclose(
+        new_model.observation.likelihood.unconstrained_cov,
+        model.observation.likelihood.unconstrained_cov,
+    )
+    assert not jnp.allclose(new_model.noise_free, model.noise_free)
+
+    approx = model.approx
+    canon = approx.free_to_canon(new_model.noise_free)
+    cov = canon.chol @ canon.chol.T
+    assert jnp.all(jnp.isfinite(cov))
+    chex.assert_trees_all_close(cov, cov.T, atol=1e-5)
