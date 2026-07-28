@@ -316,6 +316,85 @@ arguments, bypassing this entirely.
   seen in the Lorenz z-coordinate) is worth watching, not necessarily a red
   flag by itself.
 
+## Steps toward implementation
+
+Given the validated mechanism above, this is no longer "build a harness,
+**then** decide" (the original framing) -- the harness exists and gave a
+clear result. Sequencing mirrors `mstep_gaussian_cov`'s own precedent:
+ship the core, correctness-tested mechanism as a standalone utility first;
+train()-integration and further real-world validation follow as separate,
+later steps, not blockers.
+
+1. **Settle the placement question now rather than leaving it open**:
+   `Approx.mstep_transition_stat` / `Approx.mstep_noise_shrink`, directly on
+   `Approx` (mirroring `Observation.mstep`'s ABC-level placement) -- `Q`'s
+   parameterization already lives there today, and nothing in the
+   experiments argues for a separate sub-object. Revisit only if a future
+   non-Gaussian noise family demonstrably needs different math.
+2. **Implement `MVN.mstep_transition_stat`**: the v1 formula exactly as
+   used in the experiments (`r = m' - transition_fn(m)`, `raw_stat =
+   outer(r,r) + P' + J@P@J.T`, `J = jax.jacrev(transition_fn)(m)`, no
+   cross-covariance term), decoupled from `Approx.transition_points`
+   entirely (see Design).
+3. **Implement `MVN.mstep_noise_shrink`**: the MAP-shrinkage blend `(n·
+   raw_stat + prior_dof·prior)/(n+prior_dof)`, with `prior`/`prior_dof`
+   as explicit, caller-supplied arguments (no baked-in default derived
+   from `dyn_conf.state_noise` or any other config field -- the
+   experiments used `prior=1.0, prior_dof_frac=0.1` as *a* working choice,
+   not a validated default; don't silently promote it to one).
+4. **Implement a standalone `mstep_dynamics_noise(model, data, *, key,
+   prior, prior_dof, batch_size=None) -> model` driver**, mirroring
+   `mstep_gaussian_cov`'s standalone-first shape: dispatches on
+   `hasattr(model.approx, "mstep_transition_stat")`, runs the smoothing
+   E-step, aggregates the raw stat, calls `mstep_noise_shrink`, writes the
+   result back via `approx.canon_to_free` into `model.noise_free`. This is
+   the library-code equivalent of what the prototype scripts did by hand
+   with `eqx.tree_at` -- usable directly in an alternating-EM loop (`for
+   round in range(n_rounds): model = train(model, data, conf=freeze_q_conf);
+   model = mstep_dynamics_noise(model, data, key=...)`), matching exactly
+   what was validated, without needing `train()`-integration first.
+5. **Unit tests**, correctness-focused (mirroring the 3 existing
+   `mstep_gaussian_cov` tests' shape, adapted): the v1 statistic matches an
+   independently computed reference on a small linear case; the shrinkage
+   formula matches its closed-form definition at known inputs;
+   `NotImplementedError`/no-op behavior for an `Approx` that doesn't
+   implement `mstep_transition_stat`. Skip exhaustive edge-case/negative-
+   path tests per this repo's established test-purge philosophy.
+6. **Scoped test run + lint** on touched files before considering this
+   landed (`tests/test_distribution.py`, `tests/test_algorithm.py` if
+   `core.py`/`base.py` are touched, plus the new test file) -- full suite
+   only before push, per `AGENTS.md`.
+7. **Deferred, explicitly not blocking Step 1-6 landing**:
+   - `train()` integration (cadence control analogous to `mstep_mode`,
+     needing the same trainer-internal surgery `R`'s integration required
+     -- the public `on_epoch_end` hook can't feed a modified model back
+     into the loop, confirmed while building the prototypes).
+   - The tracked `dyn_conf.state_noise` config-relocation fix.
+   - The remaining validation gaps below (multi-seed, more systems,
+     ablations, cadence sweep, prior sensitivity, the SNR correction) --
+     real, but follow-up work on the shipped mechanism, not prerequisites
+     to shipping it, mirroring how `mstep_gaussian_cov`'s own further
+     real-data validation happened after the core mechanism landed.
+
+## Validation plan
+
+**Completed** (see Design for full results):
+- Known-z clean baseline (`benchmarks/mstep_known_z_baseline.py`): joint
+  MLE vs. fully-decoupled vs. alternating-EM comparison, Lorenz, single
+  seed.
+- Latent-z (`benchmarks/mstep_lorenz_latent.py`): same three-way
+  comparison against a real XFADS model with posterior inference, Lorenz,
+  single seed.
+
+**Still pending, tracked as Open questions below, not blocking initial
+implementation**: unit tests for the actual library implementation (Step 5
+above, distinct from the ad hoc prototype scripts); multi-seed replication;
+VDP/oscillator-bank coverage; a with/without cross-covariance-term
+ablation; a cadence sweep (round-based only tested so far); a
+prior/prior_dof_frac sensitivity check; correcting the SNR mismatch
+(intended `1`, actually run at `~0.1`); a real downstream Lorenz campaign
+without hand-tuned annealing, once `train()` integration exists.
+
 ## Open questions
 
 - **Multi-seed replication** — both experiments are single-seed; the
