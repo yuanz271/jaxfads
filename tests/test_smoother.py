@@ -472,45 +472,48 @@ def test_xfads_nofilt_mode():
     assert jnp.isfinite(prior_mom).all()
 
 
-def _gaussian_model(T, y_size, z_size):
-    model_conf = OmegaConf.create(
-        dict(
-            mode="smooth",
-            observation_dim=y_size,
-            state_dim=z_size,
-            dynamics="MockDynamics",
-            integrator="Identity",
-            approx="MVN",
-            approx_kwargs={},
-            mc_size=2,
-            seed=0,
-            n_steps=T,
-            fb_penalty=0,
-            noise_penalty=0,
-            dropout=0.0,
-            dyn_conf=OmegaConf.create(
-                dict(input_dim=0, context_dim=0, state_noise=1.0)
-            ),
-            enc_conf=OmegaConf.create(dict(width=8, depth=1, dropout=0.0)),
-            obs_conf=OmegaConf.create(
-                dict(
-                    model="GLM",
-                    likelihood="Gaussian",
-                    cov=[1e-3] * y_size,
-                    norm_readout=False,
-                    readout_init="fa",
-                    readout_init_conf=dict(obs_noise_var=0.0),
-                )
-            ),
-        )
+def _gaussian_model(T, y_size, z_size, *, noise_prior=None, noise_prior_dof=None):
+    conf_dict = dict(
+        mode="smooth",
+        observation_dim=y_size,
+        state_dim=z_size,
+        dynamics="MockDynamics",
+        integrator="Identity",
+        approx="MVN",
+        approx_kwargs={},
+        mc_size=2,
+        seed=0,
+        n_steps=T,
+        fb_penalty=0,
+        noise_penalty=0,
+        dropout=0.0,
+        dyn_conf=OmegaConf.create(dict(input_dim=0, context_dim=0, state_noise=1.0)),
+        enc_conf=OmegaConf.create(dict(width=8, depth=1, dropout=0.0)),
+        obs_conf=OmegaConf.create(
+            dict(
+                model="GLM",
+                likelihood="Gaussian",
+                cov=[1e-3] * y_size,
+                norm_readout=False,
+                readout_init="fa",
+                readout_init_conf=dict(obs_noise_var=0.0),
+            )
+        ),
     )
+    if noise_prior is not None:
+        conf_dict["noise_prior"] = noise_prior
+    if noise_prior_dof is not None:
+        conf_dict["noise_prior_dof"] = noise_prior_dof
+    model_conf = OmegaConf.create(conf_dict)
     return XFADS(model_conf, jr.key(0))
 
 
-def test_mstep_prior_none_updates_observation_only():
-    """XFADS.mstep(..., prior=None) (the default) updates observation only
-    -- noise_free stays untouched -- matching
-    observations.mstep_observation_cov's own behavior."""
+def test_mstep_no_noise_prior_updates_observation_only():
+    """XFADS.mstep updates observation only when conf.noise_prior/
+    conf.noise_prior_dof are unset (the default) -- noise_free stays
+    untouched -- matching observations.mstep_observation_cov's own
+    behavior. XFADS.mstep's call signature takes no prior argument at all
+    -- this is entirely a conf-driven decision."""
     T, y_size, z_size = 5, 4, 3
     model = _gaussian_model(T, y_size, z_size)
 
@@ -529,12 +532,13 @@ def test_mstep_prior_none_updates_observation_only():
     chex.assert_trees_all_close(new_model.noise_free, model.noise_free)
 
 
-def test_mstep_prior_given_updates_both_observation_and_noise():
-    """XFADS.mstep(..., prior=(value, prior_dof)) updates both
-    observation (via Observation.mstep) and noise_free (via
-    approx.shrink), returning a finite, valid covariance for noise_free."""
+def test_mstep_noise_prior_configured_updates_both_observation_and_noise():
+    """XFADS.mstep updates both observation (via Observation.mstep) and
+    noise_free (via approx.shrink) when conf.noise_prior/
+    conf.noise_prior_dof are set, returning a finite, valid covariance for
+    noise_free."""
     T, y_size, z_size = 5, 4, 3
-    model = _gaussian_model(T, y_size, z_size)
+    model = _gaussian_model(T, y_size, z_size, noise_prior=1.0, noise_prior_dof=0.1)
 
     times = jnp.broadcast_to(jnp.arange(T), (2, T))
     y = jr.normal(jr.key(1), (2, T, y_size))
@@ -542,7 +546,7 @@ def test_mstep_prior_given_updates_both_observation_and_noise():
     c = jnp.zeros((2, T, 0))
     model = model.initialize(times, y, u, c)
 
-    new_model = model.mstep(times, y, u, c, key=jr.key(2), prior=(1.0, 0.1))
+    new_model = model.mstep(times, y, u, c, key=jr.key(2))
 
     assert not jnp.allclose(
         new_model.observation.likelihood.unconstrained_cov,

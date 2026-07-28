@@ -482,7 +482,7 @@ class MVN(Approx):
         canon = MVNParam(loc=loc_arr, chol=jnp.diag(chol_diag))
         return self.canon_to_free(canon)
 
-    def shrink(self, raw_stat: Array, prior: tuple[Array, Array]) -> Array:
+    def shrink(self, raw_stat: Array, prior: tuple[Array, float]) -> Array:
         """See base class.
 
         Here, and only here, ``raw_stat`` is covariance-shaped (any number

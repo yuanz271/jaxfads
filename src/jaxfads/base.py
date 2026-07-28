@@ -171,19 +171,28 @@ class Approx(SubclassRegistryMixin, ABC):
         moment = self.canon_to_moment(canon)
         return self.moment_to_natural(moment)
 
-    def shrink(self, raw_stat: Any, prior: Any = None) -> Array:
+    def shrink(self, raw_stat: Any, prior: Any) -> Array:
         """MAP-shrink a raw sufficient statistic toward ``prior``, returning
         the result encoded as a free-form array.
 
-        Deliberately opaque at this level: the shape/meaning of ``raw_stat``
-        and the structure of ``prior`` itself (a single value? a
-        ``(value, strength)`` pair? something else entirely for a
-        non-conjugate scheme?) are defined entirely by the subclass -- not
+        Deliberately opaque at this level: the shape/meaning of
+        ``raw_stat``, and the structure of ``prior`` itself (a single
+        value? a ``(value, strength)`` pair? something else entirely for a
+        non-conjugate scheme?), are defined entirely by the subclass -- not
         every ``Approx`` family need define this meaningfully (e.g. a
         hypothetical discrete-state family might have no shrinkable
-        dispersion concept at all). See ``docs/mstep_dynamics_noise.md``
-        for the design and ``MVN.shrink`` for the one concrete
-        implementation today.
+        dispersion concept at all).
+
+        ``prior`` is a call argument here (not construction-time ``Approx``
+        config): it's owned by ``XFADS``'s own configuration (e.g.
+        ``conf.noise_prior``/``conf.noise_prior_dof``, read via
+        ``XFADS.mstep``), not by ``Approx``, since ``Approx`` is a
+        stateless, freshly-reconstructed-per-access property (see
+        ``XFADS.approx``) -- not a natural home for a specific model's
+        chosen hyperparameter value. ``Approx`` only owns *how* to shrink
+        given a prior, not *what* the prior is. See
+        ``docs/mstep_dynamics_noise.md`` for the design and ``MVN.shrink``
+        for the one concrete implementation today.
 
         Default: no-op, returns ``raw_stat`` unchanged.
         """

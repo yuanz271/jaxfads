@@ -266,7 +266,7 @@ class XFADS(ConfModule):
         observation = self.observation.initialize(t, y, u, c)
         return eqx.tree_at(lambda m: m.observation, self, observation)
 
-    def mstep(self, t, y, u, c, *, key, prior: Any = None) -> "XFADS":
+    def mstep(self, t, y, u, c, *, key) -> "XFADS":
         """Closed-form, non-SGD parameter update from a full forward pass,
         composing both ``self.observation``'s and ``self.approx``'s own
         ``mstep``-style updates in one call -- the single entry point for
@@ -278,38 +278,39 @@ class XFADS(ConfModule):
         mstep_transition_stat` needs to know either (see
         ``docs/mstep_dynamics_noise.md``).
 
+        Least-knowledge: this method takes no prior/shrinkage-strength
+        argument at all -- whether and how ``noise_free`` gets updated is
+        owned by ``self.conf`` (``conf.noise_prior``/``conf.
+        noise_prior_dof``, both optional, default ``None``), not by
+        ``self.approx`` (a stateless, freshly-reconstructed-per-access
+        property, not a natural home for a specific model's chosen
+        hyperparameter value -- see ``XFADS.approx``) or by this method's
+        caller. Neither this method's callers nor (eventually) ``train()``
+        need to know a prior exists.
+
         Parameters
         ----------
         t, y, u, c : Array
             As accepted by ``__call__``.
         key : Array
             JAX PRNG key for the forward pass.
-        prior : Any, optional
-            Prior spec forwarded verbatim to ``self.approx.shrink`` --
-            opaque to ``XFADS`` itself, structure defined by the concrete
-            ``Approx`` (e.g. ``MVN.shrink`` expects a ``(value,
-            prior_dof)`` pair). ``None`` (default) means: update
-            ``self.observation`` only, leave ``noise_free`` untouched --
-            the same behavior as :func:`~jaxfads.observations.
-            mstep_observation_cov`. Deliberately not given any other
-            default (e.g. a specific ``(value, prior_dof)``), since tuning
-            this is out of scope and no such default has been validated as
-            a good one -- see ``docs/mstep_dynamics_noise.md``.
 
         Returns
         -------
         XFADS
             A new model with ``observation`` updated (if it overrides
-            ``mstep``) and, if ``prior`` is not ``None``, ``noise_free``
-            updated via ``self.approx.shrink``. All other attributes
-            unchanged.
+            ``mstep``) and, if ``conf.noise_prior``/``conf.
+            noise_prior_dof`` are both set, ``noise_free`` updated via
+            ``self.approx.shrink``. All other attributes unchanged.
         """
         approx = self.approx
         _natural, moment, _predicted = self(t, y, u, c, key=key)
         new_observation = self.observation.mstep(t, moment, y, approx)
         model = eqx.tree_at(lambda m: m.observation, self, new_observation)
 
-        if prior is None:
+        noise_prior = self.conf.get("noise_prior", None)
+        noise_prior_dof = self.conf.get("noise_prior_dof", None)
+        if noise_prior is None or noise_prior_dof is None:
             return model
 
         moment_tm1 = moment[:, :-1, :]
@@ -325,7 +326,7 @@ class XFADS(ConfModule):
             self.transition,
             key=key,
         )
-        new_noise_free = approx.shrink(raw_stat, prior)
+        new_noise_free = approx.shrink(raw_stat, (noise_prior, noise_prior_dof))
         return eqx.tree_at(lambda m: m.noise_free, model, new_noise_free)
 
     @classmethod
