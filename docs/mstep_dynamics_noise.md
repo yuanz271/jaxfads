@@ -223,23 +223,27 @@ difference (see below):
 
 ```python
 class Approx:
-    def shrink(self, raw_stat, prior, prior_dof) -> Array:
-        """MAP-shrink a raw sufficient statistic toward `prior`, encoded
-        as a free-form array. Shape and meaning of raw_stat/prior are
-        defined entirely by the subclass (e.g. MVN: a covariance matrix)
-        -- not every Approx family need define this meaningfully (a
-        hypothetical discrete-state family might have no shrinkable
-        dispersion concept at all). Default: no-op, returns raw_stat
-        unchanged."""
+    def shrink(self, raw_stat, prior) -> Array:
+        """Combine a raw sufficient statistic toward `prior`, encoded as
+        a free-form array. Shape/meaning of raw_stat, and the structure of
+        `prior` itself (a single value? a (value, strength) pair? some
+        other family-specific spec?), are defined entirely by the
+        subclass -- the ABC asserts nothing about the form shrinkage
+        takes, not just what's being shrunk (a hypothetical discrete-state
+        family might have no shrinkable dispersion concept, or a
+        differently-shaped prior spec, at all). Default: no-op, returns
+        raw_stat unchanged."""
         return raw_stat
 
 
 class MVN(Approx):
-    def shrink(self, raw_stat, prior, prior_dof):
-        """Here, and only here, raw_stat/prior are covariance matrices.
-        (n * raw_stat + prior_dof * prior) / (n + prior_dof), re-encoded
+    def shrink(self, raw_stat, prior):
+        """Here, and only here, raw_stat is a covariance matrix and prior
+        is a (value, prior_dof) pair: MAP shrinkage
+        (n * raw_stat + prior_dof * value) / (n + prior_dof), re-encoded
         via self.free_from_kw(...). n comes from raw_stat's own batch/time
         dimensions, supplied by the caller alongside raw_stat."""
+        value, prior_dof = prior
         ...
 
 
@@ -255,19 +259,21 @@ def mstep_transition_stat(approx, moment_t, moment_tm1, transition_fn) -> Array:
 
 
 class XFADS:
-    def mstep(self, t, y, u, c, *, key, prior, prior_dof) -> "XFADS":
+    def mstep(self, t, y, u, c, *, key, prior) -> "XFADS":
         """Composes both components' updates in one call -- the single,
-        discoverable entry point (model = model.mstep(data, key=...))
+        discoverable entry point (model = model.mstep(data, key=..., prior=...))
         instead of separate driver functions per parameter. The only
         place that knows noise_free is an attribute name, and that this
         whole call is about transition noise specifically -- neither
-        Approx nor the standalone stat function needs to know either."""
+        Approx nor the standalone stat function needs to know either.
+        `prior`'s structure is opaque to XFADS too -- just forwarded to
+        whatever self.approx.shrink expects."""
         _, moment, _ = self(t, y, u, c, key=key)
         new_observation = self.observation.mstep(t, moment, y, self.approx)
         raw_stat = mstep_transition_stat(
             self.approx, moment[:, 1:, :], moment[:, :-1, :], self.transition,
         )
-        new_noise_free = self.approx.shrink(raw_stat, prior, prior_dof)
+        new_noise_free = self.approx.shrink(raw_stat, prior)
         return eqx.tree_at(
             lambda m: (m.observation, m.noise_free), self,
             (new_observation, new_noise_free),
@@ -313,12 +319,13 @@ raw updated array, and `XFADS.mstep` is what writes it back onto
 reasoning (the component that owns the storage returns/produces the
 updated value in its own storage's shape), not an inconsistency.
 
-`prior`/`prior_dof` are **required keyword arguments, no default value**
-at the `Approx`/`XFADS` level -- deliberately not even the `prior=1.0,
-prior_dof_frac=0.1` that worked in the experiments, since tuning this is
-explicitly out of scope and those values were picked once, not validated
-as good defaults. Baking them in as defaults would silently imply
-recommendation; callers must supply them explicitly.
+`prior` is a **required keyword argument, no default value**, at both the
+`Approx` and `XFADS` level -- deliberately not even `(1.0, 0.1n)` (the
+`(value, prior_dof)` pair that worked in the experiments), since tuning
+this is explicitly out of scope and those values were picked once, not
+validated as good defaults. Baking them in as a default would silently
+imply recommendation; callers must supply `prior` explicitly, in whatever
+form their concrete `Approx.shrink` expects.
 
 ### Deferred, conditional follow-up: drop `noise_free`'s free-form storage once `mstep` is the permanent mechanism
 
@@ -443,10 +450,11 @@ later steps, not blockers.
    Design's "Final design" subsection for the reasoning and the rejected
    `Approx.mstep`-owns-everything alternative).
 2. **Implement `MVN.shrink`**: the MAP-shrinkage blend
-   `(n·raw_stat + prior_dof·prior)/(n+prior_dof)` for covariance-shaped
-   `raw_stat`/`prior`, returning the result as a free-form array via
-   `self.free_from_kw(...)`. `prior`/`prior_dof` are required keyword
-   arguments, no default (see Design).
+   `(n·raw_stat + prior_dof·value)/(n+prior_dof)` for a covariance-shaped
+   `raw_stat` and a `prior = (value, prior_dof)` pair (only `MVN.shrink`
+   asserts this specific structure for `prior` -- see Design), returning
+   the result as a free-form array via `self.free_from_kw(...)`. `prior`
+   is a required keyword argument, no default (see Design).
 3. **Implement `mstep_transition_stat`**: the v1 statistic exactly as
    used in the experiments (`r = m' - transition_fn(m)`, `raw_stat =
    outer(r,r) + P' + J@P@J.T`, `J = jax.jacrev(transition_fn)(m)`, no
@@ -457,8 +465,8 @@ later steps, not blockers.
    `mstep_transition_stat(...)`, and `self.approx.shrink(...)` into one
    call, as sketched in Design -- this *is* the usable entry point for an
    alternating-EM loop (`for round in range(n_rounds): model = train(model,
-   data, conf=freeze_q_conf); model = model.mstep(data, key=..., prior=...,
-   prior_dof=...)`), matching exactly what was validated, without needing
+   data, conf=freeze_q_conf); model = model.mstep(data, key=..., prior=(1.0,
+   0.1 * n))`), matching exactly what was validated, without needing
    deeper `train()`-integration first (that's the separate, deferred
    cadence-control work below).
 5. **Unit tests**, correctness-focused (mirroring the 3 existing
