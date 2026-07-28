@@ -438,10 +438,26 @@ arguments, bypassing this entirely.
 
 ## Steps toward implementation
 
-Given the validated mechanism above, this is no longer "build a harness,
-**then** decide" (the original framing) -- the harness exists and gave a
-clear result. Sequencing mirrors `mstep_gaussian_cov`'s own precedent:
-ship the core, correctness-tested mechanism as a standalone utility first;
+**Steps 1-6 below are done, implemented and merged** (`src/jaxfads/base.py`,
+`core.py`, `distributions/mvn.py`, `smoother.py`; tests in
+`test_distribution.py`, `test_algorithm.py`, `test_smoother.py`). Step 7
+remains deferred, as planned. Two corrections surfaced during
+implementation, worth recording rather than silently fixing:
+
+- `MVN.shrink` returns its result via `self.canon_to_free(MVNParam(loc=
+  zeros, chol=cholesky(shrunk)))`, **not** `self.free_from_kw(...)` as the
+  original sketch below said -- `free_from_kw` only accepts a
+  diagonal/scalar `scale` for initialization and cannot round-trip an
+  arbitrary full shrunk covariance matrix. Caught by checking the sketch
+  against the actual code before writing it, not after.
+- `mstep_transition_stat` needs `u`/`c` as explicit arguments (aligned to
+  the *source* time step of each pair, matching `filter()`'s own
+  `u[:-1], c[:-1]` convention) -- `transition_fn` cannot be evaluated
+  without them. The original sketch below omitted them; not a design
+  change, just an incomplete first draft of the signature.
+
+Sequencing mirrored `mstep_gaussian_cov`'s own precedent: ship the core,
+correctness-tested mechanism as a standalone utility first;
 train()-integration and further real-world validation follow as separate,
 later steps, not blockers.
 
@@ -458,8 +474,8 @@ later steps, not blockers.
    `(n·raw_stat + prior_dof·value)/(n+prior_dof)` for a covariance-shaped
    `raw_stat` and a `prior = (value, prior_dof)` pair (only `MVN.shrink`
    asserts this specific structure for `prior` -- see Design), returning
-   the result as a free-form array via `self.free_from_kw(...)`. `prior`
-   is a required keyword argument, no default (see Design).
+   the result as a free-form array via `self.canon_to_free(...)` (see
+   correction above; not `free_from_kw`).
 3. **Implement `mstep_transition_stat`**: the v1 statistic exactly as
    used in the experiments (`r = m' - transition_fn(m)`, `raw_stat =
    outer(r,r) + P' + J@P@J.T`, `J = jax.jacrev(transition_fn)(m)`, no
