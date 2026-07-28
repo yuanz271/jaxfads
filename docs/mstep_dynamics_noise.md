@@ -241,8 +241,13 @@ class MVN(Approx):
         """Here, and only here, raw_stat is a covariance matrix and prior
         is a (value, prior_dof) pair: MAP shrinkage
         (n * raw_stat + prior_dof * value) / (n + prior_dof), re-encoded
-        via self.free_from_kw(...). n comes from raw_stat's own batch/time
-        dimensions, supplied by the caller alongside raw_stat."""
+        via self.canon_to_free(MVNParam(loc=zeros, chol=cholesky(shrunk)))
+        -- NOT free_from_kw, which only accepts a diagonal/scalar scale for
+        initialization and can't round-trip an arbitrary full shrunk
+        covariance. loc is preserved as zero, matching how
+        MVN.predictive_moment already discards noise_free's loc component
+        entirely (`_, Q = self.unpack(noise)`). n comes from raw_stat's own
+        batch/time dimensions, supplied by the caller alongside raw_stat."""
         value, prior_dof = prior
         ...
 
