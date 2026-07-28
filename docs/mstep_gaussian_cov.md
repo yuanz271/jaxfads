@@ -8,9 +8,10 @@ a configurable cadence via `mstep_mode="minibatch" | "epoch"`, plus a
 guaranteed final full-dataset update after the last epoch regardless of
 mode), and **standalone functions** (`mstep_gaussian_cov`,
 `mstep_observation_cov`) for manual, full-dataset, or chunked use outside of
-`train()`. The manual path is validated against real downstream training
-(see below); the `train()`-integrated path's real-data validation is still
-pending (see Open questions).
+`train()`. Both paths are validated against real downstream training (see
+Validation performed below), including a real-data comparison of both
+`mstep_mode` values confirming `"minibatch"` (the default) as both simpler
+and empirically faster, with equivalent quality to `"epoch"`.
 
 See also: [Training](training.md), [Algorithm](algorithm.md).
 
@@ -218,8 +219,18 @@ manually for *this* pattern — only `train()`'s own automatic mechanism
   campaign with the EM-alternation pattern above converged cleanly with no
   recurrence of the degenerate loss. Specific figures are project-specific
   data and intentionally not reproduced here.
-- **Real-data validation of the `train()`-integrated update** (either
-  `mstep_mode`): not yet performed — see Open questions.
+- **Real-data validation of the `train()`-integrated update** (downstream
+  project, not in this repo, not reproducible from this repo alone): both
+  `mstep_mode` values were run on the same real campaign and compared.
+  Quality was equivalent between modes (final loss and `cov_min` differed
+  only trivially, within noise); `"minibatch"` was substantially faster in
+  wall-clock despite calling `mstep` far more often, because it's fused
+  into the same continuously-JIT-compiled `train_step` rather than
+  dispatching a separate full-dataset forward pass each time (as
+  `"epoch"` does). Confirms `mstep_mode="minibatch"` (jaxfads's own
+  default) as the right default: no quality/speed tradeoff to make.
+  Specific figures are project-specific data and intentionally not
+  reproduced here.
 
 ## Open questions for refinement
 
@@ -233,11 +244,10 @@ manually for *this* pattern — only `train()`'s own automatic mechanism
    different, narrower concern than the Heywood-case optimization-level
    exploit this M-step addresses. Both are needed; neither supersedes the
    other.
-3. **Real-data validation of the `train()`-integrated update** (either
-   `mstep_mode`): re-run (or spot-check) the same downstream campaign used
-   to validate `mstep_gaussian_cov`, using plain `train()` (no manual
-   alternation); compare final losses / `cov_min` against the
-   already-validated results.
+3. ~~Real-data validation of the `train()`-integrated update~~ — **done**:
+   see Validation performed above. `mstep_mode="minibatch"` confirmed as
+   both simpler and empirically faster, with equivalent quality to
+   `"epoch"`.
 4. ~~Whether an occasional, exact full-dataset recompute on top of the
    per-minibatch update would be worth adding back~~ — **done**: `mstep_mode
    ="epoch"` gives an exact per-epoch recompute, and the guaranteed final
