@@ -268,6 +268,28 @@ insufficient, revisit either (a) deriving the exact cross-covariance term,
 or (b) reintroducing some other explicit pacing mechanism (annealing,
 gating) — not by quietly making the floor informative again.
 
+**The v1 formula, written out precisely** (previously only described
+conceptually): with `m = mean(moment_smoothed_tm1)`, `P = Cov(moment_
+smoothed_tm1)`, `m' = mean(moment_smoothed_t)`, `P' = Cov(moment_smoothed_t)`,
+and `J = jax.jacrev(transition_fn)(m)`:
+
+```
+r = m' - transition_fn(m)
+raw_stat = outer(r, r) + P' + J @ P @ J.T
+```
+
+Note this is a first-order (Jacobian/delta-method) linearization of
+"propagate `P` through `f`" — conceptually similar to what `transition_points`
+does for the forward prediction step (UT is exact to second order for
+smooth `f`; this is only first-order), but computed independently via
+direct autodiff on `transition_fn`, not by calling `Approx.transition_points`
+or depending on its `mc_size`/dispatch machinery. That's what "decoupled"
+means here precisely: no shared code path or abstraction with the forward
+prediction step, not "conceptually unrelated math" — the M-step's own
+linearization can be cheaper (one Jacobian, not `2D+1` points) since it
+only needs a local correction around a single smoothed mean, not a
+globally accurate moment-matched propagation.
+
 ### Integration into `train()`
 
 Full integration, matching `R`'s final design (not standalone-only): an
