@@ -124,6 +124,7 @@ Quick reference (public API):
 | `free_size()` | `() → int` | Size of encoder free-form output vector (defaults to `param_size()`). |
 | `free_to_natural(free)` | `free → natural` | Convert free-form output into an additive natural update. |
 | `sample_by_moment(key, moment, n)` | `moment → samples` | Sampling from the distribution parameterized by `moment`. |
+| `transition_points(key, moment, mc_size)` | `moment → (points, weights)` | Representative points/weights for propagation through the transition (defaults to plain Monte Carlo via `sample_by_moment`; `MVN` overrides with deterministic unscented-transform sigma points by default — see `docs/transition_points.md`). |
 | `kl(moment1, moment2)` | `moment × moment → scalar` | KL between two distributions. |
 | `predictive_moment(z, noise)` | `(z, noise) → moment` | Conditional moment parameters `E[T(z_t) | z_{t-1}]`. |
 
@@ -161,6 +162,7 @@ Quick reference (public API):
 | Method | Signature | Role |
 |--------|-----------|------|
 | `sample_by_moment` | `(key, μ, n) → z` | Draw `n` samples from the distribution |
+| `transition_points` | `(key, μ, mc_size) → (points, weights)` | Prediction-step propagation policy (default: MC; `MVN` defaults to unscented-transform sigma points) |
 | `kl` | `(μ₁, μ₂) → scalar` | KL divergence `KL(p₁ ‖ p₂)` |
 | `predictive_moment` | `(z, noise) → μ_flat` | Conditional moment parameters `E[T(z_t) | z_{t-1}]` |
 
