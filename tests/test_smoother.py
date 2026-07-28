@@ -1,6 +1,7 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import jax
 from jax import Array, random as jr
 from jax import numpy as jnp
 from omegaconf import OmegaConf, DictConfig
@@ -559,3 +560,28 @@ def test_mstep_noise_prior_configured_updates_both_observation_and_noise():
     cov = canon.chol @ canon.chol.T
     assert jnp.all(jnp.isfinite(cov))
     chex.assert_trees_all_close(cov, cov.T, atol=1e-5)
+
+
+def test_noise_prior_is_not_trainable():
+    """noise_prior must never be picked up as a trainable leaf by
+    train()'s own eqx.filter(model, eqx.is_inexact_array) -- it's a fixed
+    hyperparameter, not something to differentiate through. Marked
+    eqx.field(static=True), so it's structurally excluded (part of the
+    pytree's aux data/treedef, not a leaf) rather than relying on
+    freeze_paths to protect it."""
+    T, y_size, z_size = 5, 4, 3
+    model = _gaussian_model(T, y_size, z_size, noise_prior=1.0, noise_prior_dof=0.1)
+
+    assert model.noise_prior == (1.0, 0.1)
+    assert isinstance(model.noise_prior[0], float)
+
+    params = eqx.filter(model, eqx.is_inexact_array)
+    assert params.noise_prior == (1.0, 0.1)  # untouched: not a leaf at all
+
+    # Two independently constructed models with the same noise_prior
+    # config must produce equal treedefs (confirms hashability -- a
+    # prerequisite for JIT caching over a static field).
+    other = _gaussian_model(T, y_size, z_size, noise_prior=1.0, noise_prior_dof=0.1)
+    _, treedef1 = jax.tree_util.tree_flatten(model)
+    _, treedef2 = jax.tree_util.tree_flatten(other)
+    assert treedef1 == treedef2

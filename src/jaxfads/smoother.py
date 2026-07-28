@@ -32,6 +32,16 @@ from .logging import get_logger
 logger = get_logger(__name__)
 
 
+def _to_hashable(x):
+    """Recursively convert an OmegaConf/list-valued config leaf into a
+    plain, hashable Python value (nested tuples for lists/ListConfig,
+    scalars unchanged) -- for use in ``eqx.field(static=True)`` fields,
+    whose values must be hashable for JIT treedef caching."""
+    if OmegaConf.is_list(x) or isinstance(x, (list, tuple)):
+        return tuple(_to_hashable(v) for v in x)
+    return x
+
+
 class XFADS(ConfModule):
     """
     XFADS for Bayesian state-space modeling.
@@ -125,6 +135,7 @@ class XFADS(ConfModule):
     masker: DataMasker
     unconstrained_prior_natural: Any
     noise_free: Any
+    noise_prior: Any = eqx.field(static=True)
 
     def __init__(
         self, conf, key=None
@@ -235,6 +246,38 @@ class XFADS(ConfModule):
 
         self.unconstrained_prior_natural = self.approx.free_from_kw(scale=1.0)
 
+        # Transition-noise (Q) MAP-shrinkage prior for XFADS.mstep -- see
+        # its docstring and docs/mstep_dynamics_noise.md. Read from conf
+        # once at construction (not re-read via conf.get(...) on every
+        # mstep() call): both None (the structural default -- no shrinkage
+        # performed, exactly like self.beta_encoder's None/not-None
+        # structural split above) unless both conf.noise_prior and
+        # conf.noise_prior_dof are set, in which case this is a
+        # (value, prior_dof) tuple. Lives here, not on Approx (self.approx
+        # is a stateless property freshly reconstructed from
+        # conf.approx_kwargs on every access -- not a natural home for a
+        # specific model's chosen hyperparameter value).
+        #
+        # Deliberately `eqx.field(static=True)` (see class-level field
+        # declaration above), storing plain Python values, not JAX arrays:
+        # this is a fixed hyperparameter, never something to differentiate
+        # through, and it must never be mistaken for a trainable leaf --
+        # train()'s `eqx.filter(model, eqx.is_inexact_array)` would
+        # otherwise happily pick up a float-array-valued field here and
+        # start optimizing it with no freeze_paths entry protecting it.
+        # Marking it static rules that out structurally, the same way
+        # `conf` itself is static, rather than relying on every caller to
+        # remember to freeze it.
+        _noise_prior = self.conf.get("noise_prior", None)
+        _noise_prior_dof = self.conf.get("noise_prior_dof", None)
+        if _noise_prior is None or _noise_prior_dof is None:
+            self.noise_prior = None
+        else:
+            self.noise_prior = (
+                _to_hashable(_noise_prior),
+                _to_hashable(_noise_prior_dof),
+            )
+
     def transition(self, z: Array, u: Array, c: Array, *, key=None) -> Array:
         """One-step latent transition composed from dynamics and integrator."""
         return self.integrator.step(z, u, c, self.dynamics, key=key)
@@ -280,10 +323,10 @@ class XFADS(ConfModule):
 
         Least-knowledge: this method takes no prior/shrinkage-strength
         argument at all -- whether and how ``noise_free`` gets updated is
-        owned by ``self.conf`` (``conf.noise_prior``/``conf.
-        noise_prior_dof``, both optional, default ``None``), not by
-        ``self.approx`` (a stateless, freshly-reconstructed-per-access
-        property, not a natural home for a specific model's chosen
+        owned by ``self.noise_prior`` (set once at construction from
+        ``conf.noise_prior``/``conf.noise_prior_dof``, see ``__init__``),
+        not by ``self.approx`` (a stateless, freshly-reconstructed-per-
+        access property, not a natural home for a specific model's chosen
         hyperparameter value -- see ``XFADS.approx``) or by this method's
         caller. Neither this method's callers nor (eventually) ``train()``
         need to know a prior exists.
@@ -299,18 +342,16 @@ class XFADS(ConfModule):
         -------
         XFADS
             A new model with ``observation`` updated (if it overrides
-            ``mstep``) and, if ``conf.noise_prior``/``conf.
-            noise_prior_dof`` are both set, ``noise_free`` updated via
-            ``self.approx.shrink``. All other attributes unchanged.
+            ``mstep``) and, if ``self.noise_prior`` is not ``None``,
+            ``noise_free`` updated via ``self.approx.shrink``. All other
+            attributes unchanged.
         """
         approx = self.approx
         _natural, moment, _predicted = self(t, y, u, c, key=key)
         new_observation = self.observation.mstep(t, moment, y, approx)
         model = eqx.tree_at(lambda m: m.observation, self, new_observation)
 
-        noise_prior = self.conf.get("noise_prior", None)
-        noise_prior_dof = self.conf.get("noise_prior_dof", None)
-        if noise_prior is None or noise_prior_dof is None:
+        if self.noise_prior is None:
             return model
 
         moment_tm1 = moment[:, :-1, :]
@@ -326,7 +367,7 @@ class XFADS(ConfModule):
             self.transition,
             key=key,
         )
-        new_noise_free = approx.shrink(raw_stat, (noise_prior, noise_prior_dof))
+        new_noise_free = approx.shrink(raw_stat, self.noise_prior)
         return eqx.tree_at(lambda m: m.noise_free, model, new_noise_free)
 
     @classmethod
