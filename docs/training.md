@@ -215,27 +215,45 @@ For a Gaussian-likelihood model, the observation noise covariance `R` is
 driven by a closed-form EM M-step instead of gradient descent, avoiding a
 Heywood-case degeneracy that plain gradient-based MLE of `R` is prone to
 (see [`mstep_gaussian_cov`](mstep_gaussian_cov.md) for the full rationale).
-This is **unconditional, with no flag**: every minibatch step,
-`model.observation` is replaced by `model.observation.mstep(t, moment, y,
-approx)` computed from that minibatch alone (a no-op for `Observation`/
-`Likelihood` implementations that don't override `mstep`, e.g. `Poisson`).
-There is nothing to opt into or configure -- for a Gaussian-likelihood
-model, `R` is always estimated this way, never by gradient descent.
+There is nothing to opt into for this to take effect -- for a
+Gaussian-likelihood model, `R` is always estimated this way, never by
+gradient descent; `mstep_mode` (below) only controls *when* the update is
+applied, not whether.
+
+`train(..., mstep_mode="minibatch" | "epoch")` (default `"minibatch"`)
+controls the update cadence:
+
+- `"minibatch"`: every `train_step`, `model.observation` is replaced by
+  `model.observation.mstep(t, moment, y, approx)` computed from that
+  minibatch's own forward pass (a no-op for `Observation`/`Likelihood`
+  implementations that don't override `mstep`, e.g. `Poisson`). Each
+  minibatch's estimate is a noisy sample of the same quantity a
+  full-dataset pass computes exactly (like SGD vs. full-batch gradient
+  descent).
+- `"epoch"`: instead of every minibatch, the update is applied once per
+  completed epoch, from a forward pass over the *whole* training set --
+  an exact (not minibatch-noisy) estimate, at the cost of only refreshing
+  once per epoch rather than continuously.
+
+Regardless of `mstep_mode`, `mstep` is always applied once more, from a
+full-dataset forward pass, immediately after the final epoch's gradient
+steps complete and right before `train()` returns -- covering normal
+completion, early stopping via `on_epoch_end`, and `KeyboardInterrupt`
+alike. The returned model therefore always reflects a fresh, full-dataset
+mstep correction, regardless of mode or how training ended.
 
 `model.observation.mstep_frozen_paths()` is always excluded from the
-optimizer automatically (folded into `train()`'s internal freeze mask), so
-gradient descent never fights this update -- no `conf.freeze_paths` entry is
-needed, unlike `param_schedule` above.
+optimizer automatically (folded into `train()`'s internal freeze mask),
+regardless of `mstep_mode`, so gradient descent never fights this update --
+no `conf.freeze_paths` entry is needed, unlike `param_schedule` above.
 
-Each minibatch's estimate is a noisy sample of the same quantity a
-full-dataset pass computes exactly (like SGD vs. full-batch gradient
-descent). For an exact, full-dataset recompute -- e.g. as a final
-correction, or for manual EM-style alternation -- two standalone functions
-are available (both unrelated to and unused by `train()` itself): the
-Gaussian-specific [`mstep_gaussian_cov`](mstep_gaussian_cov.md) (supports
-`batch_size`-chunked scanning for datasets too large for a single forward
-pass) and the family-neutral `mstep_observation_cov` (any `Observation`
-overriding `mstep`, no chunking).
+For a one-off, standalone recompute outside of `train()` entirely -- e.g.
+for manual EM-style alternation -- two standalone functions are available
+(both unrelated to and unused by `train()` itself): the Gaussian-specific
+[`mstep_gaussian_cov`](mstep_gaussian_cov.md) (supports `batch_size`-chunked
+scanning for datasets too large for a single forward pass) and the
+family-neutral `mstep_observation_cov` (any `Observation` overriding
+`mstep`, no chunking).
 
 ## Multi-Device Training
 
