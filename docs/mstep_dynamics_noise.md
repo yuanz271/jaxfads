@@ -254,6 +254,38 @@ preference) reason, not arbitrary churn:
    it) -- "shrink" describes the salient operation/purpose well enough,
    matching how e.g. `Observation.mstep` doesn't spell out everything
    `Gaussian.mstep` does internally either.
+5. The per-pair statistic's `Cov[transition_fn(z_{t-1})]` term: originally
+   a first-order Taylor/Jacobian linearization (`J @ P @ J.T`, `J =
+   jacrev(transition_fn)(m)`) -- replaced with the same weighted
+   point-set propagation (Monte Carlo, or `MVN`'s current default,
+   deterministic unscented-transform sigma points) already used for the
+   prediction step's `core.expected_predictive_moment`, once a direct
+   question ("why not reuse the sampling/UT machinery instead of a
+   Jacobian?") was checked against the actual math: the Jacobian is only
+   a first-order approximation to how `z_{t-1}`'s uncertainty propagates
+   through a possibly-nonlinear `transition_fn`, while UT/MC capture the
+   true nonlinear propagation (exact to the 3rd moment for UT, exact in
+   the MC limit) -- the same accuracy argument that already motivated
+   making UT the default propagation policy elsewhere in this codebase.
+   Reusing `transition_points` here also keeps this statistic's
+   propagation accuracy consistent with the rest of the model's own
+   choice, instead of a second, separately-unvalidated approximation
+   scheme coexisting alongside it. `core.expected_predictive_moment`
+   itself could not be called directly (it bakes `Q` into the propagated
+   moment via `approx.predictive_moment` -- the filtering-time question,
+   "propagate forward before seeing `y_t`" -- but `Q` is exactly what
+   `shrink` is estimating, so it must be excluded); instead
+   `expected_predictive_moment` was split, extracting its noise-free
+   prefix (`approx.transition_points` + push through `f`) into a new,
+   standalone `core.propagate_transition_points`, shared by both. Also
+   surfaced a latent bug while implementing this: the previous
+   Jacobian-based code reused one single outer `key` across every
+   `(batch, time)` pair (harmless there, since `jacrev`/`jax.linearize`
+   don't consume randomness) -- for the new sampling-based statistic this
+   would have correlated the point-propagation's own randomness across
+   every pair whenever `use_sigma_points=False`. Fixed by splitting a
+   distinct key per pair, matching `core.filter`/`core.smooth`'s own
+   established per-timestep `jrnd.split` + `vmap` convention.
 
 **Final**: one method, taking the *full*, un-sliced `moment`/`u`/`c` and
 doing everything internally:
@@ -284,15 +316,18 @@ class Approx:
 
 
 class MVN(Approx):
-    def shrink(self, moment, u, c, transition_fn, prior, *, key):
+    def shrink(self, moment, u, c, transition_fn, prior, *, key, mc_size):
         """Slices moment_tm1 = moment[:, :-1, :], moment_t = moment[:, 1:, :],
         u_tm1 = u[:, :-1, :], c_tm1 = c[:, :-1, :] (control/covariate at
         the *source* time step of each pair, matching core.filter()'s own
         u[:-1], c[:-1] convention), then per (batch,time) pair:
 
-            r = m' - transition_fn(m)
-            J = jacrev(transition_fn)(m)
-            raw_stat = outer(r, r) + P' + J @ P @ J.T
+            zs, w = core.propagate_transition_points(
+                key, moment_tm1, u, c, transition_fn, self, mc_size)
+            m_f = sum_i w_i * zs_i
+            P_f = sum_i w_i * outer(zs_i - m_f, zs_i - m_f)
+            r = m' - m_f
+            raw_stat = outer(r, r) + P' + P_f
 
         (v1 approximation: no cross-covariance term -- see below), then
         MAP-shrinks the mean of that statistic toward prior = (value,
@@ -587,7 +622,10 @@ later steps, not blockers.
    as used in the experiments (`r = m' - transition_fn(m)`, `raw_stat =
    outer(r,r) + P' + J@P@J.T`, `J = jax.jacrev(transition_fn)(m)`, no
    cross-covariance term, decoupled from `Approx.transition_points`
-   entirely), then the MAP-shrinkage blend
+   entirely) -- **superseded**: the `J@P@J.T` term was later replaced by
+   `Approx.transition_points`-based (UT/MC) point-set propagation, see
+   Design's "Final design" subsection, revision 5 -- then the
+   MAP-shrinkage blend
    `(n·raw_stat + prior_dof·value)/(n+prior_dof)` for a `prior = (value,
    prior_dof)` pair (only `MVN.shrink` asserts this
    specific structure for `prior` -- see Design), returning the result as
