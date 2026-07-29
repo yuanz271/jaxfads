@@ -136,9 +136,23 @@ Implementation (`src/jaxfads/base.py`, `src/jaxfads/observations.py`,
 
 `mstep`/`mstep_stat` must never carry gradients: all of the above run their
 forward pass outside `eqx.filter_value_and_grad`, an architectural (not
-conventional) isolation from the optimizer's gradient tape; `Gaussian.mstep`
-additionally wraps its result in `jax.lax.stop_gradient` as cheap, local
-insurance documenting the invariant.
+conventional) isolation from the optimizer's gradient tape. This is now
+enforced at **two** levels, not left to architecture/discipline alone:
+`Gaussian.mstep` (and `MVN.shrink`) each wrap their own result in
+`jax.lax.stop_gradient`, protecting standalone call paths that bypass
+`XFADS.mstep` entirely (e.g. `mstep_gaussian_cov`, which duck-types on
+`Gaussian.mstep_stat` directly rather than calling `.mstep()`, and so
+does *not* inherit `Gaussian.mstep`'s wrap -- it needed, and now has, its
+own); `XFADS.mstep` *additionally* wraps both composed results
+(`self.observation.mstep(...)`, `self.approx.shrink(...)`) in
+`jax.lax.stop_gradient` centrally, making the guarantee structural and
+subclass-proof for its own call path rather than dependent on every
+current and future `Observation`/`Approx` implementation remembering its
+own wrap. Both gaps (the missing wrap in `mstep_gaussian_cov`, and the
+lack of central enforcement in `XFADS.mstep`) were found to be real, not
+hypothetical -- a test wrapping a call in `jax.grad` produced a nonzero
+gradient before each fix -- see the discriminative tests in
+`tests/test_observations.py`/`tests/test_smoother.py`.
 
 ## Usage
 
@@ -303,3 +317,11 @@ manually for *this* pattern — only `train()`'s own automatic mechanism
   for `mstep_mode="epoch"`, the guaranteed post-training `apply_mstep`
   call was needlessly recomputing the exact same full-dataset update the
   last `finalize_epoch` call had just applied, on an unchanged model.
+- `a117cca` — fixed a genuine gradient-leak gap in `mstep_gaussian_cov`
+  (no `stop_gradient` of its own, since it duck-types on
+  `Gaussian.mstep_stat` rather than calling `.mstep()`), and centralized
+  gradient-freedom enforcement in `XFADS.mstep` itself (wrapping both
+  composed results in `jax.lax.stop_gradient`), making the guarantee
+  subclass-proof rather than dependent on every `Observation`/`Approx`
+  implementation remembering its own wrap. Both gaps verified real via
+  `jax.grad`-wrapped tests that failed before each fix.
