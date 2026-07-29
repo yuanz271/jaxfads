@@ -544,8 +544,18 @@ class MVN(Approx):
             def f(z):
                 return transition_fn(z, u_i, c_i, key=key)
 
-            residual = mean_t - f(mean_tm1)
-            jac = jax.jacrev(f)(mean_tm1)
+            # jax.linearize traces f's forward pass exactly once, returning
+            # both the primal f(mean_tm1) (for the residual) and a jvp_fn
+            # for building the Jacobian -- avoids the double forward-pass
+            # evaluation that `f(mean_tm1)` followed by a separate
+            # `jax.jacrev(f)(mean_tm1)` would incur (jacrev re-runs f's
+            # forward pass internally to get its own primal).
+            primal, jvp_fn = jax.linearize(f, mean_tm1)
+            residual = mean_t - primal
+            dim = mean_tm1.shape[-1]
+            # jvp_fn(e_i) = J @ e_i = column i of J, so vmapping over the
+            # standard basis and transposing recovers J itself.
+            jac = jax.vmap(jvp_fn)(jnp.eye(dim, dtype=mean_tm1.dtype)).T
             return jnp.outer(residual, residual) + cov_t + jac @ cov_tm1 @ jac.T
 
         stat_fn = jax.vmap(jax.vmap(_single))
