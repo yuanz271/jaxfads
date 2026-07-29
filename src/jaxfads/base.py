@@ -181,6 +181,7 @@ class Approx(SubclassRegistryMixin, ABC):
         prior: Any,
         *,
         key: Array,
+        mc_size: int,
     ) -> Array:
         """Closed-form, non-SGD transition-noise (``Q``) update: computes
         the per-(batch,time) sufficient statistic from smoothed moments
@@ -247,6 +248,15 @@ class Approx(SubclassRegistryMixin, ABC):
             Subclass-defined prior spec.
         key : Array
             JAX PRNG key.
+        mc_size : int
+            Requested point/sample count for propagating each pair's
+            ``q(z_{t-1})`` through ``transition_fn`` (see
+            ``transition_points``); may be ignored by deterministic
+            overrides (e.g. unscented-transform sigma points always
+            return a fixed count). Not meaningful for a subclass whose
+            ``shrink`` doesn't propagate a distribution through
+            ``transition_fn`` at all -- default value only, no required
+            semantics at this ABC level.
 
         Returns
         -------

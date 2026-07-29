@@ -356,7 +356,13 @@ class XFADS(ConfModule):
             return model
 
         new_noise_free = approx.shrink(
-            moment, u, c, self.transition, self.noise_prior, key=key
+            moment,
+            u,
+            c,
+            self.transition,
+            self.noise_prior,
+            key=key,
+            mc_size=self.conf.mc_size,
         )
         return eqx.tree_at(lambda m: m.noise_free, model, new_noise_free)
 

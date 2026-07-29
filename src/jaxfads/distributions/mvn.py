@@ -33,10 +33,12 @@ from typing import Literal, NamedTuple
 import jax
 from jax import Array
 from jax import numpy as jnp
+from jax import random as jrnd
 from tensorflow_probability.substrates.jax import distributions as tfd
 
 from ..base import Approx
 from ..constraints import _EPS, constrain_positive, unconstrain_positive
+from ..core import propagate_transition_points
 
 
 class _Layout(NamedTuple):
@@ -491,6 +493,7 @@ class MVN(Approx):
         prior: tuple[Array, float],
         *,
         key: Array,
+        mc_size: int,
     ) -> Array:
         """See base class.
 
@@ -504,17 +507,34 @@ class MVN(Approx):
         is not exposed by this repo's smoothing algorithm -- see
         ``docs/mstep_dynamics_noise.md``). Per (batch, time) pair::
 
-            r = m' - transition_fn(m)
-            J = jacrev(transition_fn)(m)
-            raw_stat = outer(r, r) + P' + J @ P @ J.T
+            zs, w = core.propagate_transition_points(
+                key, moment_tm1, u, c, transition_fn, self, mc_size)
+            m_f = sum_i w_i * zs_i          # weighted mean
+            P_f = sum_i w_i * outer(zs_i - m_f, zs_i - m_f)  # weighted cov
+            r = m' - m_f
+            raw_stat = outer(r, r) + P' + P_f
 
-        where ``m, P = self.unpack(moment_tm1)`` and
-        ``m', P' = self.unpack(moment_t)``. Deliberately decoupled from
-        ``transition_points`` (MC or UT): that answers a different
-        question ("propagate q(z_{t-1})'s uncertainty forward, before
-        seeing y_t"); this statistic is a posterior expectation over the
-        *joint* smoothed distribution of ``(z_{t-1}, z_t)``, which needs
-        no forward-propagation machinery at all.
+        where ``m', P' = self.unpack(moment_t)``. This replaces an
+        earlier first-order Taylor/Jacobian linearization of
+        ``Cov[transition_fn(z_{t-1})]`` (``J @ P @ J.T``, ``J =
+        jacrev(transition_fn)(m)``) with the same point-propagation
+        machinery (Monte Carlo, or -- ``MVN``'s current default --
+        deterministic unscented-transform sigma points) already used for
+        the prediction step's ``core.expected_predictive_moment``, for
+        two reasons: (1) it captures genuine nonlinear propagation
+        (exact to the 3rd moment for UT, exact in the MC limit) rather
+        than a first-order-only approximation, and (2) it keeps this
+        statistic's uncertainty-propagation accuracy consistent with the
+        rest of the model's own choice (``use_sigma_points``), instead of
+        introducing an unrelated, separately-unvalidated approximation
+        scheme. Deliberately does **not** call ``core.
+        expected_predictive_moment`` itself or ``predictive_moment``:
+        those bake the transition noise ``Q`` into the propagated
+        moment (correct for the *filtering* prediction step, answering
+        "propagate q(z_{t-1})'s uncertainty forward, before seeing
+        y_t"), but ``Q`` is precisely the quantity being estimated here,
+        so it must be excluded -- ``core.propagate_transition_points``
+        is the shared, noise-free prefix both use.
 
         Then MAP-shrinks the mean of that per-pair statistic toward
         ``prior = (value, prior_dof)``:
@@ -536,30 +556,49 @@ class MVN(Approx):
         moment_t = moment[:, 1:, :]
         u_tm1 = u[:, :-1, :]
         c_tm1 = c[:, :-1, :]
+        n_batch, n_pairs = moment_tm1.shape[0], moment_tm1.shape[1]
+        # A distinct key per (batch, time) pair -- matching core.filter/
+        # core.smooth's own per-timestep jrnd.split + vmap convention for
+        # expected_predictive_moment, rather than reusing one key across
+        # every pair (which would correlate the point-propagation's own
+        # randomness across pairs whenever transition_points is
+        # stochastic, i.e. use_sigma_points=False).
+        pair_keys = jrnd.split(key, n_batch * n_pairs).reshape(n_batch, n_pairs)
 
-        def _single(moment_t_i, moment_tm1_i, u_i, c_i):
-            mean_tm1, cov_tm1 = self.unpack(moment_tm1_i)
+        def _single(moment_t_i, moment_tm1_i, u_i, c_i, key_i):
             mean_t, cov_t = self.unpack(moment_t_i)
+            dim = mean_t.shape[-1]
 
-            def f(z):
-                return transition_fn(z, u_i, c_i, key=key)
+            def f(z, u, c, *, key):
+                return transition_fn(z, u, c, key=key)
 
-            # jax.linearize traces f's forward pass exactly once, returning
-            # both the primal f(mean_tm1) (for the residual) and a jvp_fn
-            # for building the Jacobian -- avoids the double forward-pass
-            # evaluation that `f(mean_tm1)` followed by a separate
-            # `jax.jacrev(f)(mean_tm1)` would incur (jacrev re-runs f's
-            # forward pass internally to get its own primal).
-            primal, jvp_fn = jax.linearize(f, mean_tm1)
-            residual = mean_t - primal
-            dim = mean_tm1.shape[-1]
-            # jvp_fn(e_i) = J @ e_i = column i of J, so vmapping over the
-            # standard basis and transposing recovers J itself.
-            jac = jax.vmap(jvp_fn)(jnp.eye(dim, dtype=mean_tm1.dtype)).T
-            return jnp.outer(residual, residual) + cov_t + jac @ cov_tm1 @ jac.T
+            zs, weights = propagate_transition_points(
+                key_i, moment_tm1_i, u_i, c_i, f, self, mc_size
+            )
+
+            # Non-finite-safe weighted mean/covariance, mirroring
+            # expected_predictive_moment's own masking convention.
+            valid = jnp.all(jnp.isfinite(zs), axis=-1)
+            safe = jnp.where(valid[:, None], zs, 0.0)
+            w_valid = jnp.where(valid, weights, 0.0)
+            w_sum = jnp.sum(w_valid)
+            m_f = jnp.where(
+                w_sum > 0,
+                jnp.sum(w_valid[:, None] * safe, axis=0) / w_sum,
+                jnp.full((dim,), jnp.nan, dtype=mean_t.dtype),
+            )
+            centered = safe - m_f
+            p_f = jnp.where(
+                w_sum > 0,
+                jnp.einsum("i,ij,ik->jk", w_valid, centered, centered) / w_sum,
+                jnp.full((dim, dim), jnp.nan, dtype=mean_t.dtype),
+            )
+
+            residual = mean_t - m_f
+            return jnp.outer(residual, residual) + cov_t + p_f
 
         stat_fn = jax.vmap(jax.vmap(_single))
-        raw_stat = stat_fn(moment_t, moment_tm1, u_tm1, c_tm1)
+        raw_stat = stat_fn(moment_t, moment_tm1, u_tm1, c_tm1, pair_keys)
 
         d = self._layout.dim
         value, prior_dof = prior

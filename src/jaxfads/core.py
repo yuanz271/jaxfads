@@ -21,12 +21,75 @@ from .base import Approx
 
 __all__ = [
     "expected_predictive_moment",
+    "propagate_transition_points",
     "Mode",
     "filter",
     "smooth",
     "causal",
     "nofilt",
 ]
+
+
+def propagate_transition_points(
+    key: Array,
+    moment: Array,
+    u: Array,
+    c: Array,
+    f: Callable[..., Array],
+    approx: Approx,
+    mc_size: int,
+) -> tuple[Array, Array]:
+    """Push a weighted point set from ``approx.transition_points`` through
+    the one-step transition ``f``, with **no** noise added.
+
+    Returns ``(zs, weights)``: the propagated points and their weights,
+    shape ``(n_points, state_dim)`` and ``(n_points,)`` respectively.
+    ``n_points`` may differ from ``mc_size`` -- deterministic
+    ``transition_points`` overrides (e.g. unscented-transform sigma
+    points) return a fixed count regardless of the requested ``mc_size``.
+
+    Shared by :func:`expected_predictive_moment` (which adds noise
+    afterward via ``approx.predictive_moment``, for the filtering-time
+    predictive distribution ``p(z_t)``) and ``MVN.shrink`` (which instead
+    takes these points' weighted empirical covariance directly -- the
+    transition/process noise ``Q`` is precisely the quantity this
+    function deliberately excludes, since ``Q`` is what ``shrink`` is
+    estimating).
+
+    Parameters
+    ----------
+    key : PRNGKeyArray
+        Random key for sampling.
+    moment : Array
+        Moment parameters of the state distribution to propagate,
+        ``q(z_{t-1})``.
+    u : Array, shape (input_dim,)
+        Control/input vector.
+    c : Array, shape (covariate_dim,)
+        Covariate vector.
+    f : Callable
+        One-step transition callable.
+    approx : Approx
+        Exponential family approximation instance.
+    mc_size : int
+        Requested point/sample count; may be ignored by deterministic
+        ``transition_points`` overrides.
+
+    Notes
+    -----
+    The same ``key`` is intentionally reused for every point when
+    evaluating ``f``. This keeps any stochastic regularisation inside
+    ``f`` (e.g. dropout) fixed within the expectation.
+    """
+    key, subkey = jrnd.split(key)
+    z, weights = approx.transition_points(subkey, moment, mc_size)
+    n_points = z.shape[0]  # not mc_size -- deterministic policies may return
+    # a different, fixed point count (e.g. unscented-transform sigma points
+    # always return 2*dim + 1, regardless of the mc_size argument).
+    u_bc = jnp.broadcast_to(u, shape=(n_points,) + u.shape)
+    c_bc = jnp.broadcast_to(c, shape=(n_points,) + c.shape)
+    zs = jax.vmap(partial(f, key=key), in_axes=(0, 0, 0))(z, u_bc, c_bc)
+    return zs, weights
 
 
 def expected_predictive_moment(
@@ -90,16 +153,7 @@ def expected_predictive_moment(
     weighted average. If every point is non-finite the result will itself
     be non-finite.
     """
-    key, subkey = jrnd.split(key)
-    z, weights = approx.transition_points(subkey, moment, mc_size)
-    n_points = z.shape[0]  # not mc_size -- deterministic policies may return
-    # a different, fixed point count (e.g. unscented-transform sigma points
-    # always return 2*dim + 1, regardless of the mc_size argument).
-    u_bc = jnp.broadcast_to(u, shape=(n_points,) + u.shape)
-    c_bc = jnp.broadcast_to(c, shape=(n_points,) + c.shape)
-
-    # Transition outputs for each point
-    zs = jax.vmap(partial(f, key=key), in_axes=(0, 0, 0))(z, u_bc, c_bc)
+    zs, weights = propagate_transition_points(key, moment, u, c, f, approx, mc_size)
 
     # Per-point predictive moment
     predictive_moment_samples = jax.vmap(

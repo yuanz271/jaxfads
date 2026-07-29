@@ -319,6 +319,7 @@ def test_approx_shrink_default_raises():
             lambda z, u, c, key=None: z,
             prior=None,
             key=jrnd.key(0),
+            mc_size=4,
         )
 
 
@@ -359,7 +360,7 @@ def test_mvn_shrink_matches_independent_reference(dim, rank):
     prior_dof = 2.0
     prior = (prior_value, prior_dof)
 
-    free = approx.shrink(moment, u, c, f, prior, key=jrnd.key(1))
+    free = approx.shrink(moment, u, c, f, prior, key=jrnd.key(1), mc_size=4)
     canon = approx.free_to_canon(free)
     got_cov = canon.chol @ canon.chol.T
 
