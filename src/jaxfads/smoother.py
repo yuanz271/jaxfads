@@ -316,12 +316,11 @@ class XFADS(ConfModule):
         both, rather than separate driver functions per parameter.
 
         This is the only place that knows ``noise_free`` is an attribute
-        name -- ``self.approx.mstep_transition_noise`` knows it's
-        computing/shrinking a transition-noise statistic, but not that the
-        result gets stored as ``noise_free`` (see
-        ``docs/mstep_dynamics_noise.md``). One combined call, mirroring
-        ``GLM.mstep`` calling exactly one method (``Gaussian.mstep``), not
-        two separately-sequenced steps.
+        name -- ``self.approx.shrink`` knows it's computing/shrinking a
+        transition-noise statistic, but not that the result gets stored
+        as ``noise_free`` (see ``docs/mstep_dynamics_noise.md``). One
+        combined call, mirroring ``GLM.mstep`` calling exactly one method
+        (``Gaussian.mstep``), not two separately-sequenced steps.
 
         Least-knowledge: this method takes no prior/shrinkage-strength
         argument at all -- whether and how ``noise_free`` gets updated is
@@ -345,8 +344,8 @@ class XFADS(ConfModule):
         XFADS
             A new model with ``observation`` updated (if it overrides
             ``mstep``) and, if ``self.noise_prior`` is not ``None``,
-            ``noise_free`` updated via ``self.approx.
-            mstep_transition_noise``. All other attributes unchanged.
+            ``noise_free`` updated via ``self.approx.shrink``. All other
+            attributes unchanged.
         """
         approx = self.approx
         _natural, moment, _predicted = self(t, y, u, c, key=key)
@@ -356,7 +355,7 @@ class XFADS(ConfModule):
         if self.noise_prior is None:
             return model
 
-        new_noise_free = approx.mstep_transition_noise(
+        new_noise_free = approx.shrink(
             moment, u, c, self.transition, self.noise_prior, key=key
         )
         return eqx.tree_at(lambda m: m.noise_free, model, new_noise_free)

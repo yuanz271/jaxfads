@@ -271,12 +271,11 @@ def test_transition_points_explicit_mc_matches_base_contract(dim, rank):
     chex.assert_trees_all_close(weights, jnp.full((mc_size,), 1.0 / mc_size), atol=1e-8)
 
 
-def test_approx_mstep_transition_noise_default_raises():
-    """Approx.mstep_transition_noise's base-class default raises
-    NotImplementedError for a non-overriding Approx subclass -- callers
-    (XFADS.mstep) only reach it when a prior has been explicitly
-    configured, so a loud failure is preferable to silently returning the
-    wrong shape."""
+def test_approx_shrink_default_raises():
+    """Approx.shrink's base-class default raises NotImplementedError for
+    a non-overriding Approx subclass -- callers (XFADS.mstep) only reach
+    it when a prior has been explicitly configured, so a loud failure is
+    preferable to silently returning the wrong shape."""
 
     class _NoStat(Approx):
         def natural_to_moment(self, natural):
@@ -313,7 +312,7 @@ def test_approx_mstep_transition_noise_default_raises():
             return jnp.array(0.0)
 
     with pytest.raises(NotImplementedError):
-        _NoStat().mstep_transition_noise(
+        _NoStat().shrink(
             jnp.zeros((1, 2, 1)),
             jnp.zeros((1, 2, 0)),
             jnp.zeros((1, 2, 0)),
@@ -324,8 +323,8 @@ def test_approx_mstep_transition_noise_default_raises():
 
 
 @pytest.mark.parametrize("dim,rank", _RANK_CASES)
-def test_mvn_mstep_transition_noise_matches_independent_reference(dim, rank):
-    """MVN.mstep_transition_noise's combined formula (v1 statistic, no
+def test_mvn_shrink_matches_independent_reference(dim, rank):
+    """MVN.shrink's combined formula (v1 statistic, no
     cross-covariance term, then MAP-shrunk toward prior) matches an
     independently computed reference on a small linear transition,
     including its own pair-alignment slicing (full moment/u/c in, not
@@ -360,7 +359,7 @@ def test_mvn_mstep_transition_noise_matches_independent_reference(dim, rank):
     prior_dof = 2.0
     prior = (prior_value, prior_dof)
 
-    free = approx.mstep_transition_noise(moment, u, c, f, prior, key=jrnd.key(1))
+    free = approx.shrink(moment, u, c, f, prior, key=jrnd.key(1))
     canon = approx.free_to_canon(free)
     got_cov = canon.chol @ canon.chol.T
 

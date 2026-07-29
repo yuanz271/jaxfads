@@ -482,7 +482,7 @@ class MVN(Approx):
         canon = MVNParam(loc=loc_arr, chol=jnp.diag(chol_diag))
         return self.canon_to_free(canon)
 
-    def mstep_transition_noise(
+    def shrink(
         self,
         moment: Array,
         u: Array,

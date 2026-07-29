@@ -172,7 +172,7 @@ class Approx(SubclassRegistryMixin, ABC):
         moment = self.canon_to_moment(canon)
         return self.moment_to_natural(moment)
 
-    def mstep_transition_noise(
+    def shrink(
         self,
         moment: Array,
         u: Array,
@@ -194,14 +194,17 @@ class Approx(SubclassRegistryMixin, ABC):
         ``GLM.mstep`` calls exactly one method (``Gaussian.mstep``), never
         needing to sequence a separate raw-statistic step itself. An
         earlier version of this design split this into two public methods
-        (a ``mstep_transition_stat`` computing the raw statistic, and a
-        separate ``shrink`` doing the blend), reasoning ``shrink`` might
-        be independently reusable for other covariance-shaped quantities
-        -- rejected once checked against ``Gaussian.mstep_stat``/
-        ``Gaussian.mstep``'s actual precedent (a private-style internal
-        helper plus one public combining method, not two public methods
-        the orchestrator must both call) and once it became clear no
-        second use case for the split ever existed to justify it.
+        -- a ``mstep_transition_stat`` computing the raw statistic, and a
+        narrower ``shrink`` doing only the MAP-shrinkage blend (this same
+        name, but a smaller scope) -- reasoning the narrower ``shrink``
+        might be independently reusable for other covariance-shaped
+        quantities -- rejected once checked against ``Gaussian.
+        mstep_stat``/``Gaussian.mstep``'s actual precedent (a
+        private-style internal helper plus one public combining method,
+        not two public methods the orchestrator must both call) and once
+        it became clear no second use case for the narrower split ever
+        existed to justify it. This method now does both jobs under the
+        ``shrink`` name.
 
         Takes the *full* ``moment``/``u``/``c`` (not pre-sliced
         ``(t, t-1)`` pairs) and performs its own pair-alignment slicing
@@ -251,9 +254,7 @@ class Approx(SubclassRegistryMixin, ABC):
             A free-form array, shape/meaning defined by the concrete
             subclass (matching whatever ``XFADS.noise_free`` expects).
         """
-        raise NotImplementedError(
-            f"{type(self).__name__} does not implement mstep_transition_noise"
-        )
+        raise NotImplementedError(f"{type(self).__name__} does not implement shrink")
 
     def transition_points(
         self, key: Array, moment: Array, mc_size: int

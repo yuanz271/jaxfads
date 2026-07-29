@@ -47,7 +47,7 @@ paper's method.
   transition/process noise (`Q`)**: `Observation.mstep`/
   `mstep_gaussian_cov` (`src/jaxfads/observations.py`,
   [docs/mstep_gaussian_cov.md](mstep_gaussian_cov.md)) and
-  `Approx.mstep_transition_noise`/`XFADS.mstep`
+  `Approx.shrink`/`XFADS.mstep`
   (`src/jaxfads/base.py`, `src/jaxfads/distributions/mvn.py`,
   `src/jaxfads/smoother.py`,
   [docs/mstep_dynamics_noise.md](mstep_dynamics_noise.md)) provide an

@@ -351,19 +351,80 @@ def main():
         print(f"posterior-mean RMSE (aligned) vs true latent: {post_rmse:.5f}")
         return dict(name=name, q_final=q_trace[-1], flow_rmse=rmse, post_rmse=post_rmse)
 
+    def run_shipped_api(name, *, n_rounds, epochs_per_round, prior, prior_dof_frac):
+        """Same alternating-EM design as run_alternating_em (Approach C),
+        but using the actual shipped library API -- Approx.shrink /
+        XFADS.mstep -- instead of this script's own prototype
+        mstep_transition_diag + manual eqx.tree_at. Validates that the
+        shipped implementation reproduces Approach C's already-validated
+        results, not just the prototype math.
+
+        conf.noise_prior/conf.noise_prior_dof are set once at construction
+        (XFADS.noise_prior is a static field, read once in __init__ -- see
+        docs/mstep_dynamics_noise.md) and never touched again; the round
+        loop only ever calls model.mstep(...), which reads self.noise_prior
+        internally."""
+        n_pairs = train_data[0].shape[0] * (train_data[0].shape[1] - 1)
+        prior_dof = prior_dof_frac * n_pairs
+        conf_with_prior = OmegaConf.merge(
+            conf, {"noise_prior": prior, "noise_prior_dof": prior_dof}
+        )
+        model = XFADS(conf_with_prior, key_model).initialize(*train_data)
+        approx = model.approx
+        q_trace = []
+
+        for round_idx in range(n_rounds):
+            trainer_conf = OmegaConf.create({
+                "seed": args.seed, "learning_rate": 1e-3,
+                "max_epoch": epochs_per_round, "batch_size": args.batch_size,
+                "freeze_paths": ["noise_free"],
+            })
+            model = train(model, train_data, conf=trainer_conf)
+            model = model.mstep(*train_data, key=jr.key(1000 + round_idx))
+            _, Q = approx.unpack(
+                approx.canon_to_moment(approx.free_to_canon(model.noise_free))
+            )
+            q_trace.append(np.asarray(jnp.diag(Q)))
+
+        print(f"\n=== {name} ===")
+        print("Q diag trace (per round):")
+        for i, q in enumerate(q_trace):
+            print(f"  round {i}: {q}")
+        print(f"Q_final diag: {q_trace[-1]} (true={args.q_true})")
+
+        t, y, u, c = data
+        _, means, _ = model(t, y, u, c, key=jr.key(123))
+        means, _ = jax.vmap(jax.vmap(approx.unpack))(means)
+        aff = procrustes_affine(latent.reshape(-1, 3), means.reshape(-1, 3))
+
+        eval_pts = latent.reshape(-1, 3)[:: max(1, latent.reshape(-1, 3).shape[0] // 2000)]
+        rmse = flow_field_rmse(model, aff, eval_pts)
+        print(f"flow-field RMSE vs true Lorenz one-step map (aligned, "
+              f"n_eval_pts={eval_pts.shape[0]}): {rmse:.5f}")
+
+        aligned_means = align(aff, means)
+        post_rmse = float(jnp.sqrt(jnp.mean((aligned_means - latent) ** 2)))
+        print(f"posterior-mean RMSE (aligned) vs true latent: {post_rmse:.5f}")
+        return dict(name=name, q_final=q_trace[-1], flow_rmse=rmse, post_rmse=post_rmse)
+
     result_a = run("A: joint gradient training (baseline)", freeze_q=False, use_mstep=False)
     result_b = run("B: Q frozen + mstep_transition_stat (decoupled)", freeze_q=True, use_mstep=True)
     result_c = run_alternating_em(
-        "C: alternating EM (Q in loss, MAP-shrunk rounds)",
+        "C: alternating EM (Q in loss, MAP-shrunk rounds) -- prototype math",
+        n_rounds=5, epochs_per_round=max(1, args.max_epoch // 5),
+        prior=1.0, prior_dof_frac=0.1,
+    )
+    result_d = run_shipped_api(
+        "D: alternating EM via shipped Approx.shrink/XFADS.mstep",
         n_rounds=5, epochs_per_round=max(1, args.max_epoch // 5),
         prior=1.0, prior_dof_frac=0.1,
     )
 
     print("\n=== Summary ===")
-    print(f"{'metric':<20}{'A (joint)':<20}{'B (mstep)':<20}{'C (alt. EM+shrink)':<20}")
-    print(f"{'Q_final mean':<20}{result_a['q_final'].mean():<20.5f}{result_b['q_final'].mean():<20.5f}{result_c['q_final'].mean():<20.5f}")
-    print(f"{'flow RMSE':<20}{result_a['flow_rmse']:<20.5f}{result_b['flow_rmse']:<20.5f}{result_c['flow_rmse']:<20.5f}")
-    print(f"{'post RMSE':<20}{result_a['post_rmse']:<20.5f}{result_b['post_rmse']:<20.5f}{result_c['post_rmse']:<20.5f}")
+    print(f"{'metric':<20}{'A (joint)':<20}{'B (mstep)':<20}{'C (alt. EM+shrink)':<20}{'D (shipped API)':<20}")
+    print(f"{'Q_final mean':<20}{result_a['q_final'].mean():<20.5f}{result_b['q_final'].mean():<20.5f}{result_c['q_final'].mean():<20.5f}{result_d['q_final'].mean():<20.5f}")
+    print(f"{'flow RMSE':<20}{result_a['flow_rmse']:<20.5f}{result_b['flow_rmse']:<20.5f}{result_c['flow_rmse']:<20.5f}{result_d['flow_rmse']:<20.5f}")
+    print(f"{'post RMSE':<20}{result_a['post_rmse']:<20.5f}{result_b['post_rmse']:<20.5f}{result_c['post_rmse']:<20.5f}{result_d['post_rmse']:<20.5f}")
 
 
 if __name__ == "__main__":
