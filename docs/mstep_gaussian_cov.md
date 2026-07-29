@@ -106,20 +106,29 @@ Implementation (`src/jaxfads/base.py`, `src/jaxfads/observations.py`,
   `mstep_observation_cov` — `trainer.py` never imports anything from
   `observations.py`, the concrete-implementations module, keeping the
   trainer strictly `Observation`-agnostic):
-  - `"minibatch"`: every `train_step` replaces `model.observation` with
-    `model.observation.mstep(t, moment, y, model.approx)` computed from
-    that minibatch's own forward pass.
+  - `"minibatch"`: every `train_step` calls `model.mstep(t, y, u, c,
+    key=...)` (via a shared, pure `_do_mstep` helper) computed from that
+    minibatch's own forward pass. `XFADS.mstep` composes both this
+    `Observation` update and, if `conf.noise_prior` is configured, the
+    transition-noise `Q` update — see
+    [mstep_dynamics_noise](mstep_dynamics_noise.md) for that half; this
+    document only covers `R`.
   - `"epoch"`: instead, a shared `apply_mstep` closure runs once per
     completed epoch (inside `finalize_epoch`, after any user
     `on_epoch_end` callback), from a forward pass over the whole
     `train_set`.
   - Regardless of mode, the same `apply_mstep` closure is called once
-    more, unconditionally, immediately after the entire
-    `try`/`except`/`finally` training loop — covering normal completion,
-    early stop via `on_epoch_end`, and `KeyboardInterrupt` alike — so the
-    returned model always reflects a fresh, full-`train_set` mstep
-    correction regardless of mode or how training ended. Invalid
-    `mstep_mode` values raise `ValueError`.
+    more after the entire `try`/`except`/`finally` training loop —
+    covering normal completion, early stop via `on_epoch_end`, and
+    `KeyboardInterrupt` alike — so the returned model always reflects a
+    fresh, full-`train_set` mstep correction regardless of mode or how
+    training ended. This final call is skipped only when it would be
+    pure duplication of a `finalize_epoch` call that already applied it
+    to the exact same model state (`mstep_mode="epoch"`, normal
+    completion or early stop, no further training since) — tracked via an
+    `mstep_stale` flag; a `KeyboardInterrupt` mid-epoch in `"epoch"` mode
+    still gets the final call, since more `train_step`s ran since the
+    last `apply_mstep`. Invalid `mstep_mode` values raise `ValueError`.
   - `train()` always folds `model.observation.mstep_frozen_paths()` into
     its internal gradient-freeze mask regardless of `mstep_mode`, so
     gradient descent never fights this update — no `conf.freeze_paths`
@@ -285,3 +294,12 @@ manually for *this* pattern — only `train()`'s own automatic mechanism
   the guaranteed final full-dataset update after the last epoch regardless
   of mode; purged 5 low-value tests, added 2 new `mstep_mode` tests.
 - `57786a0` — unrelated to this feature: `AGENTS.md` testing-workflow policy update.
+- `04b64db` — `train_step`/`apply_mstep` now call `model.mstep(...)`
+  (composing both `R` and, when configured, the transition-noise `Q`
+  update) instead of `model.observation.mstep(...)` directly; no change
+  to `R`'s own behavior, only to what the call site composes alongside it.
+- `ea30c69` — deduplicated the `train_step`/`apply_mstep` call sites into a
+  shared `_do_mstep` helper, and fixed a real redundant-computation bug:
+  for `mstep_mode="epoch"`, the guaranteed post-training `apply_mstep`
+  call was needlessly recomputing the exact same full-dataset update the
+  last `finalize_epoch` call had just applied, on an unchanged model.

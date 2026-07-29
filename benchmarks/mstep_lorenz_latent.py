@@ -407,6 +407,56 @@ def main():
         print(f"posterior-mean RMSE (aligned) vs true latent: {post_rmse:.5f}")
         return dict(name=name, q_final=q_trace[-1], flow_rmse=rmse, post_rmse=post_rmse)
 
+    def run_train_integrated(name, *, prior, prior_dof_frac, mstep_mode):
+        """Fully automatic path: a SINGLE train() call, conf.noise_prior/
+        conf.noise_prior_dof set at construction, mstep_mode controlling
+        the cadence -- no manual round loop, no manual freeze_paths, no
+        manual model.mstep(...) calls at all. Exercises the just-landed
+        train()-integration (train_step/apply_mstep now call model.mstep
+        instead of model.observation.mstep alone; noise_free is
+        auto-frozen from gradient descent whenever noise_prior is set).
+
+        This is the untested-cadence case flagged in
+        docs/mstep_dynamics_noise.md: mstep_mode='minibatch' (or 'epoch')
+        is far more frequent than the round-based cadence (every 8-20
+        epochs) actually validated by C/D above.
+        """
+        n_pairs = train_data[0].shape[0] * (train_data[0].shape[1] - 1)
+        prior_dof = prior_dof_frac * n_pairs
+        conf_with_prior = OmegaConf.merge(
+            conf, {"noise_prior": prior, "noise_prior_dof": prior_dof}
+        )
+        model = XFADS(conf_with_prior, key_model).initialize(*train_data)
+        approx = model.approx
+
+        trainer_conf = OmegaConf.create({
+            "seed": args.seed, "learning_rate": 1e-3,
+            "max_epoch": args.max_epoch, "batch_size": args.batch_size,
+        })
+        model = train(model, train_data, conf=trainer_conf, mstep_mode=mstep_mode)
+
+        _, Q_final = approx.unpack(
+            approx.canon_to_moment(approx.free_to_canon(model.noise_free))
+        )
+        print(f"\n=== {name} ===")
+        print(f"Q_final diag: {jnp.diag(Q_final)} (true={args.q_true})")
+
+        t, y, u, c = data
+        _, means, _ = model(t, y, u, c, key=jr.key(123))
+        means, _ = jax.vmap(jax.vmap(approx.unpack))(means)
+        aff = procrustes_affine(latent.reshape(-1, 3), means.reshape(-1, 3))
+
+        eval_pts = latent.reshape(-1, 3)[:: max(1, latent.reshape(-1, 3).shape[0] // 2000)]
+        rmse = flow_field_rmse(model, aff, eval_pts)
+        print(f"flow-field RMSE vs true Lorenz one-step map (aligned, "
+              f"n_eval_pts={eval_pts.shape[0]}): {rmse:.5f}")
+
+        aligned_means = align(aff, means)
+        post_rmse = float(jnp.sqrt(jnp.mean((aligned_means - latent) ** 2)))
+        print(f"posterior-mean RMSE (aligned) vs true latent: {post_rmse:.5f}")
+        return dict(name=name, q_final=np.asarray(jnp.diag(Q_final)),
+                    flow_rmse=rmse, post_rmse=post_rmse)
+
     result_a = run("A: joint gradient training (baseline)", freeze_q=False, use_mstep=False)
     result_b = run("B: Q frozen + mstep_transition_stat (decoupled)", freeze_q=True, use_mstep=True)
     result_c = run_alternating_em(
@@ -419,12 +469,21 @@ def main():
         n_rounds=5, epochs_per_round=max(1, args.max_epoch // 5),
         prior=1.0, prior_dof_frac=0.1,
     )
+    result_e = run_train_integrated(
+        "E: fully automatic train()-integration, mstep_mode='minibatch' (untested cadence)",
+        prior=1.0, prior_dof_frac=0.1, mstep_mode="minibatch",
+    )
 
     print("\n=== Summary ===")
-    print(f"{'metric':<20}{'A (joint)':<20}{'B (mstep)':<20}{'C (alt. EM+shrink)':<20}{'D (shipped API)':<20}")
-    print(f"{'Q_final mean':<20}{result_a['q_final'].mean():<20.5f}{result_b['q_final'].mean():<20.5f}{result_c['q_final'].mean():<20.5f}{result_d['q_final'].mean():<20.5f}")
-    print(f"{'flow RMSE':<20}{result_a['flow_rmse']:<20.5f}{result_b['flow_rmse']:<20.5f}{result_c['flow_rmse']:<20.5f}{result_d['flow_rmse']:<20.5f}")
-    print(f"{'post RMSE':<20}{result_a['post_rmse']:<20.5f}{result_b['post_rmse']:<20.5f}{result_c['post_rmse']:<20.5f}{result_d['post_rmse']:<20.5f}")
+    header = (f"{'metric':<20}{'A (joint)':<20}{'B (mstep)':<20}"
+              f"{'C (alt. EM+shrink)':<20}{'D (shipped API)':<20}{'E (train-integrated)':<22}")
+    print(header)
+    print(f"{'Q_final mean':<20}{result_a['q_final'].mean():<20.5f}{result_b['q_final'].mean():<20.5f}"
+          f"{result_c['q_final'].mean():<20.5f}{result_d['q_final'].mean():<20.5f}{result_e['q_final'].mean():<22.5f}")
+    print(f"{'flow RMSE':<20}{result_a['flow_rmse']:<20.5f}{result_b['flow_rmse']:<20.5f}"
+          f"{result_c['flow_rmse']:<20.5f}{result_d['flow_rmse']:<20.5f}{result_e['flow_rmse']:<22.5f}")
+    print(f"{'post RMSE':<20}{result_a['post_rmse']:<20.5f}{result_b['post_rmse']:<20.5f}"
+          f"{result_c['post_rmse']:<20.5f}{result_d['post_rmse']:<20.5f}{result_e['post_rmse']:<22.5f}")
 
 
 if __name__ == "__main__":

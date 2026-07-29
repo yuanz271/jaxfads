@@ -256,12 +256,17 @@ re-shrinkage behaves the same as the validated *infrequent* shrinkage is
 not yet tested -- see that doc's Open Questions. Opt-in only; does not
 affect users who leave `conf.noise_prior` unset.
 
-Regardless of `mstep_mode`, `mstep` is always applied once more, from a
+Regardless of `mstep_mode`, `mstep` is applied once more, from a
 full-dataset forward pass, immediately after the final epoch's gradient
 steps complete and right before `train()` returns -- covering normal
 completion, early stopping via `on_epoch_end`, and `KeyboardInterrupt`
-alike. The returned model therefore always reflects a fresh, full-dataset
-mstep correction, regardless of mode or how training ended.
+alike, so the returned model always reflects a fresh, full-dataset mstep
+correction regardless of mode or how training ended. This final call is
+skipped only when it would be pure duplication -- `mstep_mode="epoch"`,
+normal completion or early stop, where the last per-epoch update already
+applied to this exact, unchanged model state; a `KeyboardInterrupt`
+mid-epoch in `"epoch"` mode still gets the final call, since more
+training happened since the last per-epoch update.
 
 `model.observation.mstep_frozen_paths()` is always excluded from the
 optimizer automatically (folded into `train()`'s internal freeze mask),

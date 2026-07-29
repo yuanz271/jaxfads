@@ -2,6 +2,51 @@
 
 ## Unreleased
 
+* **Default behavior change:** `MVN` now defaults to
+  `use_sigma_points=True` -- propagating `q(z_{t-1})` through the
+  transition uses deterministic unscented-transform (UT) sigma points
+  instead of Monte Carlo sampling by default. `Approx.transition_points`
+  is a new, overridable hook (returns `(points, weights)` for this
+  propagation step); `MVN(use_sigma_points=False)` restores the previous
+  Monte Carlo behavior exactly, bit-for-bit. Real-data validation across
+  `state_dim` 8/16/32 showed UT is never worse, and often better/cheaper,
+  than Monte Carlo on posterior-RMSE. See `docs/transition_points.md`.
+* Added a closed-form, non-SGD EM M-step for the observation-noise
+  covariance `R` (Gaussian likelihoods), avoiding a Heywood-case
+  degeneracy that plain gradient-based MLE of `R` is prone to (a fitted
+  covariance reaching the numerical floor while its true residual
+  variance was ~10^6x larger). Always-on for Gaussian-likelihood models,
+  no opt-in needed -- `train(..., mstep_mode="minibatch" | "epoch")`
+  (default `"minibatch"`) controls the update cadence, and a final update
+  is always applied once more after the last epoch. Standalone
+  `mstep_gaussian_cov`/`mstep_observation_cov` are available for one-off
+  recomputation outside `train()`. See `docs/mstep_gaussian_cov.md`.
+* Added an optional closed-form M-step for the transition/process-noise
+  covariance `Q`. Set `conf.noise_prior`/`conf.noise_prior_dof` (both
+  `None` by default -- `Q` stays fully gradient-trained unless
+  configured, no behavior change for existing models) to MAP-shrink `Q`
+  toward that prior instead of gradient descent. `XFADS.mstep(t, y, u, c,
+  key=...)` composes both the `R` and `Q` updates in one call;
+  `train()` calls it automatically at the same cadence as `R`
+  (`mstep_mode`), with `noise_free` auto-excluded from gradient descent
+  whenever a prior is configured (mirroring `R`'s own auto-exclusion, no
+  `conf.freeze_paths` entry needed). See `docs/mstep_dynamics_noise.md`
+  for the design, validation, and known open questions (this reuses `R`'s
+  minibatch/epoch cadence, which is more frequent than the round-based
+  cadence -- every 8-20 epochs -- actually validated in the accompanying
+  benchmarks; not yet shown to be safe at this frequency, though a
+  real-data check did not find it alarming).
+* Added `cuda12`/`cuda13` optional-dependency extras
+  (`pip install jaxfads[cuda12]` or `jaxfads[cuda13]`) for one-step GPU
+  installs; the base `jax` dependency stays CPU-only. The two extras are
+  mutually exclusive (each pulls in a distinct jaxlib/CUDA build);
+  `cuda13` also drops some older GPU architectures (Maxwell/Volta/Pascal)
+  that `cuda12` still supports.
+* Fixed a redundant full-dataset `mstep` recomputation at the end of
+  training when `mstep_mode="epoch"` -- the last epoch's own update and
+  the guaranteed post-training update were duplicating the same
+  computation on an unchanged model.
+
 ## 0.10.0
 
 * `Gaussian.eloglik` now computes the analytic expected log-likelihood via a
