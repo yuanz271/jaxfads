@@ -172,7 +172,7 @@ def mstep_transition_diag(model, data, approx, *, floor):
     estimate, floored for numerical safety only (per the doc's design --
     not a meaningful Bayesian prior)."""
     t, y, u, c = data
-    _, moment, _ = model(t, y, u, c, key=jr.key(0))  # smoothed moments
+    _, moment, _, _shrink_stat = model(t, y, u, c, key=jr.key(0))  # smoothed moments
     moment_tm1 = moment[:, :-1, :].reshape(-1, moment.shape[-1])
     moment_t = moment[:, 1:, :].reshape(-1, moment.shape[-1])
 
@@ -337,7 +337,7 @@ def main():
         print(f"Q_final diag: {q_trace[-1]} (true={args.q_true})")
 
         t, y, u, c = data
-        _, means, _ = model(t, y, u, c, key=jr.key(123))
+        _, means, _, _shrink_stat = model(t, y, u, c, key=jr.key(123))
         means, _ = jax.vmap(jax.vmap(approx.unpack))(means)
         aff = procrustes_affine(latent.reshape(-1, 3), means.reshape(-1, 3))
 
@@ -393,7 +393,7 @@ def main():
         print(f"Q_final diag: {q_trace[-1]} (true={args.q_true})")
 
         t, y, u, c = data
-        _, means, _ = model(t, y, u, c, key=jr.key(123))
+        _, means, _, _shrink_stat = model(t, y, u, c, key=jr.key(123))
         means, _ = jax.vmap(jax.vmap(approx.unpack))(means)
         aff = procrustes_affine(latent.reshape(-1, 3), means.reshape(-1, 3))
 
@@ -442,7 +442,7 @@ def main():
         print(f"Q_final diag: {jnp.diag(Q_final)} (true={args.q_true})")
 
         t, y, u, c = data
-        _, means, _ = model(t, y, u, c, key=jr.key(123))
+        _, means, _, _shrink_stat = model(t, y, u, c, key=jr.key(123))
         means, _ = jax.vmap(jax.vmap(approx.unpack))(means)
         aff = procrustes_affine(latent.reshape(-1, 3), means.reshape(-1, 3))
 

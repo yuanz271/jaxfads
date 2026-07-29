@@ -9,7 +9,6 @@ in their respective modules.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable
 from typing import Any
 
 from gearax.mixin import SubclassRegistryMixin
@@ -175,42 +174,38 @@ class Approx(SubclassRegistryMixin, ABC):
     def shrink(
         self,
         moment: Array,
-        u: Array,
-        c: Array,
-        transition_fn: Callable[..., Array],
+        shrink_stat: tuple[Array, Array],
         prior: Any,
-        *,
-        key: Array,
-        mc_size: int,
     ) -> Array:
         """Closed-form, non-SGD transition-noise (``Q``) update: computes
         the per-(batch,time) sufficient statistic from smoothed moments
-        and MAP-shrinks it toward ``prior`` in one call, returning the
-        result encoded as a free-form array (ready to replace
-        ``XFADS.noise_free``).
+        and an already-propagated statistic, and MAP-shrinks it toward
+        ``prior`` in one call, returning the result encoded as a free-form
+        array (ready to replace ``XFADS.noise_free``).
 
         One combined method, not two -- mirrors ``Observation.mstep``/
         ``Gaussian.mstep``'s own shape exactly: the orchestrator
         (``XFADS.mstep``) calls exactly one method here, the same way
         ``GLM.mstep`` calls exactly one method (``Gaussian.mstep``), never
-        needing to sequence a separate raw-statistic step itself. An
-        earlier version of this design split this into two public methods
-        -- a ``mstep_transition_stat`` computing the raw statistic, and a
-        narrower ``shrink`` doing only the MAP-shrinkage blend (this same
-        name, but a smaller scope) -- reasoning the narrower ``shrink``
-        might be independently reusable for other covariance-shaped
-        quantities -- rejected once checked against ``Gaussian.
-        mstep_stat``/``Gaussian.mstep``'s actual precedent (a
-        private-style internal helper plus one public combining method,
-        not two public methods the orchestrator must both call) and once
-        it became clear no second use case for the narrower split ever
-        existed to justify it. This method now does both jobs under the
-        ``shrink`` name.
+        needing to sequence a separate raw-statistic step itself.
 
-        Takes the *full* ``moment``/``u``/``c`` (not pre-sliced
-        ``(t, t-1)`` pairs) and performs its own pair-alignment slicing
-        internally -- the caller should not need to know this method
-        needs shifted, aligned pairs at all.
+        Takes the *full* ``moment`` (not pre-sliced ``(t, t-1)`` pairs)
+        and performs its own pair-alignment slicing internally -- the
+        caller should not need to know this method needs shifted, aligned
+        pairs at all.
+
+        Does **not** itself propagate a distribution through the
+        transition -- ``shrink_stat`` (the per-pair, noise-*free*
+        propagated ``(mean, cov)`` of the transition applied to
+        ``q(z_{t-1})``) is computed once, upstream, by ``XFADS``'s own
+        forward pass (``core._site_filter``/``nofilt``/``causal``, gated
+        by ``collect_shrink_stat``), and passed in here already computed
+        -- reusing that pass's own propagation rather than repeating it.
+        See ``docs/mstep_dynamics_noise.md`` for why: the forward pass
+        already computes exactly this propagation (via ``approx.
+        transition_points``) for its own noise-included predictive-moment
+        term: recomputing it a second time inside ``shrink`` would be
+        pure waste.
 
         Deliberately opaque at this level about ``raw_stat``'s
         shape/meaning and ``prior``'s structure (a single value? a
@@ -218,15 +213,12 @@ class Approx(SubclassRegistryMixin, ABC):
         scheme?) -- defined entirely by the subclass; not every ``Approx``
         family need define this meaningfully (e.g. a hypothetical
         discrete-state family might have no shrinkable dispersion concept
-        at all). ``transition_fn`` is an external argument (dynamics are
-        not an ``Approx`` concept) -- the same pattern ``Observation.
-        mstep`` already uses for ``approx``. ``prior`` is also a call
-        argument (not construction-time ``Approx`` config): it's owned by
-        ``XFADS``'s own configuration (``XFADS.noise_prior``, read via
-        ``XFADS.mstep``), not by ``Approx``, since ``Approx``
-        (``XFADS.approx``) is a stateless property freshly reconstructed
-        on every access -- not a natural home for a specific model's
-        chosen hyperparameter value.
+        at all). ``prior`` is a call argument (not construction-time
+        ``Approx`` config): it's owned by ``XFADS``'s own configuration
+        (``XFADS.noise_prior``, read via ``XFADS.mstep``), not by
+        ``Approx``, since ``Approx`` (``XFADS.approx``) is a stateless
+        property freshly reconstructed on every access -- not a natural
+        home for a specific model's chosen hyperparameter value.
 
         Default: not supported -- raises ``NotImplementedError``. Callers
         (``XFADS.mstep``) only reach this when a prior has been
@@ -239,24 +231,13 @@ class Approx(SubclassRegistryMixin, ABC):
         moment : Array, shape (N, T, param_dim)
             Smoothed moment parameters of ``q(z_t)`` for the full
             sequence.
-        u : Array, shape (N, T, input_dim)
-        c : Array, shape (N, T, covariate_dim)
-            Full control/covariate sequences.
-        transition_fn : Callable
-            One-step transition callable, ``f(z, u, c, key=...) -> z``.
+        shrink_stat : tuple[Array, Array]
+            ``(mean_f, cov_f)``, shape ``(N, T-1, state_dim)`` and
+            ``(N, T-1, state_dim, state_dim)`` -- the already-propagated,
+            noise-free ``(mean, cov)`` of the transition applied to each
+            pair's ``q(z_{t-1})``, aligned with ``moment[:, 1:, :]``.
         prior : Any
             Subclass-defined prior spec.
-        key : Array
-            JAX PRNG key.
-        mc_size : int
-            Requested point/sample count for propagating each pair's
-            ``q(z_{t-1})`` through ``transition_fn`` (see
-            ``transition_points``); may be ignored by deterministic
-            overrides (e.g. unscented-transform sigma points always
-            return a fixed count). Not meaningful for a subclass whose
-            ``shrink`` doesn't propagate a distribution through
-            ``transition_fn`` at all -- default value only, no required
-            semantics at this ABC level.
 
         Returns
         -------

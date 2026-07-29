@@ -124,7 +124,7 @@ class XFADS(ConfModule):
     >>> u = jnp.zeros((32, 100, 1))         # controls
     >>> c = jnp.zeros((32, 100, 1))         # covariates
     >>>
-    >>> natural, mean, prediction = model(t, y, u, c, key=key)
+    >>> natural, mean, prediction, shrink_stat = model(t, y, u, c, key=key)
     """
 
     dynamics: Dynamics
@@ -358,24 +358,25 @@ class XFADS(ConfModule):
         method computes can feed back into that step's SGD update. Do not
         rely on this method itself to protect a caller that violates that
         ordering.
+
+        Reuses ``self(...)``'s own ``shrink_stat`` (the 4th return value,
+        always computed -- see ``__call__``) for ``self.approx.shrink``
+        instead of having ``shrink`` re-propagate ``q(z_{t-1})`` through
+        ``self.transition`` a second time: the forward pass already did
+        this propagation once for its own noise-included predictive-moment
+        term, at negligible marginal cost for also reducing it to the
+        noise-free statistic ``shrink`` needs (see
+        ``docs/mstep_dynamics_noise.md``).
         """
         approx = self.approx
-        _natural, moment, _predicted = self(t, y, u, c, key=key)
+        _natural, moment, _predicted, shrink_stat = self(t, y, u, c, key=key)
         new_observation = self.observation.mstep(t, moment, y, approx)
         model = eqx.tree_at(lambda m: m.observation, self, new_observation)
 
         if self.noise_prior is None:
             return model
 
-        new_noise_free = approx.shrink(
-            moment,
-            u,
-            c,
-            self.transition,
-            self.noise_prior,
-            key=key,
-            mc_size=self.conf.mc_size,
-        )
+        new_noise_free = approx.shrink(moment, shrink_stat, self.noise_prior)
         return eqx.tree_at(lambda m: m.noise_free, model, new_noise_free)
 
     @classmethod
@@ -448,7 +449,9 @@ class XFADS(ConfModule):
             )
         )
 
-    def __call__(self, t, y, u, c, *, key) -> tuple[Array, Array, Array]:
+    def __call__(
+        self, t, y, u, c, *, key
+    ) -> tuple[Array, Array, Array, tuple[Array, Array]]:
         """
         Perform variational inference for state-space model.
 
@@ -479,6 +482,14 @@ class XFADS(ConfModule):
             Moment parameters of posterior distributions over states.
         predictions : Array, shape (N, T, param_dim)
             Predicted moment parameters from dynamics model.
+        shrink_stat : tuple[Array, Array], shape (N, T-1, state_dim) and (N, T-1, state_dim, state_dim)
+            Per-pair, noise-free propagated ``(mean, cov)`` of
+            ``self.transition`` applied to each pair's ``q(z_{t-1})``,
+            aligned with ``moment_params[:, 1:, :]``. Always computed
+            (reuses the same propagation already needed for
+            ``predictions``, at negligible marginal cost -- see
+            ``core._site_filter``); used by :meth:`mstep`, most callers
+            can ignore it.
 
         Notes
         -----
@@ -509,14 +520,14 @@ class XFADS(ConfModule):
         >>> u = jnp.zeros((1, 100, 5))
         >>> c = jnp.zeros((1, 100, 3))
         >>>
-        >>> natural, moment, pred = model(t, y, u, c, key=key)
+        >>> natural, moment, pred, shrink_stat = model(t, y, u, c, key=key)
         >>>
         >>> # Batch inference
         >>> y_batch = jrnd.normal(key, (32, 100, 50))
         >>> u_batch = jnp.zeros((32, 100, 5))
         >>> c_batch = jnp.zeros((32, 100, 3))
         >>>
-        >>> natural, moment, pred = model(t, y_batch, u_batch, c_batch, key=key)
+        >>> natural, moment, pred, shrink_stat = model(t, y_batch, u_batch, c_batch, key=key)
         """
         approx = self.approx
 

@@ -67,7 +67,9 @@ def test_filter_shapes_and_finite(diag):
     u = jnp.zeros((T, 0))
     c = jnp.zeros((T, 0))
 
-    nature_f, moment_f, moment_p = core.filter(model, key, jnp.arange(T), alpha, u, c)
+    nature_f, moment_f, moment_p, _shrink_stat = core.filter(
+        model, key, jnp.arange(T), alpha, u, c
+    )
 
     for arr in (nature_f, moment_f, moment_p):
         chex.assert_shape(arr, (T, param_dim))
@@ -117,8 +119,12 @@ def test_causal_reindexed_identity(diag):
     u = jnp.zeros((T, 0))
     c = jnp.zeros((T, 0))
 
-    check_nature, _, _ = core.filter(model, key, jnp.arange(T), alpha, u, c)
-    nature, moment, moment_p = core.causal(model, key, jnp.arange(T), alpha, beta, u, c)
+    check_nature, _, _, _shrink_stat = core.filter(
+        model, key, jnp.arange(T), alpha, u, c
+    )
+    nature, moment, moment_p, _shrink_stat2 = core.causal(
+        model, key, jnp.arange(T), alpha, beta, u, c
+    )
 
     chex.assert_trees_all_close(nature, check_nature + beta, atol=1e-6)
     chex.assert_shape(moment, (T, param_dim))
@@ -139,10 +145,12 @@ def test_causal_zero_beta_reduces_to_alpha_filter(diag):
     u = jnp.zeros((T, 0))
     c = jnp.zeros((T, 0))
 
-    check_nature, check_moment, check_moment_p = core.filter(
+    check_nature, check_moment, check_moment_p, _shrink_stat = core.filter(
         model, key, jnp.arange(T), alpha, u, c
     )
-    nature, moment, moment_p = core.causal(model, key, jnp.arange(T), alpha, beta, u, c)
+    nature, moment, moment_p, _shrink_stat2 = core.causal(
+        model, key, jnp.arange(T), alpha, beta, u, c
+    )
 
     chex.assert_trees_all_close(nature, check_nature, atol=1e-6)
     chex.assert_trees_all_close(moment, check_moment, atol=1e-6)

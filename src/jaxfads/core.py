@@ -258,8 +258,6 @@ def _site_filter(
     site_natural: Array,
     u: Array,
     c: Array,
-    *,
-    collect_shrink_stat: bool = False,
 ):
     """
     Generic forward recursion over natural-parameter site updates in XFADS.
@@ -282,15 +280,6 @@ def _site_filter(
         External control/input signals.
     c : Array, shape (T, covariate_dim)
         Time-varying covariates.
-    collect_shrink_stat : bool
-        Static (Python-level) flag. When True, additionally computes and
-        returns, per timestep, the noise-*free* propagated ``(mean, cov)``
-        of ``model.transition`` applied to ``q(z_{t-1})`` -- reusing the
-        same ``propagate_transition_points`` call already needed for the
-        noise-included predictive moment, rather than a second,
-        independent propagation later (see ``Approx.shrink``). Default
-        False: zero added cost, identical to this function's behavior
-        before this parameter existed.
 
     Returns
     -------
@@ -301,10 +290,15 @@ def _site_filter(
     moment_p : Array, shape (T, param_dim)
         Predicted moment parameters from dynamics.
     shrink_stat : tuple[Array, Array], shape (T-1, state_dim) and (T-1, state_dim, state_dim)
-        Only present when ``collect_shrink_stat=True``: the per-pair
-        ``(mean, cov)`` of ``model.transition(z_{t-1})`` under
-        ``q(z_{t-1})``, for pairs ``t = 2 ... T``, aligned with
-        ``moment_f[1:]``/``moment_f[:-1]``.
+        The per-pair, noise-*free* ``(mean, cov)`` of ``model.transition(z_{t-1})``
+        under ``q(z_{t-1})``, for pairs ``t = 2 ... T``, aligned with
+        ``moment_f[1:]``/``moment_f[:-1]``. Always computed, reusing the
+        same ``propagate_transition_points`` call already needed for the
+        noise-included predictive moment (``moment_p``) -- the marginal
+        cost of also reducing those same points to a weighted mean/cov
+        (:func:`weighted_moments`) is small relative to evaluating
+        ``model.transition`` at each point in the first place, so this is
+        computed unconditionally rather than gated behind a flag.
 
     Notes
     -----
@@ -324,49 +318,27 @@ def _site_filter(
 
     nature_f_1 = nature_p_1 + site_natural[0]
 
-    if collect_shrink_stat:
-
-        def ff(carry, obs):
-            key, nature_tm1 = carry
-            key, ky = jrnd.split(key)
-            site_t, u_tm1, c_tm1 = obs
-            moment_tm1 = approx.natural_to_moment(nature_tm1)
-            zs, weights = propagate_transition_points(
-                ky, moment_tm1, u_tm1, c_tm1, f, approx, mc_size
-            )
-            moment_p_t = _average_predictive_moment(zs, weights, noise, approx)
-            nature_p_t = approx.moment_to_natural(moment_p_t)
-            nature_t = nature_p_t + site_t
-            mean_f, cov_f = weighted_moments(zs, weights)
-            return (key, nature_t), (moment_p_t, nature_p_t, nature_t, mean_f, cov_f)
-    else:
-
-        def ff(carry, obs):
-            key, nature_tm1 = carry
-            key, ky = jrnd.split(key)
-            site_t, u_tm1, c_tm1 = obs
-            moment_tm1 = approx.natural_to_moment(nature_tm1)
-            moment_p_t = expected_predictive_moment(
-                ky, moment_tm1, u_tm1, c_tm1, f, noise, approx, mc_size
-            )
-            nature_p_t = approx.moment_to_natural(moment_p_t)
-            nature_t = nature_p_t + site_t
-            return (key, nature_t), (moment_p_t, nature_p_t, nature_t)
+    def ff(carry, obs):
+        key, nature_tm1 = carry
+        key, ky = jrnd.split(key)
+        site_t, u_tm1, c_tm1 = obs
+        moment_tm1 = approx.natural_to_moment(nature_tm1)
+        zs, weights = propagate_transition_points(
+            ky, moment_tm1, u_tm1, c_tm1, f, approx, mc_size
+        )
+        moment_p_t = _average_predictive_moment(zs, weights, noise, approx)
+        nature_p_t = approx.moment_to_natural(moment_p_t)
+        nature_t = nature_p_t + site_t
+        mean_f, cov_f = weighted_moments(zs, weights)
+        return (key, nature_t), (moment_p_t, nature_p_t, nature_t, mean_f, cov_f)
 
     key, ky = jrnd.split(key)
     scan_body = eqx.filter_checkpoint(ff)
-    if collect_shrink_stat:
-        _, (moment_p, _, nature_f, mean_f_seq, cov_f_seq) = scan(
-            scan_body,
-            init=(ky, nature_f_1),
-            xs=(site_natural[1:], u[:-1], c[:-1]),  # t = 2 ... T+1
-        )
-    else:
-        _, (moment_p, _, nature_f) = scan(
-            scan_body,
-            init=(ky, nature_f_1),
-            xs=(site_natural[1:], u[:-1], c[:-1]),  # t = 2 ... T+1
-        )
+    _, (moment_p, _, nature_f, mean_f_seq, cov_f_seq) = scan(
+        scan_body,
+        init=(ky, nature_f_1),
+        xs=(site_natural[1:], u[:-1], c[:-1]),  # t = 2 ... T+1
+    )
     nature_f = jnp.vstack((nature_f_1, nature_f))  # 1...T
 
     moment_f = jax.vmap(approx.natural_to_moment)(nature_f)
@@ -374,9 +346,7 @@ def _site_filter(
         (approx.natural_to_moment(nature_f_1), moment_p)
     )  # prediction of t=1 is the prior
 
-    if collect_shrink_stat:
-        return nature_f, moment_f, moment_p, (mean_f_seq, cov_f_seq)
-    return nature_f, moment_f, moment_p
+    return nature_f, moment_f, moment_p, (mean_f_seq, cov_f_seq)
 
 
 def filter(
@@ -386,19 +356,14 @@ def filter(
     alpha: Array,
     u: Array,
     c: Array,
-    *,
-    collect_shrink_stat: bool = False,
 ):
     """
     Alpha-only filtering posterior recursion.
 
-    This returns filtering natural/moment parameters and predictive moments
-    (plus a ``shrink_stat`` 4th element when ``collect_shrink_stat=True`` --
-    see ``_site_filter``).
+    This returns filtering natural/moment parameters, predictive moments,
+    and a ``shrink_stat`` 4th element -- see ``_site_filter``.
     """
-    return _site_filter(
-        model, key, _t, alpha, u, c, collect_shrink_stat=collect_shrink_stat
-    )
+    return _site_filter(model, key, _t, alpha, u, c)
 
 
 def smooth(
@@ -409,15 +374,11 @@ def smooth(
     beta: Array,
     u: Array,
     c: Array,
-    *,
-    collect_shrink_stat: bool = False,
 ):
     """
     Smoothing-side recursion using additive natural sites ``alpha + beta``.
     """
-    return _site_filter(
-        model, key, _t, alpha + beta, u, c, collect_shrink_stat=collect_shrink_stat
-    )
+    return _site_filter(model, key, _t, alpha + beta, u, c)
 
 
 def causal(
@@ -428,8 +389,6 @@ def causal(
     beta: Array,
     u: Array,
     c: Array,
-    *,
-    collect_shrink_stat: bool = False,
 ):
     """
     Causal Eq. 29 inference path using the repository beta indexing convention.
@@ -443,25 +402,17 @@ def causal(
     Under the paper indexing, this corresponds to
     ``lambda_t = check_lambda_t + beta_{t+1}``.
 
-    When ``collect_shrink_stat=True``, the returned ``shrink_stat`` is the
-    *filtering*-posterior statistic (from the internal ``filter(...)``
-    call above), not a statistic over this mode's own beta-reconstructed
-    ``moment`` -- the latter was never computed by any propagation step in
-    this mode, so there is nothing to reuse for it; the filtering
-    statistic is reused instead as a deliberate, accepted trade (see
-    ``docs/mstep_dynamics_noise.md``).
+    The returned ``shrink_stat`` is the *filtering*-posterior statistic
+    (from the internal ``filter(...)`` call above), not a statistic over
+    this mode's own beta-reconstructed ``moment`` -- the latter is never
+    computed by any propagation step in this mode, so there is nothing to
+    reuse for it; the filtering statistic is reused instead as a
+    deliberate, accepted trade (see ``docs/mstep_dynamics_noise.md``).
     """
-    if collect_shrink_stat:
-        check_nature, _, moment_p, shrink_stat = filter(
-            model, key, _t, alpha, u, c, collect_shrink_stat=True
-        )
-    else:
-        check_nature, _, moment_p = filter(model, key, _t, alpha, u, c)
+    check_nature, _, moment_p, shrink_stat = filter(model, key, _t, alpha, u, c)
     nature = check_nature + beta
     moment = jax.vmap(model.approx.natural_to_moment)(nature)
-    if collect_shrink_stat:
-        return nature, moment, moment_p, shrink_stat
-    return nature, moment, moment_p
+    return nature, moment, moment_p, shrink_stat
 
 
 def nofilt(
@@ -471,17 +422,15 @@ def nofilt(
     alpha: Array,
     u: Array,
     c: Array,
-    *,
-    collect_shrink_stat: bool = False,
 ):
     """Non-filter mode: posterior from encoder only, no filtering recursion.
 
     Posterior natural parameters are set directly by encoder output ``alpha``.
     Predictive moments are computed in parallel for ELBO KL terms.
 
-    ``collect_shrink_stat`` -- see ``_site_filter``: when True, also
-    returns the noise-free propagated ``(mean, cov)`` per pair, reusing
-    the same ``propagate_transition_points`` call.
+    Also always returns ``shrink_stat`` (the per-pair, noise-free
+    propagated ``(mean, cov)``), reusing the same
+    ``propagate_transition_points`` call -- see ``_site_filter``.
     """
     approx = model.approx
     noise = approx.canon_to_moment(approx.free_to_canon(model.noise_free))
@@ -493,34 +442,20 @@ def nofilt(
 
     keys = jrnd.split(key, nature.shape[0] - 1)
 
-    if collect_shrink_stat:
-
-        def _step(key_i, moment_tm1_i, u_i, c_i):
-            zs, weights = propagate_transition_points(
-                key_i, moment_tm1_i, u_i, c_i, f, approx, mc_size
-            )
-            moment_p_t = _average_predictive_moment(zs, weights, noise, approx)
-            mean_f, cov_f = weighted_moments(zs, weights)
-            return moment_p_t, mean_f, cov_f
-
-        moment_p_rest, mean_f_seq, cov_f_seq = jax.vmap(_step)(
-            keys, moment[:-1], u[:-1], c[:-1]
+    def _step(key_i, moment_tm1_i, u_i, c_i):
+        zs, weights = propagate_transition_points(
+            key_i, moment_tm1_i, u_i, c_i, f, approx, mc_size
         )
-    else:
-        expected_moment_fn = partial(
-            expected_predictive_moment,
-            f=f,
-            noise=noise,
-            approx=approx,
-            mc_size=mc_size,
-        )
-        moment_p_rest = jax.vmap(expected_moment_fn)(keys, moment[:-1], u[:-1], c[:-1])
+        moment_p_t = _average_predictive_moment(zs, weights, noise, approx)
+        mean_f, cov_f = weighted_moments(zs, weights)
+        return moment_p_t, mean_f, cov_f
 
+    moment_p_rest, mean_f_seq, cov_f_seq = jax.vmap(_step)(
+        keys, moment[:-1], u[:-1], c[:-1]
+    )
     moment_p = jnp.vstack((moment[0:1], moment_p_rest))
 
-    if collect_shrink_stat:
-        return nature, moment, moment_p, (mean_f_seq, cov_f_seq)
-    return nature, moment, moment_p
+    return nature, moment, moment_p, (mean_f_seq, cov_f_seq)
 
 
 # NOTE: _bismooth() requires model.backward (a callable reverse dynamics) which is

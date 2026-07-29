@@ -273,7 +273,7 @@ def batch_loss(
     times, observations, controls, covariates = batch
 
     key, model_key = jr.split(key)
-    _, posterior_moments, prior_moments = model(
+    _, posterior_moments, prior_moments, _shrink_stat = model(
         times, observations, controls, covariates, key=model_key
     )
 

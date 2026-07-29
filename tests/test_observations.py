@@ -205,7 +205,7 @@ def test_mstep_gaussian_cov_matches_independently_computed_residual_stat():
     approx = model.approx
     readout = model.observation.readout
     likelihood = model.observation.likelihood
-    _natural, moment, _pred = model(times, y, u, c, key=mstep_key)
+    _natural, moment, _pred, _shrink_stat = model(times, y, u, c, key=mstep_key)
 
     stat = jax.vmap(jax.vmap(partial(likelihood.mstep_stat, approx=approx, readout=readout)))(
         times, moment, y
@@ -242,7 +242,7 @@ def test_glm_mstep_matches_mstep_gaussian_cov():
     mstep_key = jrnd.key(2)
     via_driver = mstep_gaussian_cov(model, (times, y, u, c), key=mstep_key)
 
-    _natural, moment, _pred = model(times, y, u, c, key=mstep_key)
+    _natural, moment, _pred, _shrink_stat = model(times, y, u, c, key=mstep_key)
     new_observation = model.observation.mstep(times, moment, y, model.approx)
 
     chex.assert_trees_all_close(

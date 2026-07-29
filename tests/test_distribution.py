@@ -314,12 +314,8 @@ def test_approx_shrink_default_raises():
     with pytest.raises(NotImplementedError):
         _NoStat().shrink(
             jnp.zeros((1, 2, 1)),
-            jnp.zeros((1, 2, 0)),
-            jnp.zeros((1, 2, 0)),
-            lambda z, u, c, key=None: z,
+            (jnp.zeros((1, 1, 1)), jnp.zeros((1, 1, 1, 1))),
             prior=None,
-            key=jrnd.key(0),
-            mc_size=4,
         )
 
 
@@ -328,8 +324,9 @@ def test_mvn_shrink_matches_independent_reference(dim, rank):
     """MVN.shrink's combined formula (v1 statistic, no
     cross-covariance term, then MAP-shrunk toward prior) matches an
     independently computed reference on a small linear transition,
-    including its own pair-alignment slicing (full moment/u/c in, not
-    pre-sliced pairs) -- for both diag (rank=0) and full (rank=dim)
+    including its own pair-alignment slicing of ``moment`` (full
+    sequence in, not pre-sliced pairs) against an already-propagated
+    ``shrink_stat`` -- for both diag (rank=0) and full (rank=dim)
     layouts. One combined method, not two: mirrors Gaussian.mstep calling
     exactly one method, not requiring the orchestrator to sequence a
     separate raw-statistic step itself.
@@ -338,10 +335,6 @@ def test_mvn_shrink_matches_independent_reference(dim, rank):
 
     A = 0.9 * jnp.eye(dim) + 0.05 * jrnd.normal(jrnd.key(9), (dim, dim))
     b = jrnd.normal(jrnd.key(10), (dim,))
-
-    def f(z, u, c, *, key=None):
-        del u, c, key
-        return A @ z + b
 
     n_batch, n_time = 2, 4
     n_pairs = n_batch * (n_time - 1)
@@ -353,14 +346,20 @@ def test_mvn_shrink_matches_independent_reference(dim, rank):
     covs = flat_covs.reshape(n_batch, n_time, dim, dim)
 
     moment = jax.vmap(jax.vmap(approx.pack))(means, covs)
-    u = jnp.zeros((n_batch, n_time, 0))
-    c = jnp.zeros((n_batch, n_time, 0))
 
     prior_value = 0.5
     prior_dof = 2.0
     prior = (prior_value, prior_dof)
 
-    free = approx.shrink(moment, u, c, f, prior, key=jrnd.key(1), mc_size=4)
+    # shrink_stat = (mean_f, cov_f) -- already-propagated, upstream, as
+    # XFADS.mstep would compute it via core._site_filter/nofilt/causal.
+    # For this linear transition, exact: mean_f = A @ mean_tm1 + b,
+    # cov_f = A @ cov_tm1 @ A.T.
+    mean_f = jax.vmap(jax.vmap(lambda m: A @ m + b))(means[:, :-1, :])
+    cov_f = jax.vmap(jax.vmap(lambda p: A @ p @ A.T))(covs[:, :-1, :, :])
+    shrink_stat = (mean_f, cov_f)
+
+    free = approx.shrink(moment, shrink_stat, prior)
     canon = approx.free_to_canon(free)
     got_cov = canon.chol @ canon.chol.T
 

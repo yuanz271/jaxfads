@@ -33,12 +33,10 @@ from typing import Literal, NamedTuple
 import jax
 from jax import Array
 from jax import numpy as jnp
-from jax import random as jrnd
 from tensorflow_probability.substrates.jax import distributions as tfd
 
 from ..base import Approx
 from ..constraints import _EPS, constrain_positive, unconstrain_positive
-from ..core import propagate_transition_points
 
 
 class _Layout(NamedTuple):
@@ -487,54 +485,42 @@ class MVN(Approx):
     def shrink(
         self,
         moment: Array,
-        u: Array,
-        c: Array,
-        transition_fn,
+        shrink_stat: tuple[Array, Array],
         prior: tuple[Array, float],
-        *,
-        key: Array,
-        mc_size: int,
     ) -> Array:
         """See base class.
 
-        Own pair-alignment slicing: ``moment_tm1 = moment[:, :-1, :]``,
-        ``moment_t = moment[:, 1:, :]``, ``u_tm1 = u[:, :-1, :]``,
-        ``c_tm1 = c[:, :-1, :]`` -- the control/covariate at the *source*
-        time step of each pair, matching ``core.filter()``'s own
-        ``u[:-1], c[:-1]`` convention.
+        Own pair-alignment slicing: ``moment_t = moment[:, 1:, :]`` --
+        the *destination* time step of each pair, aligned with
+        ``shrink_stat``'s own ``(mean_f, cov_f)``, which the caller
+        (``XFADS.mstep``) already computed for source steps ``t-1``, one
+        entry per pair.
 
         v1 approximation: no cross-covariance term (``Cov(z_t, z_{t-1})``
         is not exposed by this repo's smoothing algorithm -- see
         ``docs/mstep_dynamics_noise.md``). Per (batch, time) pair::
 
-            zs, w = core.propagate_transition_points(
-                key, moment_tm1, u, c, transition_fn, self, mc_size)
-            m_f = sum_i w_i * zs_i          # weighted mean
-            P_f = sum_i w_i * outer(zs_i - m_f, zs_i - m_f)  # weighted cov
-            r = m' - m_f
-            raw_stat = outer(r, r) + P' + P_f
+            m', P' = self.unpack(moment_t)
+            mean_f, cov_f = shrink_stat  # already propagated, upstream
+            r = m' - mean_f
+            raw_stat = outer(r, r) + P' + cov_f
 
-        where ``m', P' = self.unpack(moment_t)``. This replaces an
-        earlier first-order Taylor/Jacobian linearization of
-        ``Cov[transition_fn(z_{t-1})]`` (``J @ P @ J.T``, ``J =
-        jacrev(transition_fn)(m)``) with the same point-propagation
-        machinery (Monte Carlo, or -- ``MVN``'s current default --
-        deterministic unscented-transform sigma points) already used for
-        the prediction step's ``core.expected_predictive_moment``, for
-        two reasons: (1) it captures genuine nonlinear propagation
-        (exact to the 3rd moment for UT, exact in the MC limit) rather
-        than a first-order-only approximation, and (2) it keeps this
-        statistic's uncertainty-propagation accuracy consistent with the
-        rest of the model's own choice (``use_sigma_points``), instead of
-        introducing an unrelated, separately-unvalidated approximation
-        scheme. Deliberately does **not** call ``core.
-        expected_predictive_moment`` itself or ``predictive_moment``:
-        those bake the transition noise ``Q`` into the propagated
-        moment (correct for the *filtering* prediction step, answering
-        "propagate q(z_{t-1})'s uncertainty forward, before seeing
-        y_t"), but ``Q`` is precisely the quantity being estimated here,
-        so it must be excluded -- ``core.propagate_transition_points``
-        is the shared, noise-free prefix both use.
+        ``shrink_stat`` is computed once, upstream, by ``XFADS``'s own
+        forward pass (``core._site_filter``/``nofilt``/``causal``), which
+        already propagates each pair's ``q(z_{t-1})`` through the
+        transition (via ``approx.transition_points`` -- Monte Carlo, or
+        -- ``MVN``'s current default -- deterministic unscented-transform
+        sigma points) for its own noise-included predictive-moment term.
+        This method does **not** repeat that propagation -- it only
+        consumes the already-propagated ``(mean_f, cov_f)``, avoiding a
+        second, redundant call to ``propagate_transition_points`` for
+        exactly the same points. (An earlier version of this method did
+        its own propagation internally, given ``transition_fn``/``u``/
+        ``c``/``mc_size``/``key`` as call arguments -- superseded once
+        checked against the actual cost: the forward pass computes
+        exactly this propagation already, so a caller-side reuse is
+        strictly better than a second, independent one. See
+        ``docs/mstep_dynamics_noise.md``.)
 
         Then MAP-shrinks the mean of that per-pair statistic toward
         ``prior = (value, prior_dof)``:
@@ -557,53 +543,16 @@ class MVN(Approx):
         gradient has already been computed and applied -- not in an
         internal ``stop_gradient`` here.
         """
-        moment_tm1 = moment[:, :-1, :]
         moment_t = moment[:, 1:, :]
-        u_tm1 = u[:, :-1, :]
-        c_tm1 = c[:, :-1, :]
-        n_batch, n_pairs = moment_tm1.shape[0], moment_tm1.shape[1]
-        # A distinct key per (batch, time) pair -- matching core.filter/
-        # core.smooth's own per-timestep jrnd.split + vmap convention for
-        # expected_predictive_moment, rather than reusing one key across
-        # every pair (which would correlate the point-propagation's own
-        # randomness across pairs whenever transition_points is
-        # stochastic, i.e. use_sigma_points=False).
-        pair_keys = jrnd.split(key, n_batch * n_pairs).reshape(n_batch, n_pairs)
+        mean_f, cov_f = shrink_stat
 
-        def _single(moment_t_i, moment_tm1_i, u_i, c_i, key_i):
+        def _single(moment_t_i, mean_f_i, cov_f_i):
             mean_t, cov_t = self.unpack(moment_t_i)
-            dim = mean_t.shape[-1]
-
-            def f(z, u, c, *, key):
-                return transition_fn(z, u, c, key=key)
-
-            zs, weights = propagate_transition_points(
-                key_i, moment_tm1_i, u_i, c_i, f, self, mc_size
-            )
-
-            # Non-finite-safe weighted mean/covariance, mirroring
-            # expected_predictive_moment's own masking convention.
-            valid = jnp.all(jnp.isfinite(zs), axis=-1)
-            safe = jnp.where(valid[:, None], zs, 0.0)
-            w_valid = jnp.where(valid, weights, 0.0)
-            w_sum = jnp.sum(w_valid)
-            m_f = jnp.where(
-                w_sum > 0,
-                jnp.sum(w_valid[:, None] * safe, axis=0) / w_sum,
-                jnp.full((dim,), jnp.nan, dtype=mean_t.dtype),
-            )
-            centered = safe - m_f
-            p_f = jnp.where(
-                w_sum > 0,
-                jnp.einsum("i,ij,ik->jk", w_valid, centered, centered) / w_sum,
-                jnp.full((dim, dim), jnp.nan, dtype=mean_t.dtype),
-            )
-
-            residual = mean_t - m_f
-            return jnp.outer(residual, residual) + cov_t + p_f
+            residual = mean_t - mean_f_i
+            return jnp.outer(residual, residual) + cov_t + cov_f_i
 
         stat_fn = jax.vmap(jax.vmap(_single))
-        raw_stat = stat_fn(moment_t, moment_tm1, u_tm1, c_tm1, pair_keys)
+        raw_stat = stat_fn(moment_t, mean_f, cov_f)
 
         d = self._layout.dim
         value, prior_dof = prior
