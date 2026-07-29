@@ -22,12 +22,55 @@ from .base import Approx
 __all__ = [
     "expected_predictive_moment",
     "propagate_transition_points",
+    "weighted_moments",
     "Mode",
     "filter",
     "smooth",
     "causal",
     "nofilt",
 ]
+
+
+def weighted_moments(zs: Array, weights: Array) -> tuple[Array, Array]:
+    """Non-finite-safe weighted mean and covariance of a raw point set.
+
+    Purely generic linear algebra over ``zs`` (shape ``(n_points, dim)``)
+    and ``weights`` (shape ``(n_points,)``, nonnegative-summing-to-1 by
+    convention -- see :meth:`Approx.transition_points` -- though this
+    function only assumes they sum to 1, not that they're nonnegative, so
+    it works for signed unscented-transform weights too) -- does not
+    depend on any ``Approx``-specific representation, since ``zs`` is
+    already a set of literal state vectors, not moment-parameter-encoded.
+
+    Any point containing NaN/Inf is masked out (its weight zeroed) before
+    the weighted reduction, mirroring :func:`expected_predictive_moment`'s
+    own convention. If every point is non-finite, both outputs are
+    themselves non-finite.
+
+    Returns
+    -------
+    mean : Array, shape (dim,)
+    cov : Array, shape (dim, dim)
+        The weighted covariance about ``mean`` (not about any other
+        reference point).
+    """
+    dim = zs.shape[-1]
+    valid = jnp.all(jnp.isfinite(zs), axis=-1)
+    safe = jnp.where(valid[:, None], zs, 0.0)
+    w_valid = jnp.where(valid, weights, 0.0)
+    w_sum = jnp.sum(w_valid)
+    mean = jnp.where(
+        w_sum > 0,
+        jnp.sum(w_valid[:, None] * safe, axis=0) / w_sum,
+        jnp.full((dim,), jnp.nan, dtype=zs.dtype),
+    )
+    centered = safe - mean
+    cov = jnp.where(
+        w_sum > 0,
+        jnp.einsum("i,ij,ik->jk", w_valid, centered, centered) / w_sum,
+        jnp.full((dim, dim), jnp.nan, dtype=zs.dtype),
+    )
+    return mean, cov
 
 
 def propagate_transition_points(
@@ -154,8 +197,19 @@ def expected_predictive_moment(
     be non-finite.
     """
     zs, weights = propagate_transition_points(key, moment, u, c, f, approx, mc_size)
+    return _average_predictive_moment(zs, weights, noise, approx)
 
-    # Per-point predictive moment
+
+def _average_predictive_moment(
+    zs: Array, weights: Array, noise: Array, approx: Approx
+) -> Array:
+    """The noise-*included* averaging half of :func:`expected_predictive_moment`,
+    given an already-propagated point set (``zs``, ``weights``) -- shared
+    with callers (e.g. ``_site_filter``) that need to reuse the same
+    propagated points for a second, noise-*free* purpose (e.g. ``Approx.
+    shrink``'s statistic via :func:`weighted_moments`) without calling
+    :func:`propagate_transition_points` a second time.
+    """
     predictive_moment_samples = jax.vmap(
         partial(approx.predictive_moment, noise=noise)
     )(zs)
