@@ -21,6 +21,7 @@ Legend:
 | Low-rank pseudo-observation parameter output from encoders | `PARTIAL` | `src/jaxfads/distributions/mvn.py` (`MVN.free_to_natural`); smoke test in `tests/test_smoother.py:186` | Unified via `MVN(dim, rank=r)`, but `h` is emitted independently of `J` (see detail below). Paper Eq. 19 couples them via `h = Kᵀb`, `J = KᵀK`. |
 | Low-rank structured linear algebra complexity claims (Woodbury/Cholesky pipeline) | `MISMATCH` | `MVN.natural_to_moment`, `MVN.moment_to_natural`, `MVN.unpack`, `MVN.kl` in `src/jaxfads/distributions/mvn.py` | Current inference/kl/sample paths materialize full covariance/precision operations (TFP full-cov + dense solves), so paper's scalable structured complexity is not realized end-to-end. |
 | Streaming/causal inference recursion (paper Eq. 29 family) | `MATCH` | `src/jaxfads/core.py` (`causal`), `src/jaxfads/smoother.py` (`mode="causal"` branch) | Implemented as alpha-only filtering for `λ̆_t` followed by reconstruction `λ_t = λ̆_t + b_t` (code indexing, where `b_t` corresponds to paper `β_{t+1}`). The API also exposes `mode="filter"` for alpha-only filtering output directly. |
+| Generative-model parameter learning strategy (θ, ψ, including state-noise `Q_θ` and the observation model's own noise) | `MATCH` | `src/jaxfads/trainer.py` (`train`, gradient descent on the full model via `eqx.filter_value_and_grad`) | The paper explicitly considers classical vEM (alternating E-step/M-step over the approximate posterior and generative-model parameters) and rejects it for scalability, adopting VAE-style joint gradient-based training of θ/ψ/φ via stochastic backpropagation instead (paper: "vEM can be slow due to the need to fully optimize the variational parameters before taking gradient steps on parameters of the generative model... the VAE is better suited for large scale problems for its ability to simultaneously learn the generative model and inference network"). `train()`'s default (unconstrained gradient descent over the whole model, including `noise_free`/observation-noise parameters) matches this choice exactly; no M-step/vEM machinery is used by default. |
 
 ## Consistency Details
 
@@ -35,6 +36,46 @@ Legend:
 - Indexing difference alone (`β_t` vs `β_{t+1}`) does not imply mismatch; this implementation documents the code convention `b_t ↔ β_{t+1}` and checks recurrence form.
 - The unified `free_to_natural` emits `h` independently of `J = diag(softplus(d)) + L Lᵀ`. Paper Eq. 19 constrains the linear natural parameter via `h = Kᵀb` so that both `h` and `J = KᵀK` are determined by the same low-rank factor `K` and shift `b`. The current implementation decouples them: the encoder emits `h` as a free vector and constructs `J` separately from a diagonal baseline plus `L Lᵀ`. This gives the encoder strictly more degrees of freedom per update site; the diagonal baseline also prevents unbounded posterior means (`J⁻¹h` stays bounded even when `L ≈ 0`).
 
+## Documented Extensions Beyond the Paper
+
+These are opt-in library capabilities, not required for parity and not
+claimed by the paper -- listed separately from Inconsistency Details
+above so they aren't mistaken for gaps or failures to replicate the
+paper's method.
+
+- **Closed-form, non-SGD updates for observation noise (`R`) and
+  transition/process noise (`Q`)**: `Observation.mstep`/
+  `mstep_gaussian_cov` (`src/jaxfads/observations.py`,
+  [docs/mstep_gaussian_cov.md](mstep_gaussian_cov.md)) and
+  `Approx.mstep_transition_noise`/`XFADS.mstep`
+  (`src/jaxfads/base.py`, `src/jaxfads/distributions/mvn.py`,
+  `src/jaxfads/smoother.py`,
+  [docs/mstep_dynamics_noise.md](mstep_dynamics_noise.md)) provide an
+  alternative to the paper's joint-gradient-descent treatment of `R`/`Q`,
+  used opt-in (via `conf.freeze_paths` for `R`, `conf.noise_prior`/
+  `conf.noise_prior_dof` for `Q`) rather than by default. This is
+  narrower than the classical vEM the paper considers and rejects: only
+  `R`/`Q` are ever updated this way, never `θ`/`ψ`/`φ` as a whole, and
+  gradient descent on the remaining parameters continues throughout
+  (`Q`, in particular, stays "in the loss" -- see
+  `docs/mstep_dynamics_noise.md`'s "Required safeguards" -- scaling `f`'s
+  gradient by `1/Q` even while `Q` itself is closed-form-updated, not
+  decoupled the way a literal M-step's generative-model-only phase would
+  imply).
+- **Motivation, not paper fidelity**: these mechanisms exist because
+  joint gradient descent on `R`/`Q` was empirically found to have real
+  failure modes in this codebase's own testing -- a Heywood-case
+  degeneracy for `R` (a component's fitted covariance reaching the
+  numerical floor while its true residual variance was ~10⁶x larger, a
+  known failure mode of factor-analysis-structured joint MLE, documented
+  in `Gaussian.mstep_stat`'s docstring) and, for `Q`, an empirically
+  dominant overestimation tendency under joint MLE plus better
+  downstream dynamics-accuracy from MAP-shrunk alternating updates
+  (`docs/mstep_dynamics_noise.md`'s Design section, both known-`z` and
+  latent-`z` Lorenz experiments). The paper does not report or address
+  either failure mode; these mechanisms are this codebase's own response
+  to them, not a paper-parity gap.
+
 ## Overall Assessment
 
-Implementation parity is strong for the core XFADS variational filtering objective, encoder-driven pseudo-observation inference, and Eq. 29 causal recursion; the remaining major gap is the paper's scalability-focused structured linear algebra path.
+Implementation parity is strong for the core XFADS variational filtering objective, encoder-driven pseudo-observation inference, Eq. 29 causal recursion, and the paper's own choice of joint gradient-based (not classical vEM) parameter learning; the remaining major gap is the paper's scalability-focused structured linear algebra path. This codebase additionally offers opt-in, closed-form `R`/`Q` update mechanisms beyond anything the paper describes (see Documented Extensions above), motivated by failure modes found in this codebase's own testing, not by a paper claim.
