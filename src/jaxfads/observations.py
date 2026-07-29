@@ -299,8 +299,10 @@ class Likelihood(Protocol):
         ``GLM`` dispatches to this via ``hasattr`` rather than requiring
         every ``Likelihood`` to implement it, since ``Likelihood`` is a
         structural ``Protocol``, not an inheritable base with a runtime
-        default. Implementations (e.g. ``Gaussian``) must not let their
-        result carry gradients back into the rest of the model.
+        default. Implementations are not required to be gradient-free on
+        their own terms -- the guarantee against interfering with SGD
+        lives at the call site, which only invokes this after the current
+        step's gradient has already been computed and applied.
         """
         ...
 
@@ -892,11 +894,12 @@ class Gaussian(eqx.Module, strict=True):
         computing over a single batch, just packaged as a per-Likelihood
         method rather than a standalone full-dataset driver.
 
-        Must never carry gradients: wraps its result in
-        ``jax.lax.stop_gradient`` defensively (this is always called
-        outside of any differentiated computation by its callers, so this
-        is belt-and-suspenders documentation of the invariant, not load
-        bearing today).
+        Not required to be gradient-free on its own terms: callers (e.g.
+        ``train()``'s own ``train_step``/``apply_mstep``) are responsible
+        for invoking this only after any differentiated computation for
+        the current step has already completed, so nothing here ever
+        feeds back into an active gradient tape. That call-site ordering
+        is the actual guarantee, not an internal ``stop_gradient``.
         """
         stat_fn = jax.vmap(
             jax.vmap(partial(self.mstep_stat, approx=approx, readout=readout))
@@ -909,7 +912,6 @@ class Gaussian(eqx.Module, strict=True):
         new_unconstrained_cov = unconstrain_positive(
             jnp.maximum(r_new - _MIN_VARIANCE, _EPS)
         )
-        new_unconstrained_cov = jax.lax.stop_gradient(new_unconstrained_cov)
         return eqx.tree_at(lambda m: m.unconstrained_cov, self, new_unconstrained_cov)
 
     def mstep_frozen_paths(self) -> list[str]:
@@ -1028,11 +1030,6 @@ def mstep_gaussian_cov(model, data, *, key, batch_size: int | None = None):
     # matching Gaussian.__init__'s own convention for turning a target
     # covariance into unconstrained_cov.
     new_unconstrained_cov = unconstrain_positive(jnp.maximum(r_new - _MIN_VARIANCE, _EPS))
-    # Must never carry gradients back through `moment` into the rest of the
-    # model -- unlike Gaussian.mstep (which this duplicates the math of),
-    # this standalone driver previously had no stop_gradient of its own,
-    # relying entirely on being called outside any differentiated context.
-    new_unconstrained_cov = jax.lax.stop_gradient(new_unconstrained_cov)
     new_likelihood = eqx.tree_at(lambda lik: lik.unconstrained_cov, likelihood, new_unconstrained_cov)
     new_observation = eqx.tree_at(lambda obs: obs.likelihood, observation, new_likelihood)
     return eqx.tree_at(lambda m: m.observation, model, new_observation)

@@ -546,12 +546,16 @@ class Observation(SubclassRegistryMixin, ConfModule):
         Observation's own parameters (e.g. Gaussian observation noise
         covariance), given ``(t, moment, y)`` for the *entire* dataset (or
         an entire batch treated as such) and the current ``approx``. This
-        is deliberately separate from gradient-based training: callers
+        is deliberately separate from gradient-based training. Not
+        required to be gradient-free on its own terms -- the actual
+        guarantee against interfering with SGD lives at the call site
         (e.g. ``mstep_observation_cov``, or ``train()``'s own
-        ``train_step``, which applies this every minibatch
-        unconditionally) invoke it outside of any differentiated
-        computation, so its result must never carry gradients back into
-        the rest of the model.
+        ``train_step``/``apply_mstep``), which only ever invokes this
+        after the current step's gradient has already been computed and
+        applied, using an already-concrete, already-updated model.
+        Implementations should not add their own defensive
+        ``stop_gradient`` either -- the invariant belongs at the call
+        site, not duplicated into every implementation.
 
         Default implementation is a no-op: returns ``self`` unchanged.
         Concrete subclasses that support this (e.g. ``GLM`` wrapping a

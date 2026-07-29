@@ -548,9 +548,14 @@ class MVN(Approx):
         for initialization and cannot round-trip an arbitrary full shrunk
         covariance. ``loc`` is set to zero, matching how
         :meth:`predictive_moment` already discards ``noise``'s ``loc``
-        component entirely. Never carries gradients: wraps its result in
-        ``jax.lax.stop_gradient`` defensively, matching
-        ``Gaussian.mstep``'s same convention.
+        component entirely.
+
+        Not required to be gradient-free on its own terms: the actual
+        guarantee against interfering with SGD lives at the call site
+        (``train()``'s ``train_step``/``apply_mstep``, via ``XFADS.
+        mstep``), which only invokes this after the current step's
+        gradient has already been computed and applied -- not in an
+        internal ``stop_gradient`` here.
         """
         moment_tm1 = moment[:, :-1, :]
         moment_t = moment[:, 1:, :]
@@ -619,8 +624,7 @@ class MVN(Approx):
 
         chol = jnp.linalg.cholesky(shrunk + _EPS * jnp.eye(d, dtype=shrunk.dtype))
         canon = MVNParam(loc=jnp.zeros(d, dtype=shrunk.dtype), chol=chol)
-        free = self.canon_to_free(canon)
-        return jax.lax.stop_gradient(free)
+        return self.canon_to_free(canon)
 
     # ---------------------------------------------------------------------
     # predictive moments

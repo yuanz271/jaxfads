@@ -134,25 +134,26 @@ Implementation (`src/jaxfads/base.py`, `src/jaxfads/observations.py`,
     gradient descent never fights this update — no `conf.freeze_paths`
     entry, and no flag, are needed.
 
-`mstep`/`mstep_stat` must never carry gradients: all of the above run their
-forward pass outside `eqx.filter_value_and_grad`, an architectural (not
-conventional) isolation from the optimizer's gradient tape. This is now
-enforced at **two** levels, not left to architecture/discipline alone:
-`Gaussian.mstep` (and `MVN.shrink`) each wrap their own result in
-`jax.lax.stop_gradient`, protecting standalone call paths that bypass
-`XFADS.mstep` entirely (e.g. `mstep_gaussian_cov`, which duck-types on
-`Gaussian.mstep_stat` directly rather than calling `.mstep()`, and so
-does *not* inherit `Gaussian.mstep`'s wrap -- it needed, and now has, its
-own); `XFADS.mstep` *additionally* wraps both composed results
-(`self.observation.mstep(...)`, `self.approx.shrink(...)`) in
-`jax.lax.stop_gradient` centrally, making the guarantee structural and
-subclass-proof for its own call path rather than dependent on every
-current and future `Observation`/`Approx` implementation remembering its
-own wrap. Both gaps (the missing wrap in `mstep_gaussian_cov`, and the
-lack of central enforcement in `XFADS.mstep`) were found to be real, not
-hypothetical -- a test wrapping a call in `jax.grad` produced a nonzero
-gradient before each fix -- see the discriminative tests in
-`tests/test_observations.py`/`tests/test_smoother.py`.
+`mstep`/`mstep_stat` are not required to be gradient-free on their own
+terms -- they are ordinary functions, not specially guarded against
+carrying gradients if called inside a differentiated context. The actual
+guarantee against interfering with SGD lives at the *call site*: all of
+the above (`train_step`, `apply_mstep`, `mstep_observation_cov`,
+`mstep_gaussian_cov`) invoke `mstep`/`shrink` only after the current
+step's gradient (if any) has already been computed and applied, using an
+already-concrete, already-updated model -- an architectural, ordering-
+based isolation, not an internal `jax.lax.stop_gradient`. An earlier
+version of this document (and the code) added `stop_gradient` calls
+inside `Gaussian.mstep`, `MVN.shrink`, `mstep_gaussian_cov`, and
+centrally inside `XFADS.mstep` -- reverted once checked against the
+actual call sites in `trainer.py`: since `_do_mstep` always runs strictly
+after `eqx.filter_value_and_grad`/`optimizer.update`/`eqx.apply_updates`
+have already produced a concrete model, none of those wraps changed any
+real, observable behavior of the current training loop -- they were
+defense-in-depth against hypothetical future misuse (e.g. differentiating
+through the whole training loop for meta-learning), not something the
+actual SGD needed. Removed for consistency: the invariant that matters
+belongs at the call site, not duplicated into every implementation.
 
 ## Usage
 
@@ -317,11 +318,19 @@ manually for *this* pattern — only `train()`'s own automatic mechanism
   for `mstep_mode="epoch"`, the guaranteed post-training `apply_mstep`
   call was needlessly recomputing the exact same full-dataset update the
   last `finalize_epoch` call had just applied, on an unchanged model.
-- `a117cca` — fixed a genuine gradient-leak gap in `mstep_gaussian_cov`
-  (no `stop_gradient` of its own, since it duck-types on
-  `Gaussian.mstep_stat` rather than calling `.mstep()`), and centralized
-  gradient-freedom enforcement in `XFADS.mstep` itself (wrapping both
-  composed results in `jax.lax.stop_gradient`), making the guarantee
-  subclass-proof rather than dependent on every `Observation`/`Approx`
-  implementation remembering its own wrap. Both gaps verified real via
-  `jax.grad`-wrapped tests that failed before each fix.
+- `a117cca` — (superseded, see below) added a `stop_gradient` to
+  `mstep_gaussian_cov` and centralized `stop_gradient` enforcement in
+  `XFADS.mstep`, treating gradient-freedom as a property `mstep`/`shrink`
+  should guarantee on their own terms.
+- (revert of `a117cca`'s `stop_gradient` additions) — rejected once
+  checked against the actual `trainer.py` call sites: `_do_mstep` always
+  runs strictly after the current step's gradient has already been
+  computed and applied (`eqx.filter_value_and_grad`/`optimizer.update`/
+  `eqx.apply_updates` all complete first), so none of the added
+  `stop_gradient` wraps changed any real, observable behavior -- they
+  were defense-in-depth against hypothetical future misuse, not something
+  the actual training loop needed. Also removed the pre-existing
+  `stop_gradient` calls in `Gaussian.mstep`/`MVN.shrink` for the same
+  reason, for consistency. The invariant that matters (mstep never
+  interferes with SGD) belongs at the call site's ordering, not
+  duplicated into every implementation.
