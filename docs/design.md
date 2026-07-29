@@ -127,7 +127,7 @@ Quick reference (public API):
 | `transition_points(key, moment, mc_size)` | `moment → (points, weights)` | Representative points/weights for propagation through the transition (defaults to plain Monte Carlo via `sample_by_moment`; `MVN` overrides with deterministic unscented-transform sigma points by default — see `docs/transition_points.md`). |
 | `kl(moment1, moment2)` | `moment × moment → scalar` | KL between two distributions. |
 | `predictive_moment(z, noise)` | `(z, noise) → moment` | Conditional moment parameters `E[T(z_t) | z_{t-1}]`. |
-| `shrink(moment, u, c, transition_fn, prior, *, key, mc_size)` | `(moment, u, c, f, prior, mc_size) → free` | Closed-form, non-SGD transition-noise (`Q`) M-step: computes the per-(batch,time) sufficient statistic (via `transition_points`-based point-set propagation, not a Jacobian linearization) and MAP-shrinks it toward `prior` in one call (default: `NotImplementedError`; `MVN` overrides — see `docs/mstep_dynamics_noise.md`). Called by `XFADS.mstep`, not directly by users. |
+| `shrink(moment, shrink_stat, prior)` | `(moment, shrink_stat, prior) → free` | Closed-form, non-SGD transition-noise (`Q`) M-step: computes the per-(batch,time) sufficient statistic from `moment` and an already-propagated `shrink_stat = (mean_f, cov_f)` (computed upstream by `XFADS`'s own forward pass, reusing its own `transition_points`-based propagation rather than repeating it), and MAP-shrinks it toward `prior` in one call (default: `NotImplementedError`; `MVN` overrides — see `docs/mstep_dynamics_noise.md`). Called by `XFADS.mstep`, not directly by users. |
 
 ### Initialization
 
@@ -166,7 +166,7 @@ Quick reference (public API):
 | `transition_points` | `(key, μ, mc_size) → (points, weights)` | Prediction-step propagation policy (default: MC; `MVN` defaults to unscented-transform sigma points) |
 | `kl` | `(μ₁, μ₂) → scalar` | KL divergence `KL(p₁ ‖ p₂)` |
 | `predictive_moment` | `(z, noise) → μ_flat` | Conditional moment parameters `E[T(z_t) | z_{t-1}]` |
-| `shrink` | `(moment, u, c, f, prior, *, key, mc_size) → free` | Closed-form `Q` M-step: statistic + MAP-shrinkage in one call (default: not supported; `MVN` overrides) |
+| `shrink` | `(moment, shrink_stat, prior) → free` | Closed-form `Q` M-step: statistic + MAP-shrinkage in one call, given an already-propagated `shrink_stat` (default: not supported; `MVN` overrides) |
 
 ### Usage in XFADS
 

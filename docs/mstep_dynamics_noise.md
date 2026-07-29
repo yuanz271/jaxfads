@@ -286,26 +286,63 @@ preference) reason, not arbitrary churn:
    every pair whenever `use_sigma_points=False`. Fixed by splitting a
    distinct key per pair, matching `core.filter`/`core.smooth`'s own
    established per-timestep `jrnd.split` + `vmap` convention.
+6. `Approx.shrink`'s own propagation call was itself removed, given a
+   direct question ("the forward pass already computes this same
+   propagation for its own noise-included predictive moment -- can
+   `shrink` reuse it instead of computing it again?"). Traced against
+   the actual mode dispatch (`core._site_filter`/`nofilt`/`causal`):
+   whatever `q(z_{t-1})` the forward pass propagates through the
+   transition for its own ELBO/KL term is, for `filter`/`smooth`/`nofilt`
+   modes, *exactly* the same distribution `shrink` would later
+   re-propagate -- initially thought to differ (filtering vs. smoothed
+   posterior), corrected once it became clear this codebase's
+   "smoothing" is a single forward recursion with richer per-timestep
+   sites (`alpha + beta`, `beta` already whole-sequence-informed), not a
+   separate forward-filter/backward-smooth algorithm with two genuinely
+   different marginals. Only `causal` mode differs (its *returned*
+   `moment` is a post-hoc `beta`-reconstruction, computed *after* its
+   internal `filter()` call already ran the propagation on the
+   filtering-only marginal) -- accepted as a deliberate trade: `causal`'s
+   reused statistic is the filtering statistic, not one over its own
+   returned `moment`, since the latter was never computed by any
+   propagation step to reuse in the first place. `_site_filter`/`nofilt`
+   now compute the noise-free `(mean, cov)` (via the new, `Approx`-
+   agnostic `core.weighted_moments`) from the exact same
+   `propagate_transition_points` call already made for the
+   noise-included predictive moment -- unconditionally, not gated behind
+   a flag (an initial `collect_shrink_stat` flag was added, then removed
+   once checked against the actual marginal cost: reducing an
+   already-materialized point set to a weighted mean/cov is small next
+   to evaluating the transition at each point in the first place, so
+   gating it added complexity for a saving not worth it). This
+   permanently widens `XFADS.__call__`'s return from a 3-tuple to
+   `(nature, moment, moment_p, shrink_stat)` -- a breaking change,
+   accepted, with every call site across the codebase updated. `Approx.
+   shrink`'s contract shrinks accordingly to `shrink(self, moment,
+   shrink_stat, prior)`: no more `u`, `c`, `transition_fn`, `mc_size`, or
+   `key` -- it purely consumes the already-propagated `shrink_stat`,
+   doing only the residual + MAP-shrinkage math.
 
-**Final**: one method, taking the *full*, un-sliced `moment`/`u`/`c` and
-doing everything internally:
+**Final**: one method, consuming an already-propagated statistic rather
+than computing it:
 
 ```python
 class Approx:
-    def shrink(self, moment, u, c, transition_fn, prior, *, key) -> Array:
+    def shrink(self, moment, shrink_stat, prior) -> Array:
         """Computes the per-(batch,time) statistic from smoothed moments
-        and MAP-shrinks it toward `prior`, in one call, returning a
-        free-form array. Does its own pair-alignment slicing internally --
-        the caller should not need to know this needs shifted, aligned
-        pairs at all. Mirrors Observation.mstep/Gaussian.mstep's shape
-        exactly: the orchestrator (XFADS.mstep) calls exactly one method
-        here, never sequencing a separate raw-statistic step itself.
+        and an already-propagated shrink_stat, and MAP-shrinks it toward
+        `prior`, in one call, returning a free-form array. Does its own
+        pair-alignment slicing of `moment` internally -- the caller should
+        not need to know this needs shifted, aligned pairs at all. Does
+        NOT itself propagate anything through the transition -- that
+        already happened upstream, in XFADS's own forward pass. Mirrors
+        Observation.mstep/Gaussian.mstep's shape exactly: the orchestrator
+        (XFADS.mstep) calls exactly one method here, never sequencing a
+        separate raw-statistic step itself.
 
         Deliberately opaque about raw_stat's shape/meaning and prior's
         structure -- defined entirely by the subclass; not every Approx
-        family need define this meaningfully. transition_fn is external
-        (dynamics are not an Approx concept, same pattern Observation.
-        mstep already uses for approx); prior is also external (owned by
+        family need define this meaningfully. prior is external (owned by
         XFADS.noise_prior, not by Approx -- see below).
 
         Default: not supported, raises NotImplementedError. Callers
@@ -316,18 +353,15 @@ class Approx:
 
 
 class MVN(Approx):
-    def shrink(self, moment, u, c, transition_fn, prior, *, key, mc_size):
-        """Slices moment_tm1 = moment[:, :-1, :], moment_t = moment[:, 1:, :],
-        u_tm1 = u[:, :-1, :], c_tm1 = c[:, :-1, :] (control/covariate at
-        the *source* time step of each pair, matching core.filter()'s own
-        u[:-1], c[:-1] convention), then per (batch,time) pair:
+    def shrink(self, moment, shrink_stat, prior):
+        """Slices moment_t = moment[:, 1:, :] (aligned with shrink_stat's
+        own per-pair (mean_f, cov_f), already computed for source steps
+        t-1), then per (batch,time) pair:
 
-            zs, w = core.propagate_transition_points(
-                key, moment_tm1, u, c, transition_fn, self, mc_size)
-            m_f = sum_i w_i * zs_i
-            P_f = sum_i w_i * outer(zs_i - m_f, zs_i - m_f)
-            r = m' - m_f
-            raw_stat = outer(r, r) + P' + P_f
+            m', P' = self.unpack(moment_t)
+            mean_f, cov_f = shrink_stat
+            r = m' - mean_f
+            raw_stat = outer(r, r) + P' + cov_f
 
         (v1 approximation: no cross-covariance term -- see below), then
         MAP-shrinks the mean of that statistic toward prior = (value,
@@ -338,9 +372,8 @@ class MVN(Approx):
         initialization and can't round-trip an arbitrary full shrunk
         covariance. loc is preserved as zero, matching how
         MVN.predictive_moment already discards noise_free's loc component
-        entirely. Never carries gradients: wraps its result in
-        jax.lax.stop_gradient defensively, matching Gaussian.mstep's same
-        convention."""
+        entirely. Not required to be gradient-free on its own terms -- see
+        Cadence/gradient-freedom discussion below."""
         ...
 
 
@@ -377,18 +410,20 @@ class XFADS:
         specific model's chosen hyperparameter value). Skips the
         noise_free update entirely if self.noise_prior is None."""
         approx = self.approx
-        _, moment, _ = self(t, y, u, c, key=key)
+        _, moment, _, shrink_stat = self(t, y, u, c, key=key)
         new_observation = self.observation.mstep(t, moment, y, approx)
         model = eqx.tree_at(lambda m: m.observation, self, new_observation)
 
         if self.noise_prior is None:
             return model
 
-        new_noise_free = approx.shrink(
-            moment, u, c, self.transition, self.noise_prior, key=key,
-        )
+        new_noise_free = approx.shrink(moment, shrink_stat, self.noise_prior)
         return eqx.tree_at(lambda m: m.noise_free, model, new_noise_free)
 ```
+
+`shrink_stat` is `self(...)`'s own 4th return value, always computed --
+reusing the forward pass's own propagation rather than having `shrink`
+repeat it (see revision 6 above).
 
 **Casualty carried forward from the earlier design, unaffected by this
 merge**: `Approx.mstep_frozen_paths` (declaring `["noise_free"]`) still
@@ -424,9 +459,9 @@ which genuinely is exponential-family-structural config, not a
 model-specific numeric choice). It also isn't where the already-tracked
 `dyn_conf.state_noise` relocation fix says this kind of thing belongs (a
 top-level `XFADS`-owned config field, not nested in `approx_kwargs`).
-`Approx.shrink(moment, u, c, transition_fn, prior, *, key)` still takes
-`prior` as a call argument (opaque, as originally designed) --
-`XFADS.mstep` is what supplies it, as `self.noise_prior`.
+`Approx.shrink(moment, shrink_stat, prior)` still takes `prior` as a call
+argument (opaque, as originally designed) -- `XFADS.mstep` is what
+supplies it, as `self.noise_prior`.
 
 **`self.noise_prior` is read from `conf` once, at construction, into a
 proper `eqx.field(static=True)`** -- not re-read via `conf.get(...)`
