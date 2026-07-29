@@ -611,6 +611,20 @@ def _run_training_loop(
             f"mstep_mode must be 'minibatch' or 'epoch', got {mstep_mode!r}"
         )
 
+    def _do_mstep(model, data, mstep_key):
+        """Pure: model.mstep(...) from `data` -- either a single minibatch
+        (train_step's own per-minibatch update) or the whole train_set
+        (apply_mstep's full-dataset update). One shared implementation,
+        not duplicated inline in train_step and again in apply_mstep --
+        deliberately a plain function (no ``nonlocal``), so it's callable
+        from both the JIT-traced train_step (model passed/returned
+        explicitly) and the imperative outer-loop apply_mstep wrapper
+        (which does use ``nonlocal model``, incompatible with JIT tracing
+        if called directly from inside train_step).
+        """
+        t, y, u, c = data
+        return model.mstep(t, y, u, c, key=mstep_key)
+
     @eqx.filter_jit(donate="all")
     def train_step(model, opt_state, batch, key, step):
         """One optimization step: shard inputs, compute value+grad, and update."""
@@ -644,8 +658,7 @@ def _run_training_loop(
             # trainable params below, mirroring the same freeze-path
             # pattern for both.
             key, mstep_key = jr.split(key)
-            mstep_t, mstep_y, mstep_u, mstep_c = batch
-            model = model.mstep(mstep_t, mstep_y, mstep_u, mstep_c, key=mstep_key)
+            model = _do_mstep(model, batch, mstep_key)
 
         return model, opt_state, step + 1, loss
 
@@ -668,6 +681,19 @@ def _run_training_loop(
     current_epoch = 0
     epoch_batch_losses: list = []
 
+    # Tracks whether the full-dataset mstep update is stale (the model has
+    # changed via a train_step since the last apply_mstep call) -- lets the
+    # guaranteed final call below skip itself when it would be pure
+    # duplication (mstep_mode="epoch", normal completion or early stop via
+    # on_epoch_end: the last finalize_epoch call already applied mstep to
+    # this exact model state, no further training happened since). Stays
+    # True whenever it should still fire -- mstep_mode="minibatch" (the
+    # per-epoch apply_mstep never runs in that mode, so the final call is
+    # always the only full-dataset-scope one) and a KeyboardInterrupt
+    # mid-epoch in "epoch" mode (train_step calls happened after the last
+    # apply_mstep, so it's genuinely stale again).
+    mstep_stale = True
+
     def apply_mstep(mstep_key):
         """Full-``train_set`` mstep update: ``model.mstep(...)`` from a
         forward pass over the whole dataset -- updates ``model.
@@ -675,9 +701,9 @@ def _run_training_loop(
         ``mstep``, e.g. Poisson) and, if ``model.noise_prior`` is set,
         ``noise_free`` via ``Approx.shrink``.
         """
-        nonlocal model
-        mstep_t, mstep_y, mstep_u, mstep_c = train_set
-        model = model.mstep(mstep_t, mstep_y, mstep_u, mstep_c, key=mstep_key)
+        nonlocal model, mstep_stale
+        model = _do_mstep(model, train_set, mstep_key)
+        mstep_stale = False
 
     def finalize_epoch(epoch_idx, batch_losses) -> bool:
         """Record the epoch's training loss, run the callback, and (in
@@ -723,6 +749,7 @@ def _run_training_loop(
             model, opt_state, step, loss = train_step(
                 model, opt_state, batch, batch_key, step
             )
+            mstep_stale = True
             epoch_batch_losses.append(loss)
         else:
             finalize_epoch(current_epoch, epoch_batch_losses)
@@ -733,11 +760,14 @@ def _run_training_loop(
     finally:
         pbar.stop()
 
-    # Always, regardless of mstep_mode: one more mstep update, from a
+    # Regardless of mstep_mode: one more mstep update, from a
     # full-train_set forward pass, immediately after the final epoch's
     # gradient steps complete (covers early stop via on_epoch_end and
-    # KeyboardInterrupt too, not just normal completion).
-    apply_mstep(jr.fold_in(key, step))
+    # KeyboardInterrupt too, not just normal completion) -- skipped only
+    # when it would be pure duplication of a finalize_epoch call that just
+    # applied it to this exact model state (see mstep_stale above).
+    if mstep_stale:
+        apply_mstep(jr.fold_in(key, step))
 
     return model
 

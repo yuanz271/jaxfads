@@ -535,6 +535,71 @@ def test_no_noise_prior_leaves_noise_free_gradient_trained(
     assert not jnp.allclose(jax.device_get(trained_model.noise_free), noise0, atol=1e-3)
 
 
+def test_mstep_epoch_mode_no_redundant_final_call(
+    monkeypatch, gaussian_model_conf, trainer_config, gaussian_sample_data
+):
+    """mstep_mode="epoch" must call model.mstep(...) exactly once per
+    epoch (max_epoch times total on normal completion) -- not once more
+    per epoch plus one redundant, unconditional final call duplicating
+    the last epoch's already-fresh full-dataset update."""
+    from jaxfads.smoother import XFADS as XFADSClass
+
+    call_count = 0
+    original_mstep = XFADSClass.mstep
+
+    def counting_mstep(self, *args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return original_mstep(self, *args, **kwargs)
+
+    monkeypatch.setattr(XFADSClass, "mstep", counting_mstep)
+
+    model = XFADS(gaussian_model_conf, jrnd.key(0))
+    trainer_config.max_epoch = 3
+    trainer_config.batch_size = 32  # single batch per epoch
+
+    train(model, gaussian_sample_data, conf=trainer_config, mstep_mode="epoch")
+
+    assert call_count == 3, (
+        f"expected exactly 3 model.mstep(...) calls (one per epoch, no "
+        f"redundant final call), got {call_count}"
+    )
+
+
+def test_mstep_minibatch_mode_final_call_not_skipped(
+    monkeypatch, gaussian_model_conf, trainer_config, gaussian_sample_data
+):
+    """mstep_mode="minibatch" must still get the guaranteed full-dataset
+    final call -- the mstep_stale tracking that skips the redundant call
+    in "epoch" mode must not also (incorrectly) skip it here, since
+    finalize_epoch never calls apply_mstep in "minibatch" mode at all."""
+    from jaxfads.smoother import XFADS as XFADSClass
+
+    full_dataset_call_count = 0
+    original_mstep = XFADSClass.mstep
+    t_full = gaussian_sample_data[0]
+
+    def counting_mstep(self, t, y, u, c, **kwargs):
+        nonlocal full_dataset_call_count
+        if t.shape[0] == t_full.shape[0]:
+            full_dataset_call_count += 1
+        return original_mstep(self, t, y, u, c, **kwargs)
+
+    monkeypatch.setattr(XFADSClass, "mstep", counting_mstep)
+
+    model = XFADS(gaussian_model_conf, jrnd.key(0))
+    trainer_config.max_epoch = 2
+    trainer_config.batch_size = 16  # 2 minibatches per epoch, batch-scoped calls
+
+    train(model, gaussian_sample_data, conf=trainer_config, mstep_mode="minibatch")
+
+    assert full_dataset_call_count == 1, (
+        f"expected exactly 1 full-dataset-scope model.mstep(...) call (the "
+        f"guaranteed final one; per-minibatch calls are batch-scoped, not "
+        f"full-dataset), got {full_dataset_call_count}"
+    )
+
+
 def test_mstep_mode_epoch_updates_only_at_epoch_boundaries(
     gaussian_model_conf, trainer_config, gaussian_sample_data
 ):
