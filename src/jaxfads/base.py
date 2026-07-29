@@ -174,7 +174,7 @@ class Approx(SubclassRegistryMixin, ABC):
     def shrink(
         self,
         moment: Array,
-        shrink_stat: tuple[Array, Array],
+        shrink_stat: Any,
         prior: Any,
     ) -> Array:
         """Closed-form, non-SGD transition-noise (``Q``) update: computes
@@ -195,17 +195,26 @@ class Approx(SubclassRegistryMixin, ABC):
         pairs at all.
 
         Does **not** itself propagate a distribution through the
-        transition -- ``shrink_stat`` (the per-pair, noise-*free*
-        propagated ``(mean, cov)`` of the transition applied to
-        ``q(z_{t-1})``) is computed once, upstream, by ``XFADS``'s own
-        forward pass (``core._site_filter``/``nofilt``/``causal``, gated
-        by ``collect_shrink_stat``), and passed in here already computed
-        -- reusing that pass's own propagation rather than repeating it.
-        See ``docs/mstep_dynamics_noise.md`` for why: the forward pass
-        already computes exactly this propagation (via ``approx.
-        transition_points``) for its own noise-included predictive-moment
-        term: recomputing it a second time inside ``shrink`` would be
-        pure waste.
+        transition, and does **not** itself reduce the propagated point
+        set to a statistic -- ``shrink_stat`` is computed once, upstream,
+        by ``XFADS``'s own forward pass (``core._site_filter``/
+        ``nofilt``/``causal``), which propagates ``q(z_{t-1})`` through
+        the transition with no noise added (via ``core.
+        propagate_transition_points``, already needed there for the
+        noise-included predictive moment) and then reduces the resulting
+        point set to whatever this same subclass's own
+        :meth:`transition_stat` returns. This method only consumes that
+        already-computed ``shrink_stat`` -- reusing both the forward
+        pass's propagation *and* its reduction rather than repeating
+        either. See ``docs/mstep_dynamics_noise.md`` for why: recomputing
+        either step a second time inside ``shrink`` would be pure waste.
+
+        ``shrink_stat``'s shape/meaning is exactly whatever this
+        subclass's own :meth:`transition_stat` returns -- this base class
+        and ``core.py`` never assume any particular reduced form (e.g. a
+        mean/covariance pair); that choice belongs entirely to the
+        subclass pairing its own ``transition_stat`` override with its
+        own ``shrink`` implementation.
 
         Deliberately opaque at this level about ``raw_stat``'s
         shape/meaning and ``prior``'s structure (a single value? a
@@ -231,11 +240,12 @@ class Approx(SubclassRegistryMixin, ABC):
         moment : Array, shape (N, T, param_dim)
             Smoothed moment parameters of ``q(z_t)`` for the full
             sequence.
-        shrink_stat : tuple[Array, Array]
-            ``(mean_f, cov_f)``, shape ``(N, T-1, state_dim)`` and
-            ``(N, T-1, state_dim, state_dim)`` -- the already-propagated,
-            noise-free ``(mean, cov)`` of the transition applied to each
-            pair's ``q(z_{t-1})``, aligned with ``moment[:, 1:, :]``.
+        shrink_stat : Any
+            Whatever this subclass's own :meth:`transition_stat` returns,
+            per (batch, time) pair, aligned with ``moment[:, 1:, :]`` --
+            already-propagated (via ``core.propagate_transition_points``)
+            and already-reduced (via ``transition_stat``); this method
+            need not do either step itself.
         prior : Any
             Subclass-defined prior spec.
 
@@ -279,6 +289,62 @@ class Approx(SubclassRegistryMixin, ABC):
         ``docs/transition_points.md``.
         """
         return _monte_carlo_transition_points(self, key, moment, mc_size)
+
+    def transition_stat(self, zs: Array, weights: Array) -> Any:
+        """Reduce a propagated, noise-free point set ``(zs, weights)`` --
+        as produced by ``core.propagate_transition_points`` -- to whatever
+        family-specific statistic this subclass's own :meth:`shrink`
+        needs as its ``shrink_stat`` argument.
+
+        Called once per (batch, time) pair by ``XFADS``'s own forward
+        pass (``core._site_filter``/``nofilt``/``causal``),
+        **unconditionally**, for every ``Approx`` subclass -- not gated
+        behind whether ``shrink``/``Q``-estimation is actually configured
+        for a given model (see ``docs/mstep_dynamics_noise.md`` for why:
+        gating this behind a flag was tried and rejected once checked
+        against the actual marginal cost). This method must therefore be
+        cheap and safe to call regardless of whether the model ever calls
+        ``shrink``.
+
+        ``core.py``'s recursions call this method polymorphically and
+        never interpret its return value themselves -- they only stack it
+        across time steps via ``jax.lax.scan``/``jax.vmap`` (which
+        requires a fixed pytree structure/shape across steps, satisfied
+        as long as this method's output shape doesn't depend on the
+        *values* of ``zs``/``weights``, only their static shapes). This
+        keeps ``core.py`` itself fully agnostic to what a "transition
+        statistic" means for any concrete family -- unlike an earlier
+        design that had ``core.py`` reduce the point set to a
+        mean/covariance pair directly, presuming a Gaussian-shaped
+        sufficient statistic (rejected once checked against ``core.py``'s
+        own agnosticism invariant).
+
+        Default: identity -- returns ``(zs, weights)`` unchanged, i.e. no
+        reduction at all. This is the safe, zero-assumption default: any
+        ``Approx`` subclass that doesn't override this behaves exactly as
+        if this method didn't exist (the raw point set passed straight
+        through as ``shrink_stat``). A subclass overrides this only when
+        it wants a smaller, reduced per-pair summary instead of the raw
+        point set (e.g. a Gaussian family reducing to a weighted
+        mean/covariance pair, which is asymptotically smaller than the
+        raw point set whenever the point count exceeds ``state_dim``),
+        pairing its override with its own :meth:`shrink` implementation
+        that knows how to consume that reduced form.
+
+        Parameters
+        ----------
+        zs : Array, shape (n_points, state_dim)
+            Propagated points (no noise added).
+        weights : Array, shape (n_points,)
+            Corresponding point weights.
+
+        Returns
+        -------
+        Any
+            Subclass-defined reduced statistic (default: ``(zs,
+            weights)`` unchanged).
+        """
+        return zs, weights
 
     @abstractmethod
     def kl(self, moment1: Array, moment2: Array) -> Array:

@@ -125,9 +125,10 @@ Quick reference (public API):
 | `free_to_natural(free)` | `free → natural` | Convert free-form output into an additive natural update. |
 | `sample_by_moment(key, moment, n)` | `moment → samples` | Sampling from the distribution parameterized by `moment`. |
 | `transition_points(key, moment, mc_size)` | `moment → (points, weights)` | Representative points/weights for propagation through the transition (defaults to plain Monte Carlo via `sample_by_moment`; `MVN` overrides with deterministic unscented-transform sigma points by default — see `docs/transition_points.md`). |
+| `transition_stat(zs, weights)` | `(zs, weights) → Any` | Reduces a propagated, noise-free point set (see `core.propagate_transition_points`) to whatever per-pair statistic `shrink` needs (default: identity, `(zs, weights)` unchanged; `MVN` overrides via a weighted mean/covariance reduction). Called unconditionally by `core.py`'s forward pass for every model, whose recursions stack the result across time steps without interpreting it — keeps `core.py` agnostic to what a "transition statistic" means for any family. |
 | `kl(moment1, moment2)` | `moment × moment → scalar` | KL between two distributions. |
 | `predictive_moment(z, noise)` | `(z, noise) → moment` | Conditional moment parameters `E[T(z_t) | z_{t-1}]`. |
-| `shrink(moment, shrink_stat, prior)` | `(moment, shrink_stat, prior) → free` | Closed-form, non-SGD transition-noise (`Q`) M-step: computes the per-(batch,time) sufficient statistic from `moment` and an already-propagated `shrink_stat = (mean_f, cov_f)` (computed upstream by `XFADS`'s own forward pass, reusing its own `transition_points`-based propagation rather than repeating it), and MAP-shrinks it toward `prior` in one call (default: `NotImplementedError`; `MVN` overrides — see `docs/mstep_dynamics_noise.md`). Called by `XFADS.mstep`, not directly by users. |
+| `shrink(moment, shrink_stat, prior)` | `(moment, shrink_stat, prior) → free` | Closed-form, non-SGD transition-noise (`Q`) M-step: computes the per-(batch,time) sufficient statistic from `moment` and an already-propagated, **already-reduced** `shrink_stat` (this same subclass's own `transition_stat` output, computed upstream by `XFADS`'s own forward pass), and MAP-shrinks it toward `prior` in one call (default: `NotImplementedError`; `MVN` overrides — see `docs/mstep_dynamics_noise.md`). Called by `XFADS.mstep`, not directly by users. |
 
 ### Initialization
 
@@ -164,9 +165,10 @@ Quick reference (public API):
 |--------|-----------|------|
 | `sample_by_moment` | `(key, μ, n) → z` | Draw `n` samples from the distribution |
 | `transition_points` | `(key, μ, mc_size) → (points, weights)` | Prediction-step propagation policy (default: MC; `MVN` defaults to unscented-transform sigma points) |
+| `transition_stat` | `(zs, weights) → Any` | Reduces a propagated point set to whatever statistic `shrink` needs (default: identity; `MVN` reduces to weighted mean/covariance); called unconditionally, agnostic to `core.py` |
 | `kl` | `(μ₁, μ₂) → scalar` | KL divergence `KL(p₁ ‖ p₂)` |
 | `predictive_moment` | `(z, noise) → μ_flat` | Conditional moment parameters `E[T(z_t) | z_{t-1}]` |
-| `shrink` | `(moment, shrink_stat, prior) → free` | Closed-form `Q` M-step: statistic + MAP-shrinkage in one call, given an already-propagated `shrink_stat` (default: not supported; `MVN` overrides) |
+| `shrink` | `(moment, shrink_stat, prior) → free` | Closed-form `Q` M-step: statistic + MAP-shrinkage in one call, given an already-propagated, already-reduced `shrink_stat` (default: not supported; `MVN` overrides) |
 
 ### Usage in XFADS
 

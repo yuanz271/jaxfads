@@ -39,6 +39,51 @@ from ..base import Approx
 from ..constraints import _EPS, constrain_positive, unconstrain_positive
 
 
+def _weighted_moments(zs: Array, weights: Array) -> tuple[Array, Array]:
+    """Non-finite-safe weighted mean and covariance of a raw point set.
+
+    ``MVN``'s own reduction of a generic ``(zs, weights)`` point set (as
+    produced by ``core.propagate_transition_points``, and passed through
+    ``core``'s recursions unreduced as ``shrink_stat`` -- see ``MVN.
+    shrink``) into the sufficient statistic this Gaussian family needs.
+    Not shared with ``core.py``: reducing a point set to a mean/covariance
+    pair is a Gaussian-specific choice, not something the subclass-agnostic
+    recursions in ``core.py`` may assume.
+
+    ``zs`` : shape ``(n_points, dim)``, ``weights`` : shape ``(n_points,)``,
+    summing to 1 by convention (not required to be nonnegative, so this
+    also works for signed unscented-transform weights).
+
+    Any point containing NaN/Inf is masked out (its weight zeroed) before
+    the weighted reduction. If every point is non-finite, both outputs are
+    themselves non-finite.
+
+    Returns
+    -------
+    mean : Array, shape (dim,)
+    cov : Array, shape (dim, dim)
+        The weighted covariance about ``mean`` (not about any other
+        reference point).
+    """
+    dim = zs.shape[-1]
+    valid = jnp.all(jnp.isfinite(zs), axis=-1)
+    safe = jnp.where(valid[:, None], zs, 0.0)
+    w_valid = jnp.where(valid, weights, 0.0)
+    w_sum = jnp.sum(w_valid)
+    mean = jnp.where(
+        w_sum > 0,
+        jnp.sum(w_valid[:, None] * safe, axis=0) / w_sum,
+        jnp.full((dim,), jnp.nan, dtype=zs.dtype),
+    )
+    centered = safe - mean
+    cov = jnp.where(
+        w_sum > 0,
+        jnp.einsum("i,ij,ik->jk", w_valid, centered, centered) / w_sum,
+        jnp.full((dim, dim), jnp.nan, dtype=zs.dtype),
+    )
+    return mean, cov
+
+
 class _Layout(NamedTuple):
     """Internal MVN layout helper.
 
@@ -374,6 +419,17 @@ class MVN(Approx):
             )
         return super().transition_points(key, moment, mc_size)
 
+    def transition_stat(self, zs: Array, weights: Array) -> tuple[Array, Array]:
+        """See base class.
+
+        Reduces the raw propagated point set to its weighted
+        mean/covariance pair via :func:`_weighted_moments` -- the
+        sufficient statistic this Gaussian family's own :meth:`shrink`
+        needs, and asymptotically smaller than the raw point set whenever
+        the point count exceeds ``state_dim``.
+        """
+        return _weighted_moments(zs, weights)
+
     # ---------------------------------------------------------------------
     # free ↔ canon
     # ---------------------------------------------------------------------
@@ -485,7 +541,7 @@ class MVN(Approx):
     def shrink(
         self,
         moment: Array,
-        shrink_stat: tuple[Array, Array],
+        shrink_stat: tuple[Array, Array],  # (mean_f, cov_f) -- see transition_stat
         prior: tuple[Array, float],
     ) -> Array:
         """See base class.
@@ -494,32 +550,44 @@ class MVN(Approx):
         the *destination* time step of each pair, aligned with
         ``shrink_stat``'s own ``(mean_f, cov_f)``, which the caller
         (``XFADS.mstep``) already computed for source steps ``t-1``, one
-        entry per pair.
+        entry per pair, via this same class's own :meth:`transition_stat`
+        override (called by ``core.py``'s forward pass, not by this
+        method) -- so ``shrink_stat`` arrives already reduced, not a raw
+        point set.
 
         v1 approximation: no cross-covariance term (``Cov(z_t, z_{t-1})``
         is not exposed by this repo's smoothing algorithm -- see
         ``docs/mstep_dynamics_noise.md``). Per (batch, time) pair::
 
             m', P' = self.unpack(moment_t)
-            mean_f, cov_f = shrink_stat  # already propagated, upstream
+            mean_f, cov_f = shrink_stat  # already propagated + reduced, upstream
             r = m' - mean_f
             raw_stat = outer(r, r) + P' + cov_f
 
         ``shrink_stat`` is computed once, upstream, by ``XFADS``'s own
-        forward pass (``core._site_filter``/``nofilt``/``causal``), which
-        already propagates each pair's ``q(z_{t-1})`` through the
+        forward pass (``core._site_filter``/``nofilt``/``causal``),
+        which already propagates each pair's ``q(z_{t-1})`` through the
         transition (via ``approx.transition_points`` -- Monte Carlo, or
         -- ``MVN``'s current default -- deterministic unscented-transform
-        sigma points) for its own noise-included predictive-moment term.
-        This method does **not** repeat that propagation -- it only
-        consumes the already-propagated ``(mean_f, cov_f)``, avoiding a
-        second, redundant call to ``propagate_transition_points`` for
-        exactly the same points. (An earlier version of this method did
-        its own propagation internally, given ``transition_fn``/``u``/
-        ``c``/``mc_size``/``key`` as call arguments -- superseded once
-        checked against the actual cost: the forward pass computes
-        exactly this propagation already, so a caller-side reuse is
-        strictly better than a second, independent one. See
+        sigma points) for its own noise-included predictive-moment term,
+        and then reduces the resulting points via this class's own
+        :meth:`transition_stat` (:func:`_weighted_moments`). This method
+        does **not** repeat either step -- it only consumes the
+        already-propagated, already-reduced ``(mean_f, cov_f)``, avoiding
+        both a second, redundant call to ``propagate_transition_points``
+        and a second reduction of the same points. (Two earlier versions
+        of this method did more work internally: one did its own
+        propagation given ``transition_fn``/``u``/``c``/``mc_size``/
+        ``key`` as call arguments; a later one still did its own
+        reduction of a raw point set passed in as ``shrink_stat`` --
+        both superseded once checked against the actual cost and against
+        ``core.py``'s own agnosticism invariant (a raw-point-set
+        ``shrink_stat``, reduced by ``core.py`` itself, would presume a
+        Gaussian-shaped sufficient statistic that a different ``Approx``
+        family need not share). Reducing via ``transition_stat`` at
+        collection time, not at consumption time, means ``core.py``'s
+        ``scan``/``vmap`` only ever stacks the smaller, already-reduced
+        form across time steps -- not the full raw point set. See
         ``docs/mstep_dynamics_noise.md``.)
 
         Then MAP-shrinks the mean of that per-pair statistic toward

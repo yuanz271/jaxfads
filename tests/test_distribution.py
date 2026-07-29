@@ -6,6 +6,7 @@ import chex
 import tensorflow_probability.substrates.jax.distributions as tfp
 
 from jaxfads.base import Approx
+from jaxfads.core import propagate_transition_points
 from jaxfads.distributions import MVN
 
 # rank=0 → diagonal, rank=dim → full
@@ -319,6 +320,55 @@ def test_approx_shrink_default_raises():
         )
 
 
+def test_approx_transition_stat_default_is_identity():
+    """Approx.transition_stat's base-class default is a no-op identity
+    pass-through of (zs, weights) unchanged -- since core.py calls this
+    unconditionally for every model regardless of whether shrink/Q-
+    estimation is configured, a non-overriding subclass must keep
+    behaving exactly as if this method didn't exist at all (the raw
+    point set passed straight through as shrink_stat)."""
+
+    class _NoReduce(Approx):
+        def natural_to_moment(self, natural):
+            return natural
+
+        def moment_to_natural(self, moment):
+            return moment
+
+        def sample_by_moment(self, key, moment, mc_size):
+            return moment
+
+        def param_size(self):
+            return 1
+
+        def kl(self, moment1, moment2):
+            return jnp.array(0.0)
+
+        def free_to_canon(self, free):
+            return free
+
+        def canon_to_moment(self, canon):
+            return canon
+
+        def canon_to_free(self, canon):
+            return canon
+
+        def moment_to_canon(self, moment):
+            return moment
+
+        def predictive_moment(self, z, noise):
+            return z
+
+        def free_from_kw(self, **kwargs):
+            return jnp.array(0.0)
+
+    zs = jrnd.normal(jrnd.key(0), (5, 3))
+    weights = jnp.full((5,), 0.2)
+    out_zs, out_weights = _NoReduce().transition_stat(zs, weights)
+    chex.assert_trees_all_close(out_zs, zs)
+    chex.assert_trees_all_close(out_weights, weights)
+
+
 @pytest.mark.parametrize("dim,rank", _RANK_CASES)
 def test_mvn_shrink_matches_independent_reference(dim, rank):
     """MVN.shrink's combined formula (v1 statistic, no
@@ -351,13 +401,32 @@ def test_mvn_shrink_matches_independent_reference(dim, rank):
     prior_dof = 2.0
     prior = (prior_value, prior_dof)
 
-    # shrink_stat = (mean_f, cov_f) -- already-propagated, upstream, as
-    # XFADS.mstep would compute it via core._site_filter/nofilt/causal.
-    # For this linear transition, exact: mean_f = A @ mean_tm1 + b,
-    # cov_f = A @ cov_tm1 @ A.T.
-    mean_f = jax.vmap(jax.vmap(lambda m: A @ m + b))(means[:, :-1, :])
-    cov_f = jax.vmap(jax.vmap(lambda p: A @ p @ A.T))(covs[:, :-1, :, :])
-    shrink_stat = (mean_f, cov_f)
+    # shrink_stat = approx.transition_stat(zs, weights) -- exactly as
+    # core._site_filter/nofilt/causal would compute it: propagate via
+    # core.propagate_transition_points (core.py's own agnostic recursion),
+    # then reduce via this same class's own transition_stat override
+    # (MVN reduces to a weighted mean/covariance pair; core.py never
+    # assumes that reduction itself). Since the transition is affine, UT
+    # (MVN's default transition_points policy) recovers mean_f = A @
+    # mean_tm1 + b, cov_f = A @ cov_tm1 @ A.T exactly.
+    def f(z, u, c, *, key=None):
+        del u, c, key
+        return A @ z + b
+
+    moment_tm1 = moment[:, :-1, :]
+    u_zeros = jnp.zeros((n_batch, n_time - 1, 0))
+    c_zeros = jnp.zeros((n_batch, n_time - 1, 0))
+    keys = jrnd.split(jrnd.key(11), n_batch * (n_time - 1)).reshape(n_batch, n_time - 1)
+
+    def _propagate_and_reduce(key_i, moment_i, u_i, c_i):
+        zs, weights = propagate_transition_points(
+            key_i, moment_i, u_i, c_i, f, approx, mc_size=1
+        )
+        return approx.transition_stat(zs, weights)
+
+    shrink_stat = jax.vmap(jax.vmap(_propagate_and_reduce))(
+        keys, moment_tm1, u_zeros, c_zeros
+    )
 
     free = approx.shrink(moment, shrink_stat, prior)
     canon = approx.free_to_canon(free)

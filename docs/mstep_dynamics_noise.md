@@ -306,44 +306,117 @@ preference) reason, not arbitrary churn:
    reused statistic is the filtering statistic, not one over its own
    returned `moment`, since the latter was never computed by any
    propagation step to reuse in the first place. `_site_filter`/`nofilt`
-   now compute the noise-free `(mean, cov)` (via the new, `Approx`-
-   agnostic `core.weighted_moments`) from the exact same
+   retain the raw propagated point set from the exact same
    `propagate_transition_points` call already made for the
    noise-included predictive moment -- unconditionally, not gated behind
    a flag (an initial `collect_shrink_stat` flag was added, then removed
-   once checked against the actual marginal cost: reducing an
-   already-materialized point set to a weighted mean/cov is small next
-   to evaluating the transition at each point in the first place, so
-   gating it added complexity for a saving not worth it). This
-   permanently widens `XFADS.__call__`'s return from a 3-tuple to
-   `(nature, moment, moment_p, shrink_stat)` -- a breaking change,
-   accepted, with every call site across the codebase updated. `Approx.
-   shrink`'s contract shrinks accordingly to `shrink(self, moment,
-   shrink_stat, prior)`: no more `u`, `c`, `transition_fn`, `mc_size`, or
-   `key` -- it purely consumes the already-propagated `shrink_stat`,
-   doing only the residual + MAP-shrinkage math.
+   once checked against the actual marginal cost: retaining an
+   already-materialized point set is small next to evaluating the
+   transition at each point in the first place, so gating it added
+   complexity for a saving not worth it). This permanently widens
+   `XFADS.__call__`'s return from a 3-tuple to `(nature, moment,
+   moment_p, shrink_stat)` -- a breaking change, accepted, with every
+   call site across the codebase updated. `Approx.shrink`'s contract
+   shrinks accordingly to `shrink(self, moment, shrink_stat, prior)`: no
+   more `u`, `c`, `transition_fn`, `mc_size`, or `key` -- it purely
+   consumes the already-propagated `shrink_stat`, doing only the
+   residual + MAP-shrinkage math.
+7. An intermediate version of step 6 had `_site_filter`/`nofilt`
+   themselves reduce the raw point set to `(mean, cov)` via a
+   `core.weighted_moments` helper before passing it along as
+   `shrink_stat` -- rejected once checked directly against `core.py`'s
+   own stated invariant (every algorithm in `core.py` is `Approx`-
+   subclass-agnostic): reducing a point set to a weighted mean and
+   covariance *presumes* a Gaussian-shaped sufficient statistic. A
+   different `Approx` family need not summarize its own transition-noise
+   statistic that way at all (e.g. a family whose natural sufficient
+   statistics aren't a mean/covariance pair) -- `core.py` baking in that
+   assumption, even just for `shrink_stat`'s construction, is exactly the
+   kind of family-specific knowledge leaking into the supposedly-generic
+   recursions that this whole design has otherwise been careful to keep
+   out (mirroring, e.g., why `mstep_transition_stat` as a standalone
+   `core.py` function was rejected earlier -- see iteration 2 above --
+   once it was found to call `approx.unpack`, an MVN-specific method).
+   Fixed by having `_site_filter`/`nofilt`/`causal` pass `shrink_stat`
+   through **unreduced** -- the raw `(zs, weights)` point set, exactly as
+   `propagate_transition_points` already produces it, with zero
+   assumption about how it should be summarized. The reduction moved
+   into `MVN`'s own module (`distributions/mvn.py`'s private
+   `_weighted_moments`, called from inside `MVN.shrink` only) -- the
+   generic point-set linear algebra didn't change, only which module is
+   allowed to assume its output means "mean and covariance." As a
+   consequence, no docstring in `base.py`/`core.py` (the family-agnostic
+   layer) should name a concrete `Approx` subclass or presume a specific
+   sufficient-statistic shape when describing `shrink`/`shrink_stat` --
+   audited and fixed throughout this section and the ABC docstring.
+8. Passing the *raw* point set all the way through `core.py`'s
+   `scan`/`vmap` (step 7's fix) keeps `core.py` agnostic, but has a real
+   cost: it forces every timestep's stacked carry to hold the full
+   `(n_points, state_dim)` point set rather than a much smaller reduced
+   summary -- for Monte Carlo propagation with `mc_size` large, this is
+   asymptotically bigger than a `(state_dim,)`/`(state_dim, state_dim)`
+   mean/covariance pair would be. Fixed by adding a new `Approx` ABC
+   method, `transition_stat(self, zs, weights) -> Any`, mirroring
+   `transition_points`'s own pattern (`Approx` produces the points to
+   propagate; `Approx` also reduces them back) -- `core.py`'s recursions
+   call this method polymorphically per (batch, time) pair and stack
+   *its* return value across time steps, never assuming or interpreting
+   the reduced shape themselves (this stays agnostic for exactly the
+   same reason `expected_predictive_moment`'s calls into `approx.
+   predictive_moment` already do). Default: identity, `return zs,
+   weights` unchanged -- since this method is called **unconditionally**
+   for every model (not gated by whether `noise_prior`/`shrink` are
+   configured), a non-overriding subclass must behave exactly as if this
+   method didn't exist. `MVN.transition_stat` overrides it to call
+   `_weighted_moments` (moving that reduction out of `MVN.shrink` and
+   into `MVN.transition_stat`, called once per pair during the forward
+   pass, not once per pair inside `shrink`) -- `MVN.shrink` goes back to
+   directly unpacking `mean_f, cov_f = shrink_stat`, since by the time it
+   receives `shrink_stat` the reduction has already happened, upstream,
+   via its own class's `transition_stat` override.
 
-**Final**: one method, consuming an already-propagated statistic rather
-than computing it:
+**Final**: one method, consuming an already-propagated *and already
+reduced* statistic rather than computing or reducing it itself -- the
+reduction itself lives in a separate, polymorphic `Approx.
+transition_stat` method that `core.py` calls without interpreting its
+result, keeping `core.py` agnostic while still avoiding storing the full
+raw point set across time steps:
 
 ```python
 class Approx:
+    def transition_stat(self, zs, weights) -> Any:
+        """Reduces a propagated, noise-free point set (zs, weights) to
+        whatever family-specific statistic this subclass's own shrink
+        needs. Called once per (batch, time) pair, unconditionally, by
+        core.py's forward pass -- core.py stacks whatever this returns
+        across time steps without interpreting it, keeping core.py itself
+        agnostic to what a family's transition statistic even means.
+
+        Default: identity, `return zs, weights` unchanged -- a
+        non-overriding subclass behaves exactly as if this method didn't
+        exist."""
+        return zs, weights
+
     def shrink(self, moment, shrink_stat, prior) -> Array:
         """Computes the per-(batch,time) statistic from smoothed moments
-        and an already-propagated shrink_stat, and MAP-shrinks it toward
-        `prior`, in one call, returning a free-form array. Does its own
-        pair-alignment slicing of `moment` internally -- the caller should
-        not need to know this needs shifted, aligned pairs at all. Does
-        NOT itself propagate anything through the transition -- that
-        already happened upstream, in XFADS's own forward pass. Mirrors
+        and an already-propagated, already-reduced shrink_stat (this
+        same class's own transition_stat output), and MAP-shrinks it
+        toward `prior`, in one call, returning a free-form array. Does
+        its own pair-alignment slicing of `moment` internally -- the
+        caller should not need to know this needs shifted, aligned pairs
+        at all. Does NOT itself propagate anything through the
+        transition, and does NOT itself reduce a raw point set -- both
+        already happened upstream, in XFADS's own forward pass (the
+        latter via this same class's transition_stat). Mirrors
         Observation.mstep/Gaussian.mstep's shape exactly: the orchestrator
         (XFADS.mstep) calls exactly one method here, never sequencing a
         separate raw-statistic step itself.
 
-        Deliberately opaque about raw_stat's shape/meaning and prior's
-        structure -- defined entirely by the subclass; not every Approx
-        family need define this meaningfully. prior is external (owned by
-        XFADS.noise_prior, not by Approx -- see below).
+        Deliberately opaque about shrink_stat's shape/meaning and prior's
+        structure -- defined entirely by the subclass (via its own
+        transition_stat pairing); not every Approx family need define
+        this meaningfully. prior is external (owned by XFADS.noise_prior,
+        not by Approx -- see below).
 
         Default: not supported, raises NotImplementedError. Callers
         (XFADS.mstep) only reach this when a prior has been explicitly
@@ -353,13 +426,19 @@ class Approx:
 
 
 class MVN(Approx):
+    def transition_stat(self, zs, weights):
+        """Reduces to this Gaussian family's own sufficient statistic --
+        a weighted mean/covariance pair -- via _weighted_moments."""
+        return _weighted_moments(zs, weights)
+
     def shrink(self, moment, shrink_stat, prior):
         """Slices moment_t = moment[:, 1:, :] (aligned with shrink_stat's
-        own per-pair (mean_f, cov_f), already computed for source steps
-        t-1), then per (batch,time) pair:
+        own per-pair (mean_f, cov_f), already propagated *and* reduced,
+        via this class's own transition_stat, for source steps t-1),
+        then per (batch,time) pair:
 
             m', P' = self.unpack(moment_t)
-            mean_f, cov_f = shrink_stat
+            mean_f, cov_f = shrink_stat  # already reduced, upstream
             r = m' - mean_f
             raw_stat = outer(r, r) + P' + cov_f
 

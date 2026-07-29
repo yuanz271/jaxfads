@@ -22,55 +22,12 @@ from .base import Approx
 __all__ = [
     "expected_predictive_moment",
     "propagate_transition_points",
-    "weighted_moments",
     "Mode",
     "filter",
     "smooth",
     "causal",
     "nofilt",
 ]
-
-
-def weighted_moments(zs: Array, weights: Array) -> tuple[Array, Array]:
-    """Non-finite-safe weighted mean and covariance of a raw point set.
-
-    Purely generic linear algebra over ``zs`` (shape ``(n_points, dim)``)
-    and ``weights`` (shape ``(n_points,)``, nonnegative-summing-to-1 by
-    convention -- see :meth:`Approx.transition_points` -- though this
-    function only assumes they sum to 1, not that they're nonnegative, so
-    it works for signed unscented-transform weights too) -- does not
-    depend on any ``Approx``-specific representation, since ``zs`` is
-    already a set of literal state vectors, not moment-parameter-encoded.
-
-    Any point containing NaN/Inf is masked out (its weight zeroed) before
-    the weighted reduction, mirroring :func:`expected_predictive_moment`'s
-    own convention. If every point is non-finite, both outputs are
-    themselves non-finite.
-
-    Returns
-    -------
-    mean : Array, shape (dim,)
-    cov : Array, shape (dim, dim)
-        The weighted covariance about ``mean`` (not about any other
-        reference point).
-    """
-    dim = zs.shape[-1]
-    valid = jnp.all(jnp.isfinite(zs), axis=-1)
-    safe = jnp.where(valid[:, None], zs, 0.0)
-    w_valid = jnp.where(valid, weights, 0.0)
-    w_sum = jnp.sum(w_valid)
-    mean = jnp.where(
-        w_sum > 0,
-        jnp.sum(w_valid[:, None] * safe, axis=0) / w_sum,
-        jnp.full((dim,), jnp.nan, dtype=zs.dtype),
-    )
-    centered = safe - mean
-    cov = jnp.where(
-        w_sum > 0,
-        jnp.einsum("i,ij,ik->jk", w_valid, centered, centered) / w_sum,
-        jnp.full((dim, dim), jnp.nan, dtype=zs.dtype),
-    )
-    return mean, cov
 
 
 def propagate_transition_points(
@@ -93,11 +50,15 @@ def propagate_transition_points(
 
     Shared by :func:`expected_predictive_moment` (which adds noise
     afterward via ``approx.predictive_moment``, for the filtering-time
-    predictive distribution ``p(z_t)``) and ``MVN.shrink`` (which instead
-    takes these points' weighted empirical covariance directly -- the
-    transition/process noise ``Q`` is precisely the quantity this
+    predictive distribution ``p(z_t)``) and, via ``approx.
+    transition_stat(zs, weights)`` (see ``_site_filter``/``nofilt``,
+    which reduce this same point set through that method before it is
+    passed along as ``shrink_stat``), ``Approx.shrink`` -- whichever
+    subclass-specific reduction of this same point set a concrete
+    ``Approx`` needs for its own noise-free transition-noise statistic.
+    The transition/process noise ``Q`` is precisely the quantity this
     function deliberately excludes, since ``Q`` is what ``shrink`` is
-    estimating).
+    estimating.
 
     Parameters
     ----------
@@ -206,9 +167,10 @@ def _average_predictive_moment(
     """The noise-*included* averaging half of :func:`expected_predictive_moment`,
     given an already-propagated point set (``zs``, ``weights``) -- shared
     with callers (e.g. ``_site_filter``) that need to reuse the same
-    propagated points for a second, noise-*free* purpose (e.g. ``Approx.
-    shrink``'s statistic via :func:`weighted_moments`) without calling
-    :func:`propagate_transition_points` a second time.
+    propagated points for a second, noise-*free* purpose (reduced via
+    ``approx.transition_stat(zs, weights)`` into ``shrink_stat``, for
+    ``Approx.shrink`` to consume however its own family requires) without
+    calling :func:`propagate_transition_points` a second time.
     """
     predictive_moment_samples = jax.vmap(
         partial(approx.predictive_moment, noise=noise)
@@ -289,14 +251,20 @@ def _site_filter(
         Filtered moment parameters for each time step.
     moment_p : Array, shape (T, param_dim)
         Predicted moment parameters from dynamics.
-    shrink_stat : tuple[Array, Array], shape (T-1, state_dim) and (T-1, state_dim, state_dim)
-        The per-pair, noise-*free* ``(mean, cov)`` of ``model.transition(z_{t-1})``
-        under ``q(z_{t-1})``, for pairs ``t = 2 ... T``, aligned with
-        ``moment_f[1:]``/``moment_f[:-1]``. Always computed, reusing the
-        same ``propagate_transition_points`` call already needed for the
-        noise-included predictive moment (``moment_p``) -- the marginal
-        cost of also reducing those same points to a weighted mean/cov
-        (:func:`weighted_moments`) is small relative to evaluating
+    shrink_stat : Any, one entry per pair t = 2 ... T
+        ``approx.transition_stat(zs, weights)`` for each pair's
+        noise-*free* propagated point set (from pushing ``q(z_{t-1})``
+        through ``model.transition`` with no noise added -- see
+        :func:`propagate_transition_points`), aligned with
+        ``moment_f[1:]``/``moment_f[:-1]``. This module does not assume
+        any particular reduced shape (e.g. a mean/covariance pair) --
+        that choice belongs entirely to ``approx.transition_stat``
+        (default: identity, i.e. the raw, unreduced ``(zs, weights)``);
+        this recursion only stacks whatever it returns across time steps.
+        Always computed, reusing the same ``propagate_transition_points``
+        call already needed for the noise-included predictive moment
+        (``moment_p``) -- the marginal cost of also reducing those same
+        points via ``transition_stat`` is small relative to evaluating
         ``model.transition`` at each point in the first place, so this is
         computed unconditionally rather than gated behind a flag.
 
@@ -329,12 +297,12 @@ def _site_filter(
         moment_p_t = _average_predictive_moment(zs, weights, noise, approx)
         nature_p_t = approx.moment_to_natural(moment_p_t)
         nature_t = nature_p_t + site_t
-        mean_f, cov_f = weighted_moments(zs, weights)
-        return (key, nature_t), (moment_p_t, nature_p_t, nature_t, mean_f, cov_f)
+        stat_t = approx.transition_stat(zs, weights)
+        return (key, nature_t), (moment_p_t, nature_p_t, nature_t, stat_t)
 
     key, ky = jrnd.split(key)
     scan_body = eqx.filter_checkpoint(ff)
-    _, (moment_p, _, nature_f, mean_f_seq, cov_f_seq) = scan(
+    _, (moment_p, _, nature_f, shrink_stat) = scan(
         scan_body,
         init=(ky, nature_f_1),
         xs=(site_natural[1:], u[:-1], c[:-1]),  # t = 2 ... T+1
@@ -346,7 +314,7 @@ def _site_filter(
         (approx.natural_to_moment(nature_f_1), moment_p)
     )  # prediction of t=1 is the prior
 
-    return nature_f, moment_f, moment_p, (mean_f_seq, cov_f_seq)
+    return nature_f, moment_f, moment_p, shrink_stat
 
 
 def filter(
@@ -428,9 +396,9 @@ def nofilt(
     Posterior natural parameters are set directly by encoder output ``alpha``.
     Predictive moments are computed in parallel for ELBO KL terms.
 
-    Also always returns ``shrink_stat`` (the per-pair, noise-free
-    propagated ``(mean, cov)``), reusing the same
-    ``propagate_transition_points`` call -- see ``_site_filter``.
+    Also always returns ``shrink_stat`` (``approx.transition_stat(zs,
+    weights)`` per pair -- see ``_site_filter``), reusing the same
+    ``propagate_transition_points`` call.
     """
     approx = model.approx
     noise = approx.canon_to_moment(approx.free_to_canon(model.noise_free))
@@ -447,15 +415,13 @@ def nofilt(
             key_i, moment_tm1_i, u_i, c_i, f, approx, mc_size
         )
         moment_p_t = _average_predictive_moment(zs, weights, noise, approx)
-        mean_f, cov_f = weighted_moments(zs, weights)
-        return moment_p_t, mean_f, cov_f
+        stat_t = approx.transition_stat(zs, weights)
+        return moment_p_t, stat_t
 
-    moment_p_rest, mean_f_seq, cov_f_seq = jax.vmap(_step)(
-        keys, moment[:-1], u[:-1], c[:-1]
-    )
+    moment_p_rest, shrink_stat = jax.vmap(_step)(keys, moment[:-1], u[:-1], c[:-1])
     moment_p = jnp.vstack((moment[0:1], moment_p_rest))
 
-    return nature, moment, moment_p, (mean_f_seq, cov_f_seq)
+    return nature, moment, moment_p, shrink_stat
 
 
 # NOTE: _bismooth() requires model.backward (a callable reverse dynamics) which is
