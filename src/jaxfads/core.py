@@ -21,7 +21,6 @@ from .base import Approx
 
 __all__ = [
     "expected_predictive_moment",
-    "mstep_transition_stat",
     "Mode",
     "filter",
     "smooth",
@@ -122,89 +121,6 @@ def expected_predictive_moment(
     )
 
     return avg
-
-
-def mstep_transition_stat(
-    approx: Approx,
-    moment_t: Array,
-    moment_tm1: Array,
-    u: Array,
-    c: Array,
-    transition_fn: Callable[..., Array],
-    *,
-    key: Array,
-) -> Array:
-    """Per-(batch,time) sufficient statistic for the transition-noise
-    M-step, computed entirely from smoothed quantities.
-
-    Standalone, not a method on ``Approx`` or ``Dynamics`` -- needs both
-    ``approx.unpack`` (distribution-only) and ``transition_fn``
-    (dynamics-aware), so belongs to neither; same shape of problem as
-    :func:`expected_predictive_moment`, which is the direct precedent for
-    solving it this way.
-
-    Deliberately decoupled from ``Approx.transition_points`` (MC or UT):
-    that answers a different question ("propagate q(z_{t-1})'s
-    uncertainty forward, before seeing y_t"); this statistic is a
-    posterior expectation over the *joint* smoothed distribution of
-    ``(z_{t-1}, z_t)``, which needs no forward-propagation machinery at
-    all.
-
-    v1 approximation: no cross-covariance term (``Cov(z_t, z_{t-1})`` is
-    not exposed by this repo's smoothing algorithm -- see
-    ``docs/mstep_dynamics_noise.md``). Formula, per (batch, time) pair::
-
-        r = m' - transition_fn(m)
-        J = jacrev(transition_fn)(m)
-        raw_stat = outer(r, r) + P' + J @ P @ J.T
-
-    where ``m, P = approx.unpack(moment_tm1)`` and
-    ``m', P' = approx.unpack(moment_t)``.
-
-    Parameters
-    ----------
-    approx : Approx
-        Exponential family approximation instance.
-    moment_t : Array, shape (N, T-1, param_dim)
-        Smoothed moment parameters of ``q(z_t)``, ``t = 2 ... T``.
-    moment_tm1 : Array, shape (N, T-1, param_dim)
-        Smoothed moment parameters of ``q(z_{t-1})``, ``t-1 = 1 ... T-1``
-        -- i.e. ``moment_t``/``moment_tm1`` are already the shifted,
-        aligned pair (caller's responsibility, matching how ``u``/``c``
-        below must be aligned the same way).
-    u : Array, shape (N, T-1, input_dim)
-    c : Array, shape (N, T-1, covariate_dim)
-        Control/covariate at the *source* time step of each pair (i.e. the
-        same slice used for ``u_tm1``/``c_tm1`` during filtering -- see
-        ``filter()``'s own ``u[:-1], c[:-1]`` convention).
-    transition_fn : Callable
-        One-step transition callable, ``f(z, u, c, key=...) -> z``.
-    key : Array
-        JAX PRNG key, reused across all pairs (same rationale as
-        :func:`expected_predictive_moment`: keeps any stochastic
-        regularization inside ``f`` fixed for this statistic).
-
-    Returns
-    -------
-    Array, shape (N, T-1, D, D)
-        Un-reduced per-(batch,time) raw statistic. Reduction (mean) and
-        MAP shrinkage toward a prior are the responsibility of
-        ``Approx.shrink``, not this function.
-    """
-
-    def _single(moment_t_i, moment_tm1_i, u_i, c_i):
-        mean_tm1, cov_tm1 = approx.unpack(moment_tm1_i)
-        mean_t, cov_t = approx.unpack(moment_t_i)
-
-        def f(z):
-            return transition_fn(z, u_i, c_i, key=key)
-
-        residual = mean_t - f(mean_tm1)
-        jac = jax.jacrev(f)(mean_tm1)
-        return jnp.outer(residual, residual) + cov_t + jac @ cov_tm1 @ jac.T
-
-    stat_fn = jax.vmap(jax.vmap(_single))
-    return stat_fn(moment_t, moment_tm1, u, c)
 
 
 class Mode(StrEnum):

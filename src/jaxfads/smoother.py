@@ -316,10 +316,12 @@ class XFADS(ConfModule):
         both, rather than separate driver functions per parameter.
 
         This is the only place that knows ``noise_free`` is an attribute
-        name and that this call is about transition noise specifically --
-        neither ``self.approx`` nor :func:`~jaxfads.core.
-        mstep_transition_stat` needs to know either (see
-        ``docs/mstep_dynamics_noise.md``).
+        name -- ``self.approx.mstep_transition_noise`` knows it's
+        computing/shrinking a transition-noise statistic, but not that the
+        result gets stored as ``noise_free`` (see
+        ``docs/mstep_dynamics_noise.md``). One combined call, mirroring
+        ``GLM.mstep`` calling exactly one method (``Gaussian.mstep``), not
+        two separately-sequenced steps.
 
         Least-knowledge: this method takes no prior/shrinkage-strength
         argument at all -- whether and how ``noise_free`` gets updated is
@@ -343,8 +345,8 @@ class XFADS(ConfModule):
         XFADS
             A new model with ``observation`` updated (if it overrides
             ``mstep``) and, if ``self.noise_prior`` is not ``None``,
-            ``noise_free`` updated via ``self.approx.shrink``. All other
-            attributes unchanged.
+            ``noise_free`` updated via ``self.approx.
+            mstep_transition_noise``. All other attributes unchanged.
         """
         approx = self.approx
         _natural, moment, _predicted = self(t, y, u, c, key=key)
@@ -354,20 +356,9 @@ class XFADS(ConfModule):
         if self.noise_prior is None:
             return model
 
-        moment_tm1 = moment[:, :-1, :]
-        moment_t_ = moment[:, 1:, :]
-        u_tm1 = u[:, :-1, :]
-        c_tm1 = c[:, :-1, :]
-        raw_stat = core.mstep_transition_stat(
-            approx,
-            moment_t_,
-            moment_tm1,
-            u_tm1,
-            c_tm1,
-            self.transition,
-            key=key,
+        new_noise_free = approx.mstep_transition_noise(
+            moment, u, c, self.transition, self.noise_prior, key=key
         )
-        new_noise_free = approx.shrink(raw_stat, self.noise_prior)
         return eqx.tree_at(lambda m: m.noise_free, model, new_noise_free)
 
     @classmethod

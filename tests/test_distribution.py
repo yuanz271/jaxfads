@@ -271,11 +271,14 @@ def test_transition_points_explicit_mc_matches_base_contract(dim, rank):
     chex.assert_trees_all_close(weights, jnp.full((mc_size,), 1.0 / mc_size), atol=1e-8)
 
 
-def test_approx_shrink_default_is_noop():
-    """Approx.shrink's base-class default returns raw_stat unchanged for a
-    non-overriding Approx subclass."""
+def test_approx_mstep_transition_noise_default_raises():
+    """Approx.mstep_transition_noise's base-class default raises
+    NotImplementedError for a non-overriding Approx subclass -- callers
+    (XFADS.mstep) only reach it when a prior has been explicitly
+    configured, so a loud failure is preferable to silently returning the
+    wrong shape."""
 
-    class _NoShrink(Approx):
+    class _NoStat(Approx):
         def natural_to_moment(self, natural):
             return natural
 
@@ -309,31 +312,66 @@ def test_approx_shrink_default_is_noop():
         def free_from_kw(self, **kwargs):
             return jnp.array(0.0)
 
-    raw_stat = jnp.array([1.0, 2.0, 3.0])
-    out = _NoShrink().shrink(raw_stat, prior=None)
-    chex.assert_trees_all_close(out, raw_stat)
+    with pytest.raises(NotImplementedError):
+        _NoStat().mstep_transition_noise(
+            jnp.zeros((1, 2, 1)),
+            jnp.zeros((1, 2, 0)),
+            jnp.zeros((1, 2, 0)),
+            lambda z, u, c, key=None: z,
+            prior=None,
+            key=jrnd.key(0),
+        )
 
 
 @pytest.mark.parametrize("dim,rank", _RANK_CASES)
-def test_mvn_shrink_matches_closed_form(dim, rank):
-    """MVN.shrink's MAP-shrinkage blend matches its closed-form definition
-    at known inputs: (n*mean(raw_stat) + prior_dof*value) / (n+prior_dof),
-    re-encoded losslessly (round-trips through free_to_canon).
+def test_mvn_mstep_transition_noise_matches_independent_reference(dim, rank):
+    """MVN.mstep_transition_noise's combined formula (v1 statistic, no
+    cross-covariance term, then MAP-shrunk toward prior) matches an
+    independently computed reference on a small linear transition,
+    including its own pair-alignment slicing (full moment/u/c in, not
+    pre-sliced pairs) -- for both diag (rank=0) and full (rank=dim)
+    layouts. One combined method, not two: mirrors Gaussian.mstep calling
+    exactly one method, not requiring the orchestrator to sequence a
+    separate raw-statistic step itself.
     """
-    mvn = MVN(dim=dim, rank=rank)
-    n_pairs = 5
+    approx = MVN(dim=dim, rank=rank)
+
+    A = 0.9 * jnp.eye(dim) + 0.05 * jrnd.normal(jrnd.key(9), (dim, dim))
+    b = jrnd.normal(jrnd.key(10), (dim,))
+
+    def f(z, u, c, *, key=None):
+        del u, c, key
+        return A @ z + b
+
+    n_batch, n_time = 2, 4
+    n_pairs = n_batch * (n_time - 1)
     key = jrnd.key(0)
-    stats = jax.vmap(lambda k: _random_cov(k, dim, rank))(jrnd.split(key, n_pairs))
+    keys = jrnd.split(key, 2)
+    means = jrnd.normal(keys[0], (n_batch, n_time, dim))
+    flat_cov_keys = jrnd.split(keys[1], n_batch * n_time)
+    flat_covs = jax.vmap(lambda k: _random_cov(k, dim, rank))(flat_cov_keys)
+    covs = flat_covs.reshape(n_batch, n_time, dim, dim)
+
+    moment = jax.vmap(jax.vmap(approx.pack))(means, covs)
+    u = jnp.zeros((n_batch, n_time, 0))
+    c = jnp.zeros((n_batch, n_time, 0))
 
     prior_value = 0.5
     prior_dof = 2.0
     prior = (prior_value, prior_dof)
 
-    free = mvn.shrink(stats, prior)
-    canon = mvn.free_to_canon(free)
+    free = approx.mstep_transition_noise(moment, u, c, f, prior, key=jrnd.key(1))
+    canon = approx.free_to_canon(free)
     got_cov = canon.chol @ canon.chol.T
 
-    mean_stat = jnp.mean(stats, axis=0)
+    raw_stats = []
+    for bi in range(n_batch):
+        for ti in range(n_time - 1):
+            r = means[bi, ti + 1] - (A @ means[bi, ti] + b)
+            raw_stats.append(
+                jnp.outer(r, r) + covs[bi, ti + 1] + A @ covs[bi, ti] @ A.T
+            )
+    mean_stat = jnp.mean(jnp.stack(raw_stats), axis=0)
     expected_value = prior_value * jnp.eye(dim)
     expected_cov = (n_pairs * mean_stat + prior_dof * expected_value) / (
         n_pairs + prior_dof

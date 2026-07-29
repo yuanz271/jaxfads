@@ -9,6 +9,7 @@ in their respective modules.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from typing import Any
 
 from gearax.mixin import SubclassRegistryMixin
@@ -171,32 +172,88 @@ class Approx(SubclassRegistryMixin, ABC):
         moment = self.canon_to_moment(canon)
         return self.moment_to_natural(moment)
 
-    def shrink(self, raw_stat: Any, prior: Any) -> Array:
-        """MAP-shrink a raw sufficient statistic toward ``prior``, returning
-        the result encoded as a free-form array.
+    def mstep_transition_noise(
+        self,
+        moment: Array,
+        u: Array,
+        c: Array,
+        transition_fn: Callable[..., Array],
+        prior: Any,
+        *,
+        key: Array,
+    ) -> Array:
+        """Closed-form, non-SGD transition-noise (``Q``) update: computes
+        the per-(batch,time) sufficient statistic from smoothed moments
+        and MAP-shrinks it toward ``prior`` in one call, returning the
+        result encoded as a free-form array (ready to replace
+        ``XFADS.noise_free``).
 
-        Deliberately opaque at this level: the shape/meaning of
-        ``raw_stat``, and the structure of ``prior`` itself (a single
-        value? a ``(value, strength)`` pair? something else entirely for a
-        non-conjugate scheme?), are defined entirely by the subclass -- not
-        every ``Approx`` family need define this meaningfully (e.g. a
-        hypothetical discrete-state family might have no shrinkable
-        dispersion concept at all).
+        One combined method, not two -- mirrors ``Observation.mstep``/
+        ``Gaussian.mstep``'s own shape exactly: the orchestrator
+        (``XFADS.mstep``) calls exactly one method here, the same way
+        ``GLM.mstep`` calls exactly one method (``Gaussian.mstep``), never
+        needing to sequence a separate raw-statistic step itself. An
+        earlier version of this design split this into two public methods
+        (a ``mstep_transition_stat`` computing the raw statistic, and a
+        separate ``shrink`` doing the blend), reasoning ``shrink`` might
+        be independently reusable for other covariance-shaped quantities
+        -- rejected once checked against ``Gaussian.mstep_stat``/
+        ``Gaussian.mstep``'s actual precedent (a private-style internal
+        helper plus one public combining method, not two public methods
+        the orchestrator must both call) and once it became clear no
+        second use case for the split ever existed to justify it.
 
-        ``prior`` is a call argument here (not construction-time ``Approx``
-        config): it's owned by ``XFADS``'s own configuration (e.g.
-        ``conf.noise_prior``/``conf.noise_prior_dof``, read via
-        ``XFADS.mstep``), not by ``Approx``, since ``Approx`` is a
-        stateless, freshly-reconstructed-per-access property (see
-        ``XFADS.approx``) -- not a natural home for a specific model's
-        chosen hyperparameter value. ``Approx`` only owns *how* to shrink
-        given a prior, not *what* the prior is. See
-        ``docs/mstep_dynamics_noise.md`` for the design and ``MVN.shrink``
-        for the one concrete implementation today.
+        Takes the *full* ``moment``/``u``/``c`` (not pre-sliced
+        ``(t, t-1)`` pairs) and performs its own pair-alignment slicing
+        internally -- the caller should not need to know this method
+        needs shifted, aligned pairs at all.
 
-        Default: no-op, returns ``raw_stat`` unchanged.
+        Deliberately opaque at this level about ``raw_stat``'s
+        shape/meaning and ``prior``'s structure (a single value? a
+        ``(value, strength)`` pair? something else for a non-conjugate
+        scheme?) -- defined entirely by the subclass; not every ``Approx``
+        family need define this meaningfully (e.g. a hypothetical
+        discrete-state family might have no shrinkable dispersion concept
+        at all). ``transition_fn`` is an external argument (dynamics are
+        not an ``Approx`` concept) -- the same pattern ``Observation.
+        mstep`` already uses for ``approx``. ``prior`` is also a call
+        argument (not construction-time ``Approx`` config): it's owned by
+        ``XFADS``'s own configuration (``XFADS.noise_prior``, read via
+        ``XFADS.mstep``), not by ``Approx``, since ``Approx``
+        (``XFADS.approx``) is a stateless property freshly reconstructed
+        on every access -- not a natural home for a specific model's
+        chosen hyperparameter value.
+
+        Default: not supported -- raises ``NotImplementedError``. Callers
+        (``XFADS.mstep``) only reach this when a prior has been
+        explicitly configured (opt-in via ``XFADS.noise_prior``), so a
+        loud failure here is preferable to silently returning something
+        the wrong shape.
+
+        Parameters
+        ----------
+        moment : Array, shape (N, T, param_dim)
+            Smoothed moment parameters of ``q(z_t)`` for the full
+            sequence.
+        u : Array, shape (N, T, input_dim)
+        c : Array, shape (N, T, covariate_dim)
+            Full control/covariate sequences.
+        transition_fn : Callable
+            One-step transition callable, ``f(z, u, c, key=...) -> z``.
+        prior : Any
+            Subclass-defined prior spec.
+        key : Array
+            JAX PRNG key.
+
+        Returns
+        -------
+        Array
+            A free-form array, shape/meaning defined by the concrete
+            subclass (matching whatever ``XFADS.noise_free`` expects).
         """
-        return raw_stat
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement mstep_transition_noise"
+        )
 
     def transition_points(
         self, key: Array, moment: Array, mc_size: int

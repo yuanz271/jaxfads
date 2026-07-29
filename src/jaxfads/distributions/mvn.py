@@ -482,32 +482,75 @@ class MVN(Approx):
         canon = MVNParam(loc=loc_arr, chol=jnp.diag(chol_diag))
         return self.canon_to_free(canon)
 
-    def shrink(self, raw_stat: Array, prior: tuple[Array, float]) -> Array:
+    def mstep_transition_noise(
+        self,
+        moment: Array,
+        u: Array,
+        c: Array,
+        transition_fn,
+        prior: tuple[Array, float],
+        *,
+        key: Array,
+    ) -> Array:
         """See base class.
 
-        Here, and only here, ``raw_stat`` is covariance-shaped (any number
-        of leading batch/time axes, e.g. ``(N, T-1, D, D)`` from
-        :func:`~jaxfads.core.mstep_transition_stat`) and ``prior`` is a
-        ``(value, prior_dof)`` pair: MAP shrinkage
-        ``(n * mean(raw_stat) + prior_dof * value) / (n + prior_dof)``,
-        where ``n`` is the total count of leading-axis instances in
-        ``raw_stat`` (its own batch/time shape, not a separate argument).
+        Own pair-alignment slicing: ``moment_tm1 = moment[:, :-1, :]``,
+        ``moment_t = moment[:, 1:, :]``, ``u_tm1 = u[:, :-1, :]``,
+        ``c_tm1 = c[:, :-1, :]`` -- the control/covariate at the *source*
+        time step of each pair, matching ``core.filter()``'s own
+        ``u[:-1], c[:-1]`` convention.
 
-        ``value`` may be a scalar (isotropic), a ``(D,)`` vector (diagonal),
-        or a ``(D, D)`` matrix (full) -- broadcast to a full matrix before
-        blending.
+        v1 approximation: no cross-covariance term (``Cov(z_t, z_{t-1})``
+        is not exposed by this repo's smoothing algorithm -- see
+        ``docs/mstep_dynamics_noise.md``). Per (batch, time) pair::
+
+            r = m' - transition_fn(m)
+            J = jacrev(transition_fn)(m)
+            raw_stat = outer(r, r) + P' + J @ P @ J.T
+
+        where ``m, P = self.unpack(moment_tm1)`` and
+        ``m', P' = self.unpack(moment_t)``. Deliberately decoupled from
+        ``transition_points`` (MC or UT): that answers a different
+        question ("propagate q(z_{t-1})'s uncertainty forward, before
+        seeing y_t"); this statistic is a posterior expectation over the
+        *joint* smoothed distribution of ``(z_{t-1}, z_t)``, which needs
+        no forward-propagation machinery at all.
+
+        Then MAP-shrinks the mean of that per-pair statistic toward
+        ``prior = (value, prior_dof)``:
+        ``(n * mean(raw_stat) + prior_dof * value) / (n + prior_dof)``,
+        where ``n`` is the total pair count. ``value`` may be a scalar
+        (isotropic), a ``(D,)`` vector (diagonal), or a ``(D, D)`` matrix
+        (full) -- broadcast to a full matrix before blending.
 
         Returns a free-form array via ``self.canon_to_free`` -- *not*
         ``self.free_from_kw``, which only accepts a diagonal/scalar scale
         for initialization and cannot round-trip an arbitrary full shrunk
         covariance. ``loc`` is set to zero, matching how
         :meth:`predictive_moment` already discards ``noise``'s ``loc``
-        component entirely.
-
-        Never carries gradients: wraps its result in
+        component entirely. Never carries gradients: wraps its result in
         ``jax.lax.stop_gradient`` defensively, matching
         ``Gaussian.mstep``'s same convention.
         """
+        moment_tm1 = moment[:, :-1, :]
+        moment_t = moment[:, 1:, :]
+        u_tm1 = u[:, :-1, :]
+        c_tm1 = c[:, :-1, :]
+
+        def _single(moment_t_i, moment_tm1_i, u_i, c_i):
+            mean_tm1, cov_tm1 = self.unpack(moment_tm1_i)
+            mean_t, cov_t = self.unpack(moment_t_i)
+
+            def f(z):
+                return transition_fn(z, u_i, c_i, key=key)
+
+            residual = mean_t - f(mean_tm1)
+            jac = jax.jacrev(f)(mean_tm1)
+            return jnp.outer(residual, residual) + cov_t + jac @ cov_tm1 @ jac.T
+
+        stat_fn = jax.vmap(jax.vmap(_single))
+        raw_stat = stat_fn(moment_t, moment_tm1, u_tm1, c_tm1)
+
         d = self._layout.dim
         value, prior_dof = prior
         value = jnp.asarray(value, dtype=raw_stat.dtype)
