@@ -217,6 +217,31 @@ def test_mstep_gaussian_cov_matches_independently_computed_residual_stat():
     assert not jnp.allclose(updated.observation.likelihood.cov(), wrong_cov, atol=1e-2)
 
 
+def test_mstep_gaussian_cov_is_gradient_free():
+    """mstep_gaussian_cov reimplements Gaussian.mstep's math independently
+    (duck-typed on mstep_stat, not calling .mstep() at all), so it does not
+    inherit Gaussian.mstep's own stop_gradient protection -- it needs, and
+    (after the fix) has, its own. Regression test: this previously had no
+    stop_gradient anywhere in its body, so a differentiable upstream input
+    (here, a scale on y) would have produced a nonzero gradient through the
+    returned unconstrained_cov."""
+    state_dim, observation_dim, T, batch = 2, 4, 5, 3
+    model = _xfads_gaussian_model(state_dim=state_dim, observation_dim=observation_dim, T=T)
+
+    times = jnp.broadcast_to(jnp.arange(T), (batch, T))
+    y0 = jrnd.normal(jrnd.key(1), (batch, T, observation_dim))
+    u = jnp.zeros((batch, T, 0))
+    c = jnp.zeros((batch, T, 0))
+    model = model.initialize(times, y0, u, c)
+
+    def loss(theta):
+        updated = mstep_gaussian_cov(model, (times, theta * y0, u, c), key=jrnd.key(2))
+        return jnp.sum(updated.observation.likelihood.unconstrained_cov)
+
+    grad = jax.grad(loss)(1.0)
+    assert grad == 0.0
+
+
 def test_glm_mstep_matches_mstep_gaussian_cov():
     """GLM.mstep, called directly on (t, moment, y, approx), must produce the
     same unconstrained_cov as mstep_gaussian_cov's full driver, since it's the

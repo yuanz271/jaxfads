@@ -1028,6 +1028,11 @@ def mstep_gaussian_cov(model, data, *, key, batch_size: int | None = None):
     # matching Gaussian.__init__'s own convention for turning a target
     # covariance into unconstrained_cov.
     new_unconstrained_cov = unconstrain_positive(jnp.maximum(r_new - _MIN_VARIANCE, _EPS))
+    # Must never carry gradients back through `moment` into the rest of the
+    # model -- unlike Gaussian.mstep (which this duplicates the math of),
+    # this standalone driver previously had no stop_gradient of its own,
+    # relying entirely on being called outside any differentiated context.
+    new_unconstrained_cov = jax.lax.stop_gradient(new_unconstrained_cov)
     new_likelihood = eqx.tree_at(lambda lik: lik.unconstrained_cov, likelihood, new_unconstrained_cov)
     new_observation = eqx.tree_at(lambda obs: obs.likelihood, observation, new_likelihood)
     return eqx.tree_at(lambda m: m.observation, model, new_observation)

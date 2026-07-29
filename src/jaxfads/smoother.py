@@ -14,6 +14,7 @@ from typing import Any
 
 import equinox as eqx
 from jax import Array, vmap
+from jax import lax
 from jax import numpy as jnp
 from jax import random as jrnd
 from gearax.modules import ConfModule, load_model, save_model
@@ -346,23 +347,37 @@ class XFADS(ConfModule):
             ``mstep``) and, if ``self.noise_prior`` is not ``None``,
             ``noise_free`` updated via ``self.approx.shrink``. All other
             attributes unchanged.
+
+        Never carries gradients back into the rest of the model --
+        enforced centrally here via ``jax.lax.stop_gradient``, wrapping
+        both ``self.observation.mstep(...)``'s and ``self.approx.
+        shrink(...)``'s results, rather than relying solely on each
+        concrete ``Observation``/``Approx`` implementation to remember its
+        own wrap (``Gaussian.mstep``, ``MVN.shrink`` both already do, as
+        belt-and-suspenders documentation of the same invariant -- this is
+        the structural, subclass-proof guarantee: correct even for a
+        future custom implementation that forgets).
         """
         approx = self.approx
         _natural, moment, _predicted = self(t, y, u, c, key=key)
-        new_observation = self.observation.mstep(t, moment, y, approx)
+        new_observation = lax.stop_gradient(
+            self.observation.mstep(t, moment, y, approx)
+        )
         model = eqx.tree_at(lambda m: m.observation, self, new_observation)
 
         if self.noise_prior is None:
             return model
 
-        new_noise_free = approx.shrink(
-            moment,
-            u,
-            c,
-            self.transition,
-            self.noise_prior,
-            key=key,
-            mc_size=self.conf.mc_size,
+        new_noise_free = lax.stop_gradient(
+            approx.shrink(
+                moment,
+                u,
+                c,
+                self.transition,
+                self.noise_prior,
+                key=key,
+                mc_size=self.conf.mc_size,
+            )
         )
         return eqx.tree_at(lambda m: m.noise_free, model, new_noise_free)
 
