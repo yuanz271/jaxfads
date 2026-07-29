@@ -449,24 +449,35 @@ free-form ones) -- the free-form conversion is only the last line before
 returning, a one-line change to remove if/when `noise_free`'s storage
 format changes.
 
-### Cadence: round/epoch-based, not continuous per-minibatch (matches what was actually tested)
+### Cadence: validated at round-based, shipped at `R`'s existing cadence (a deliberate, flagged gap)
 
 The validated experiments use a **round-based cadence**: `N` epochs of
 ordinary training with `Q` held fixed (via `freeze_paths=["noise_free"]`,
 so it still scales `f`'s gradient but isn't itself gradient-updated),
-then one M-step-shrinkage update, repeated for a fixed number of rounds.
-This matches `R`'s `mstep_mode="epoch"` cadence conceptually, not
-`"minibatch"` — continuous per-minibatch updates were not tested here and
-should not be assumed safe by analogy to `R` (see Open questions).
+then one M-step-shrinkage update, repeated for a fixed number of rounds
+(`N` was 8-20 in the benchmarks).
 
-Implementation-wise, this cadence could **not** be built via the public
-`on_epoch_end` hook (callbacks can't feed a modified model back into the
-training loop) — the prototype scripts call `train()` once per round with
-the previous round's output model as the next round's input, with `Q`
-frozen throughout each round via `freeze_paths` and replaced between
-rounds via `eqx.tree_at`. A real `train()`-integrated version needs
-trainer-internal surgery analogous to `R`'s `mstep_mode`, not just the
-public hook surface.
+`train()`-integration has since landed (see Steps toward implementation,
+item 6) -- `model.mstep(...)`, composing both `R` and `Q`, is now called
+at whatever cadence `mstep_mode` gives (`"minibatch"` default, or
+`"epoch"`, i.e. every step or every epoch), reusing `R`'s existing
+cadence machinery rather than building a dedicated round-based one. This
+is **more frequent** than what was validated for `Q` specifically --
+an explicit, known gap, not an oversight: the LL/KL independence
+argument (see Steps toward implementation) means the mechanism is
+mathematically well-defined at any cadence, since each M-step update is
+computed from a fixed E-step posterior regardless of how often that
+happens -- but whether frequent re-shrinkage from small per-call
+statistics behaves the same as the validated infrequent shrinkage from
+large ones has not been tested. `conf.noise_prior`/`conf.noise_prior_dof`
+remain opt-in (`None` by default), so this only affects models that
+explicitly configure them.
+
+A genuine round-based cadence (a dedicated "every `N` epochs" knob,
+distinct from the existing minibatch/epoch binary) remains unimplemented
+and would be needed to reproduce the *exact* cadence validated in the
+benchmarks, rather than the coarser approximation `mstep_mode` currently
+gives.
 
 ### The cross-covariance omission — untested in isolation, but present in every validated result
 
@@ -606,19 +617,49 @@ later steps, not blockers.
    landed (`tests/test_distribution.py`, `tests/test_algorithm.py` if
    `core.py`/`base.py` are touched, plus the new test file) -- full suite
    only before push, per `AGENTS.md`.
-6. **Deferred, explicitly not blocking Step 1-5 landing**:
-   - **Automatic freeze-path derivation for `Q`** (an `Approx`-level
-     `mstep_frozen_paths`-equivalent) -- doesn't survive the `Approx`/
-     `XFADS` split cleanly (see Design's "casualty" note); callers pass
-     `freeze_paths=["noise_free"]` to `train()` explicitly for now.
-   - **Automatic cadence control inside `train()` itself** (analogous to
-     `R`'s `mstep_mode`, auto-calling `model.mstep(...)` at some cadence
-     without the caller writing the round loop by hand) -- distinct from
-     `XFADS.mstep` itself landing (Step 3), which is already usable
-     manually in exactly the loop shape that was validated. Automatic
-     cadence needs the same trainer-internal surgery `R`'s integration
-     required -- the public `on_epoch_end` hook can't feed a modified
-     model back into the loop, confirmed while building the prototypes.
+6. **Done, not deferred after all**: automatic freeze-path derivation for
+   `Q`, and `train()`-integration at `R`'s existing cadence, both landed.
+   `train()`'s `train_step`/`apply_mstep` now call `model.mstep(...)`
+   (composing both `R` and, when `conf.noise_prior`/`conf.
+   noise_prior_dof` are set, `Q`) instead of `model.observation.mstep(...)`
+   alone, at whatever cadence `mstep_mode` already gives (`"minibatch"`
+   default, or `"epoch"`) -- reusing `R`'s existing cadence machinery
+   rather than building a separate one. `noise_free` is auto-excluded
+   from gradient descent whenever `conf.noise_prior` is set, mirroring
+   `Observation.mstep_frozen_paths()`'s exact pattern, done entirely at
+   the `XFADS`/`trainer.py` level (`XFADS` already owns both
+   `noise_prior` and the `noise_free` name, so this needed no `Approx`-
+   level `mstep_frozen_paths` at all -- the earlier "casualty" concern
+   was about an `Approx`-level equivalent specifically, which still
+   doesn't exist and still isn't needed).
+
+   This reverses the earlier claim that automatic cadence needed
+   trainer-internal surgery beyond what shipped for `R` -- once
+   `XFADS.mstep` existed as a single composing call, wiring it into
+   `train_step`/`apply_mstep` in place of `model.observation.mstep(...)`
+   was a small, mechanical change, not new surgery. What's still
+   genuinely open (see Open questions): the cadence used here
+   (`"minibatch"`/`"epoch"`, i.e. every step or every epoch) is *more
+   frequent* than what was validated for `Q` specifically (round-based,
+   every 8-20 epochs in the benchmarks) -- the LL/KL independence
+   argument (below) means the mechanism is mathematically well-defined
+   at any cadence, but whether *frequent* re-shrinkage from small
+   per-call statistics behaves the same as the validated *infrequent*
+   shrinkage from large ones is not yet tested.
+
+   **Why freezing `noise_free` doesn't conflict with anything, resolving
+   an over-cautious earlier objection**: a concern was raised that
+   gradient descent on `noise_free` and the closed-form shrinkage update
+   might "fight" if both applied at the same cadence without freezing.
+   They don't need to, and freezing is not a compromise: given a *fixed*
+   posterior (this round's E-step), the ELBO's expected-log-likelihood
+   term depends only on `ψ`/`R` and its KL term depends only on
+   `θ`/`Q` -- maximizing each is an independent, well-defined operation
+   on the same fixed posterior, exactly the classical M-step
+   decomposition. The only real issue was mechanical (an un-frozen
+   gradient step on `noise_free` would be silently overwritten by the
+   next shrinkage call, wasting compute) -- solved by freezing, exactly
+   mirroring `R`'s own already-shipped, already-relied-upon pattern.
    - The tracked `dyn_conf.state_noise` config-relocation fix.
    - The remaining validation gaps below (multi-seed, more systems,
      ablations, cadence sweep, prior sensitivity, the SNR correction) --
@@ -658,7 +699,10 @@ without hand-tuned annealing, once `train()` integration exists.
   include it.
 - **Whether continuous per-minibatch cadence is safe** — only round-based
   cadence has been tested; do not assume `R`'s per-minibatch safety
-  transfers.
+  transfers. No longer purely hypothetical: `train()`'s `mstep_mode`
+  default (`"minibatch"`) now applies to `Q` too whenever `conf.
+  noise_prior` is configured (see Design's Cadence subsection) -- opt-in,
+  but live, not just a documented risk.
 - **Sensitivity to `prior`/`prior_dof_frac`** — picked once (`1.0`, `0.1`),
   not swept; how much of the C-beats-A/B result depends on this specific
   choice is unknown.

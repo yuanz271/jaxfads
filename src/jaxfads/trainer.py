@@ -583,19 +583,23 @@ def _run_training_loop(
         also be listed in ``conf.freeze_paths`` so the optimizer's own
         gradient-based update does not fight the schedule.
     mstep_mode : {"minibatch", "epoch"}
-        Cadence for replacing ``model.observation`` with
-        ``model.observation.mstep(...)``. ``"minibatch"`` (default): every
-        ``train_step``, from that minibatch's own forward pass.
-        ``"epoch"``: once per completed epoch, from a forward pass over the
-        whole ``train_set``. Either way, mstep is also always applied once
-        more, from a full-``train_set`` forward pass, immediately after the
-        final epoch's gradient steps complete, right before returning. See
+        Cadence for ``model.mstep(...)``, which updates both
+        ``model.observation`` (unconditionally) and, if ``model.
+        noise_prior`` is set, ``noise_free`` (via ``Approx.shrink``).
+        ``"minibatch"`` (default): every ``train_step``, from that
+        minibatch's own forward pass. ``"epoch"``: once per completed
+        epoch, from a forward pass over the whole ``train_set``. Either
+        way, mstep is also always applied once more, from a
+        full-``train_set`` forward pass, immediately after the final
+        epoch's gradient steps complete, right before returning. See
         :func:`train`'s docstring.
 
     Notes
     -----
-    A no-op for ``Observation``/``Likelihood`` implementations that don't
-    override ``mstep`` (e.g. ``Poisson``).
+    The ``model.observation`` update is a no-op for ``Observation``/
+    ``Likelihood`` implementations that don't override ``mstep`` (e.g.
+    ``Poisson``); the ``noise_free`` update is a no-op whenever ``model.
+    noise_prior`` is ``None`` (the default -- see ``XFADS.mstep``).
 
     Returns
     -------
@@ -628,22 +632,20 @@ def _run_training_loop(
         model = eqx.apply_updates(model, updates)
 
         if mstep_mode == "minibatch":
-            # Replace model.observation with model.observation.mstep(...)
-            # computed from this minibatch alone (a no-op for Observations
-            # that don't override mstep, e.g. Poisson). Talks only through
-            # the Observation ABC's own mstep interface -- no import from
-            # the concrete-implementations module. Runs outside the
-            # differentiated eqx.filter_value_and_grad call above, so it
-            # never carries gradients.
+            # model.mstep(...) computed from this minibatch alone: updates
+            # model.observation (a no-op for Observations that don't
+            # override mstep, e.g. Poisson) and, if model.noise_prior is
+            # set, noise_free via Approx.shrink -- one call, one cadence,
+            # for both. Runs outside the differentiated
+            # eqx.filter_value_and_grad call above, so it never carries
+            # gradients. Gradient descent never fights either update:
+            # both observation.mstep's own touched paths and noise_free
+            # (when noise_prior is set) are excluded from the optimizer's
+            # trainable params below, mirroring the same freeze-path
+            # pattern for both.
             key, mstep_key = jr.split(key)
             mstep_t, mstep_y, mstep_u, mstep_c = batch
-            _natural, mstep_moment, _predicted = model(
-                mstep_t, mstep_y, mstep_u, mstep_c, key=mstep_key
-            )
-            new_observation = model.observation.mstep(
-                mstep_t, mstep_moment, mstep_y, model.approx
-            )
-            model = eqx.tree_at(lambda m: m.observation, model, new_observation)
+            model = model.mstep(mstep_t, mstep_y, mstep_u, mstep_c, key=mstep_key)
 
         return model, opt_state, step + 1, loss
 
@@ -667,21 +669,15 @@ def _run_training_loop(
     epoch_batch_losses: list = []
 
     def apply_mstep(mstep_key):
-        """Full-``train_set`` mstep update: replace model.observation with
-        model.observation.mstep(...) from a forward pass over the whole
-        dataset. Talks only through the Observation ABC's mstep interface
-        -- no import from the concrete-implementations module. A no-op for
-        Observations that don't override mstep (e.g. Poisson).
+        """Full-``train_set`` mstep update: ``model.mstep(...)`` from a
+        forward pass over the whole dataset -- updates ``model.
+        observation`` (a no-op for Observations that don't override
+        ``mstep``, e.g. Poisson) and, if ``model.noise_prior`` is set,
+        ``noise_free`` via ``Approx.shrink``.
         """
         nonlocal model
         mstep_t, mstep_y, mstep_u, mstep_c = train_set
-        _natural, mstep_moment, _predicted = model(
-            mstep_t, mstep_y, mstep_u, mstep_c, key=mstep_key
-        )
-        new_observation = model.observation.mstep(
-            mstep_t, mstep_moment, mstep_y, model.approx
-        )
-        model = eqx.tree_at(lambda m: m.observation, model, new_observation)
+        model = model.mstep(mstep_t, mstep_y, mstep_u, mstep_c, key=mstep_key)
 
     def finalize_epoch(epoch_idx, batch_losses) -> bool:
         """Record the epoch's training loss, run the callback, and (in
@@ -766,19 +762,22 @@ def train(
     those are epoch-level policy supplied via ``on_epoch_end`` (see
     :class:`EpochHandler`). The caller owns the train/validation split.
 
-    **Unconditionally**, ``model.observation`` is periodically replaced by
-    ``model.observation.mstep(...)`` (a no-op for ``Observation``/
-    ``Likelihood`` implementations that don't override ``mstep``, e.g.
-    ``Poisson``) -- see ``mstep_mode`` below for the cadence. For a
-    Gaussian-likelihood model this means the observation noise covariance
-    ``R`` is always estimated via the closed-form EM M-step, never by
-    gradient descent -- ``model.observation.mstep_frozen_paths()`` is
-    always excluded from the optimizer automatically, with no
-    ``conf.freeze_paths`` entry or opt-in flag required. See
-    [mstep_gaussian_cov](../docs/mstep_gaussian_cov.md) for the rationale
-    (this closed-form estimate is immune to a Heywood-case degeneracy that
-    gradient-based estimation of a Gaussian observation covariance is prone
-    to).
+    **Unconditionally**, ``model.mstep(...)`` is called periodically (see
+    ``mstep_mode`` below for the cadence), which updates ``model.
+    observation`` (a no-op for ``Observation``/``Likelihood``
+    implementations that don't override ``mstep``, e.g. ``Poisson``) and,
+    if ``model.noise_prior`` is set, ``noise_free`` (a no-op otherwise --
+    the default). For a Gaussian-likelihood model this means the
+    observation noise covariance ``R`` is always estimated via the
+    closed-form EM M-step, never by gradient descent --
+    ``model.observation.mstep_frozen_paths()`` is always excluded from the
+    optimizer automatically, with no ``conf.freeze_paths`` entry or opt-in
+    flag required. See [mstep_gaussian_cov](../docs/mstep_gaussian_cov.md)
+    for the rationale (this closed-form estimate is immune to a
+    Heywood-case degeneracy that gradient-based estimation of a Gaussian
+    observation covariance is prone to). When ``model.noise_prior`` is
+    set, the same auto-exclusion applies to ``noise_free`` -- see
+    [mstep_dynamics_noise](../docs/mstep_dynamics_noise.md).
 
     Parameters
     ----------
@@ -826,8 +825,9 @@ def train(
         schedule (e.g. via gradient noise or optimizer momentum, even where
         the raw gradient is itself zero).
     mstep_mode : {"minibatch", "epoch"}, optional
-        Cadence for the always-on ``model.observation.mstep(...)`` update
-        described above. ``"minibatch"`` (default): every ``train_step``,
+        Cadence for the always-on ``model.mstep(...)`` update described
+        above (both ``model.observation`` and, when configured,
+        ``noise_free``). ``"minibatch"`` (default): every ``train_step``,
         from that minibatch's own forward pass. ``"epoch"``: once per
         completed epoch, from a forward pass over the whole ``train_data``.
         Either way, mstep is also always applied once more, from a full-
@@ -835,6 +835,17 @@ def train(
         gradient steps complete, right before returning (covers early stop
         via ``on_epoch_end`` and ``KeyboardInterrupt`` too, not just normal
         completion).
+
+        Note: the validated cadence for ``noise_free``'s MAP-shrinkage
+        (see [mstep_dynamics_noise](../docs/mstep_dynamics_noise.md)) was
+        round-based (every 8-20 epochs), coarser than either option here;
+        "minibatch"/"epoch" cadence for ``Q`` is not yet independently
+        validated at this frequency -- flagged as an open question, not a
+        blocker (the LL and KL terms are independent given a fixed
+        posterior, so the mechanism itself is well-defined at any cadence;
+        what's untested is whether frequent re-shrinkage from small
+        per-call statistics behaves the same as infrequent shrinkage from
+        large ones).
 
     Returns
     -------
@@ -901,10 +912,19 @@ def train(
     # caller. mstep is applied to model.observation unconditionally, every
     # minibatch (see train_step below), so gradient descent must never
     # fight it, for any model (a no-op path list for Observations that
-    # don't override mstep, e.g. Poisson).
+    # don't override mstep, e.g. Poisson). Same reasoning for noise_free
+    # whenever model.noise_prior is set: model.mstep's Q-shrinkage update
+    # would otherwise immediately overwrite whatever gradient descent just
+    # computed for noise_free -- not a numerical-stability issue (the LL
+    # and KL terms are independent given a fixed posterior, so computing
+    # each update from that same posterior is well-defined regardless),
+    # just wasted, silently-discarded gradient computation unless excluded
+    # here, mirroring observation.mstep's own auto-exclusion exactly.
     freeze_paths = [str(p) for p in conf.freeze_paths] + [
         "observation." + p for p in model.observation.mstep_frozen_paths()
     ]
+    if model.noise_prior is not None:
+        freeze_paths = freeze_paths + ["noise_free"]
     for path in freeze_paths:
         parts = tuple(path.split("."))
         _ = _resolve_attr_path(model, parts)  # fail fast if path is invalid

@@ -468,6 +468,73 @@ def test_mstep_composes_with_user_freeze_paths(
     )
 
 
+def test_mstep_updates_q_when_noise_prior_configured(
+    gaussian_model_conf, trainer_config, gaussian_sample_data
+):
+    """When conf.noise_prior/conf.noise_prior_dof are set, train()'s
+    always-on model.mstep(...) must also update noise_free (via
+    Approx.shrink), unconditionally, with no separate flag -- mirroring
+    test_mstep_updates_r_unconditionally for R."""
+    conf = OmegaConf.merge(
+        gaussian_model_conf, {"noise_prior": 1.0, "noise_prior_dof": 5.0}
+    )
+    model = XFADS(conf, jrnd.key(0))
+    noise0 = jax.device_get(model.noise_free)
+
+    trainer_config.max_epoch = 2
+    trainer_config.batch_size = 16
+    trained_model = train(model, gaussian_sample_data, conf=trainer_config)
+
+    assert not jnp.allclose(jax.device_get(trained_model.noise_free), noise0, atol=1e-3)
+    chex.assert_tree_all_finite(trained_model.noise_free)
+
+
+def test_noise_prior_configured_freezes_noise_free_from_gradient(
+    gaussian_model_conf, trainer_config, gaussian_sample_data
+):
+    """When conf.noise_prior is set, noise_free must be auto-excluded from
+    gradient descent -- no conf.freeze_paths entry required -- mirroring
+    test_mstep_frozen_paths_always_excluded_from_gradients for R. Verified
+    the same indirect way: noise_free after training must match what an
+    independent model.mstep call on the same data gives (up to mc_size=1
+    sampling noise from a different PRNG key), not perturbed by an
+    additional gradient-descent contribution on top."""
+    conf = OmegaConf.merge(
+        gaussian_model_conf, {"noise_prior": 1.0, "noise_prior_dof": 5.0}
+    )
+    model = XFADS(conf, jrnd.key(0))
+
+    trainer_config.max_epoch = 1
+    trainer_config.batch_size = 32  # single batch == whole dataset
+
+    trained_model = train(model, gaussian_sample_data, conf=trainer_config)
+
+    t, y, u, c = gaussian_sample_data
+    expected_model = trained_model.mstep(t, y, u, c, key=jrnd.key(123))
+
+    chex.assert_trees_all_close(
+        trained_model.noise_free, expected_model.noise_free, atol=0.2
+    )
+
+
+def test_no_noise_prior_leaves_noise_free_gradient_trained(
+    gaussian_model_conf, trainer_config, gaussian_sample_data
+):
+    """Default behavior (conf.noise_prior unset) must be unaffected: without
+    a configured prior, noise_free is not frozen and continues to move via
+    ordinary gradient descent, exactly as before this integration -- a
+    regression guard for existing default behavior."""
+    model = XFADS(gaussian_model_conf, jrnd.key(0))
+    noise0 = jax.device_get(model.noise_free)
+    assert model.noise_prior is None
+
+    trainer_config.max_epoch = 2
+    trainer_config.batch_size = 16
+    trained_model = train(model, gaussian_sample_data, conf=trainer_config)
+
+    assert not jnp.allclose(jax.device_get(trained_model.noise_free), noise0, atol=1e-3)
+
+
 def test_mstep_mode_epoch_updates_only_at_epoch_boundaries(
     gaussian_model_conf, trainer_config, gaussian_sample_data
 ):
