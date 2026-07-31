@@ -67,7 +67,7 @@ def test_filter_shapes_and_finite(diag):
     u = jnp.zeros((T, 0))
     c = jnp.zeros((T, 0))
 
-    nature_f, moment_f, moment_p, _shrink_stat = core.filter(
+    nature_f, moment_f, moment_p, _transition_stat = core.filter(
         model, key, jnp.arange(T), alpha, u, c
     )
 
@@ -119,10 +119,10 @@ def test_causal_reindexed_identity(diag):
     u = jnp.zeros((T, 0))
     c = jnp.zeros((T, 0))
 
-    check_nature, _, _, _shrink_stat = core.filter(
+    check_nature, _, _, _transition_stat = core.filter(
         model, key, jnp.arange(T), alpha, u, c
     )
-    nature, moment, moment_p, _shrink_stat2 = core.causal(
+    nature, moment, moment_p, _transition_stat2 = core.causal(
         model, key, jnp.arange(T), alpha, beta, u, c
     )
 
@@ -145,10 +145,10 @@ def test_causal_zero_beta_reduces_to_alpha_filter(diag):
     u = jnp.zeros((T, 0))
     c = jnp.zeros((T, 0))
 
-    check_nature, check_moment, check_moment_p, _shrink_stat = core.filter(
+    check_nature, check_moment, check_moment_p, _transition_stat = core.filter(
         model, key, jnp.arange(T), alpha, u, c
     )
-    nature, moment, moment_p, _shrink_stat2 = core.causal(
+    nature, moment, moment_p, _transition_stat2 = core.causal(
         model, key, jnp.arange(T), alpha, beta, u, c
     )
 

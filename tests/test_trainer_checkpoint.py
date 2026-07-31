@@ -78,7 +78,7 @@ def _assert_loadable_checkpoint(path, batch):
     from jaxfads.smoother import XFADS
 
     loaded = XFADS.load(path)
-    free_energy, post_moments, prior_moments, _shrink_stat = loaded(*batch, key=jrnd.key(123))
+    free_energy, post_moments, prior_moments, _transition_stat = loaded(*batch, key=jrnd.key(123))
     assert jnp.isfinite(free_energy).all()
     assert jnp.isfinite(post_moments).all()
     assert jnp.isfinite(prior_moments).all()

@@ -124,7 +124,7 @@ class XFADS(ConfModule):
     >>> u = jnp.zeros((32, 100, 1))         # controls
     >>> c = jnp.zeros((32, 100, 1))         # covariates
     >>>
-    >>> natural, mean, prediction, shrink_stat = model(t, y, u, c, key=key)
+    >>> natural, mean, prediction, transition_stat = model(t, y, u, c, key=key)
     """
 
     dynamics: Dynamics
@@ -359,7 +359,7 @@ class XFADS(ConfModule):
         rely on this method itself to protect a caller that violates that
         ordering.
 
-        Reuses ``self(...)``'s own ``shrink_stat`` (the 4th return value,
+        Reuses ``self(...)``'s own ``transition_stat`` (the 4th return value,
         always computed -- see ``__call__``) for ``self.approx.shrink``
         instead of having ``shrink`` re-propagate ``q(z_{t-1})`` through
         ``self.transition`` a second time: the forward pass already did
@@ -369,14 +369,14 @@ class XFADS(ConfModule):
         ``docs/mstep_dynamics_noise.md``).
         """
         approx = self.approx
-        _natural, moment, _predicted, shrink_stat = self(t, y, u, c, key=key)
+        _natural, moment, _predicted, transition_stat = self(t, y, u, c, key=key)
         new_observation = self.observation.mstep(t, moment, y, approx)
         model = eqx.tree_at(lambda m: m.observation, self, new_observation)
 
         if self.noise_prior is None:
             return model
 
-        new_noise_free = approx.shrink(moment, shrink_stat, self.noise_prior)
+        new_noise_free = approx.shrink(moment, transition_stat, self.noise_prior)
         return eqx.tree_at(lambda m: m.noise_free, model, new_noise_free)
 
     @classmethod
@@ -449,9 +449,7 @@ class XFADS(ConfModule):
             )
         )
 
-    def __call__(
-        self, t, y, u, c, *, key
-    ) -> tuple[Array, Array, Array, tuple[Array, Array]]:
+    def __call__(self, t, y, u, c, *, key) -> tuple[Array, Array, Array, Any]:
         """
         Perform variational inference for state-space model.
 
@@ -482,14 +480,19 @@ class XFADS(ConfModule):
             Moment parameters of posterior distributions over states.
         predictions : Array, shape (N, T, param_dim)
             Predicted moment parameters from dynamics model.
-        shrink_stat : tuple[Array, Array], shape (N, T-1, state_dim) and (N, T-1, state_dim, state_dim)
-            Per-pair, noise-free propagated ``(mean, cov)`` of
-            ``self.transition`` applied to each pair's ``q(z_{t-1})``,
-            aligned with ``moment_params[:, 1:, :]``. Always computed
-            (reuses the same propagation already needed for
-            ``predictions``, at negligible marginal cost -- see
-            ``core._site_filter``); used by :meth:`mstep`, most callers
-            can ignore it.
+        transition_stat : Any
+            A per-pair auxiliary statistic, aligned with
+            ``moment_params[:, 1:, :]`` -- ``self.approx.transition_stat``
+            applied to the propagated, noise-free point set from pushing
+            each pair's ``q(z_{t-1})`` through ``self.transition``
+            (default: the raw point set unchanged; ``MVN`` reduces to a
+            weighted mean/covariance pair). Deliberately general-purpose,
+            not `shrink`-specific naming -- currently consumed by
+            :meth:`mstep` (for the ``Q`` update), but not conceptually
+            tied to that one use. Always computed (reuses the same
+            propagation already needed for ``predictions``, at negligible
+            marginal cost -- see ``core._site_filter``); most callers can
+            ignore it.
 
         Notes
         -----
@@ -520,14 +523,14 @@ class XFADS(ConfModule):
         >>> u = jnp.zeros((1, 100, 5))
         >>> c = jnp.zeros((1, 100, 3))
         >>>
-        >>> natural, moment, pred, shrink_stat = model(t, y, u, c, key=key)
+        >>> natural, moment, pred, transition_stat = model(t, y, u, c, key=key)
         >>>
         >>> # Batch inference
         >>> y_batch = jrnd.normal(key, (32, 100, 50))
         >>> u_batch = jnp.zeros((32, 100, 5))
         >>> c_batch = jnp.zeros((32, 100, 3))
         >>>
-        >>> natural, moment, pred, shrink_stat = model(t, y_batch, u_batch, c_batch, key=key)
+        >>> natural, moment, pred, transition_stat = model(t, y_batch, u_batch, c_batch, key=key)
         """
         approx = self.approx
 

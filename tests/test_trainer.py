@@ -259,7 +259,7 @@ def test_train_lora_rank1_end_to_end(trainer_config, sample_data):
         controls[:4],
         contexts[:4],
     )
-    free_energy, post_mom, prior_mom, _shrink_stat = trained_model(*batch, key=jrnd.key(1))
+    free_energy, post_mom, prior_mom, _transition_stat = trained_model(*batch, key=jrnd.key(1))
 
     assert jnp.isfinite(free_energy).all()
     assert jnp.isfinite(post_mom).all()
@@ -410,7 +410,7 @@ def test_mstep_frozen_paths_always_excluded_from_gradients(
     trained_model = train(model, gaussian_sample_data, conf=trainer_config)
 
     t, y, u, c = gaussian_sample_data
-    _natural, moment, _predicted, _shrink_stat = trained_model(t, y, u, c, key=jrnd.key(123))
+    _natural, moment, _predicted, _transition_stat = trained_model(t, y, u, c, key=jrnd.key(123))
     expected_observation = trained_model.observation.mstep(t, moment, y, trained_model.approx)
 
     chex.assert_trees_all_close(
@@ -661,7 +661,7 @@ def test_mstep_applied_after_final_epoch_regardless_of_mode(
     )
 
     t, y, u, c = gaussian_sample_data
-    _natural, moment, _predicted, _shrink_stat = trained_model(t, y, u, c, key=jrnd.key(321))
+    _natural, moment, _predicted, _transition_stat = trained_model(t, y, u, c, key=jrnd.key(321))
     expected_observation = trained_model.observation.mstep(t, moment, y, trained_model.approx)
 
     chex.assert_trees_all_close(

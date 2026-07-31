@@ -43,12 +43,13 @@ def _weighted_moments(zs: Array, weights: Array) -> tuple[Array, Array]:
     """Non-finite-safe weighted mean and covariance of a raw point set.
 
     ``MVN``'s own reduction of a generic ``(zs, weights)`` point set (as
-    produced by ``core.propagate_transition_points``, and passed through
-    ``core``'s recursions unreduced as ``shrink_stat`` -- see ``MVN.
-    shrink``) into the sufficient statistic this Gaussian family needs.
-    Not shared with ``core.py``: reducing a point set to a mean/covariance
-    pair is a Gaussian-specific choice, not something the subclass-agnostic
-    recursions in ``core.py`` may assume.
+    produced by ``core.propagate_transition_points``) into the sufficient
+    statistic this Gaussian family needs -- called from ``MVN.
+    transition_stat``, which ``core.py``'s recursions call polymorphically
+    to build each pair's ``transition_stat`` (see ``core._site_filter``/
+    ``nofilt``). Not shared with ``core.py``: reducing a point set to a
+    mean/covariance pair is a Gaussian-specific choice, not something the
+    subclass-agnostic recursions in ``core.py`` may assume.
 
     ``zs`` : shape ``(n_points, dim)``, ``weights`` : shape ``(n_points,)``,
     summing to 1 by convention (not required to be nonnegative, so this
@@ -541,18 +542,18 @@ class MVN(Approx):
     def shrink(
         self,
         moment: Array,
-        shrink_stat: tuple[Array, Array],  # (mean_f, cov_f) -- see transition_stat
+        transition_stat: tuple[Array, Array],  # (mean_f, cov_f) -- see Approx.transition_stat
         prior: tuple[Array, float],
     ) -> Array:
         """See base class.
 
         Own pair-alignment slicing: ``moment_t = moment[:, 1:, :]`` --
         the *destination* time step of each pair, aligned with
-        ``shrink_stat``'s own ``(mean_f, cov_f)``, which the caller
+        ``transition_stat``'s own ``(mean_f, cov_f)``, which the caller
         (``XFADS.mstep``) already computed for source steps ``t-1``, one
         entry per pair, via this same class's own :meth:`transition_stat`
         override (called by ``core.py``'s forward pass, not by this
-        method) -- so ``shrink_stat`` arrives already reduced, not a raw
+        method) -- so ``transition_stat`` arrives already reduced, not a raw
         point set.
 
         v1 approximation: no cross-covariance term (``Cov(z_t, z_{t-1})``
@@ -560,11 +561,11 @@ class MVN(Approx):
         ``docs/mstep_dynamics_noise.md``). Per (batch, time) pair::
 
             m', P' = self.unpack(moment_t)
-            mean_f, cov_f = shrink_stat  # already propagated + reduced, upstream
+            mean_f, cov_f = transition_stat  # already propagated + reduced, upstream
             r = m' - mean_f
             raw_stat = outer(r, r) + P' + cov_f
 
-        ``shrink_stat`` is computed once, upstream, by ``XFADS``'s own
+        ``transition_stat`` is computed once, upstream, by ``XFADS``'s own
         forward pass (``core._site_filter``/``nofilt``/``causal``),
         which already propagates each pair's ``q(z_{t-1})`` through the
         transition (via ``approx.transition_points`` -- Monte Carlo, or
@@ -579,10 +580,10 @@ class MVN(Approx):
         of this method did more work internally: one did its own
         propagation given ``transition_fn``/``u``/``c``/``mc_size``/
         ``key`` as call arguments; a later one still did its own
-        reduction of a raw point set passed in as ``shrink_stat`` --
+        reduction of a raw point set passed in as ``transition_stat`` --
         both superseded once checked against the actual cost and against
         ``core.py``'s own agnosticism invariant (a raw-point-set
-        ``shrink_stat``, reduced by ``core.py`` itself, would presume a
+        ``transition_stat``, reduced by ``core.py`` itself, would presume a
         Gaussian-shaped sufficient statistic that a different ``Approx``
         family need not share). Reducing via ``transition_stat`` at
         collection time, not at consumption time, means ``core.py``'s
@@ -612,7 +613,7 @@ class MVN(Approx):
         internal ``stop_gradient`` here.
         """
         moment_t = moment[:, 1:, :]
-        mean_f, cov_f = shrink_stat
+        mean_f, cov_f = transition_stat
 
         def _single(moment_t_i, mean_f_i, cov_f_i):
             mean_t, cov_t = self.unpack(moment_t_i)

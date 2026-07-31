@@ -53,7 +53,7 @@ def propagate_transition_points(
     predictive distribution ``p(z_t)``) and, via ``approx.
     transition_stat(zs, weights)`` (see ``_site_filter``/``nofilt``,
     which reduce this same point set through that method before it is
-    passed along as ``shrink_stat``), ``Approx.shrink`` -- whichever
+    passed along as ``transition_stat``), ``Approx.shrink`` -- whichever
     subclass-specific reduction of this same point set a concrete
     ``Approx`` needs for its own noise-free transition-noise statistic.
     The transition/process noise ``Q`` is precisely the quantity this
@@ -168,7 +168,7 @@ def _average_predictive_moment(
     given an already-propagated point set (``zs``, ``weights``) -- shared
     with callers (e.g. ``_site_filter``) that need to reuse the same
     propagated points for a second, noise-*free* purpose (reduced via
-    ``approx.transition_stat(zs, weights)`` into ``shrink_stat``, for
+    ``approx.transition_stat(zs, weights)`` into ``transition_stat``, for
     ``Approx.shrink`` to consume however its own family requires) without
     calling :func:`propagate_transition_points` a second time.
     """
@@ -251,7 +251,7 @@ def _site_filter(
         Filtered moment parameters for each time step.
     moment_p : Array, shape (T, param_dim)
         Predicted moment parameters from dynamics.
-    shrink_stat : Any, one entry per pair t = 2 ... T
+    transition_stat : Any, one entry per pair t = 2 ... T
         ``approx.transition_stat(zs, weights)`` for each pair's
         noise-*free* propagated point set (from pushing ``q(z_{t-1})``
         through ``model.transition`` with no noise added -- see
@@ -302,7 +302,7 @@ def _site_filter(
 
     key, ky = jrnd.split(key)
     scan_body = eqx.filter_checkpoint(ff)
-    _, (moment_p, _, nature_f, shrink_stat) = scan(
+    _, (moment_p, _, nature_f, transition_stat) = scan(
         scan_body,
         init=(ky, nature_f_1),
         xs=(site_natural[1:], u[:-1], c[:-1]),  # t = 2 ... T+1
@@ -314,7 +314,7 @@ def _site_filter(
         (approx.natural_to_moment(nature_f_1), moment_p)
     )  # prediction of t=1 is the prior
 
-    return nature_f, moment_f, moment_p, shrink_stat
+    return nature_f, moment_f, moment_p, transition_stat
 
 
 def filter(
@@ -329,7 +329,7 @@ def filter(
     Alpha-only filtering posterior recursion.
 
     This returns filtering natural/moment parameters, predictive moments,
-    and a ``shrink_stat`` 4th element -- see ``_site_filter``.
+    and a ``transition_stat`` 4th element -- see ``_site_filter``.
     """
     return _site_filter(model, key, _t, alpha, u, c)
 
@@ -370,17 +370,17 @@ def causal(
     Under the paper indexing, this corresponds to
     ``lambda_t = check_lambda_t + beta_{t+1}``.
 
-    The returned ``shrink_stat`` is the *filtering*-posterior statistic
+    The returned ``transition_stat`` is the *filtering*-posterior statistic
     (from the internal ``filter(...)`` call above), not a statistic over
     this mode's own beta-reconstructed ``moment`` -- the latter is never
     computed by any propagation step in this mode, so there is nothing to
     reuse for it; the filtering statistic is reused instead as a
     deliberate, accepted trade (see ``docs/mstep_dynamics_noise.md``).
     """
-    check_nature, _, moment_p, shrink_stat = filter(model, key, _t, alpha, u, c)
+    check_nature, _, moment_p, transition_stat = filter(model, key, _t, alpha, u, c)
     nature = check_nature + beta
     moment = jax.vmap(model.approx.natural_to_moment)(nature)
-    return nature, moment, moment_p, shrink_stat
+    return nature, moment, moment_p, transition_stat
 
 
 def nofilt(
@@ -396,7 +396,7 @@ def nofilt(
     Posterior natural parameters are set directly by encoder output ``alpha``.
     Predictive moments are computed in parallel for ELBO KL terms.
 
-    Also always returns ``shrink_stat`` (``approx.transition_stat(zs,
+    Also always returns ``transition_stat`` (``approx.transition_stat(zs,
     weights)`` per pair -- see ``_site_filter``), reusing the same
     ``propagate_transition_points`` call.
     """
@@ -418,10 +418,10 @@ def nofilt(
         stat_t = approx.transition_stat(zs, weights)
         return moment_p_t, stat_t
 
-    moment_p_rest, shrink_stat = jax.vmap(_step)(keys, moment[:-1], u[:-1], c[:-1])
+    moment_p_rest, transition_stat = jax.vmap(_step)(keys, moment[:-1], u[:-1], c[:-1])
     moment_p = jnp.vstack((moment[0:1], moment_p_rest))
 
-    return nature, moment, moment_p, shrink_stat
+    return nature, moment, moment_p, transition_stat
 
 
 # NOTE: _bismooth() requires model.backward (a callable reverse dynamics) which is

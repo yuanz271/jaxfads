@@ -174,7 +174,7 @@ class Approx(SubclassRegistryMixin, ABC):
     def shrink(
         self,
         moment: Array,
-        shrink_stat: Any,
+        transition_stat: Any,
         prior: Any,
     ) -> Array:
         """Closed-form, non-SGD transition-noise (``Q``) update: computes
@@ -196,7 +196,7 @@ class Approx(SubclassRegistryMixin, ABC):
 
         Does **not** itself propagate a distribution through the
         transition, and does **not** itself reduce the propagated point
-        set to a statistic -- ``shrink_stat`` is computed once, upstream,
+        set to a statistic -- ``transition_stat`` is computed once, upstream,
         by ``XFADS``'s own forward pass (``core._site_filter``/
         ``nofilt``/``causal``), which propagates ``q(z_{t-1})`` through
         the transition with no noise added (via ``core.
@@ -204,12 +204,12 @@ class Approx(SubclassRegistryMixin, ABC):
         noise-included predictive moment) and then reduces the resulting
         point set to whatever this same subclass's own
         :meth:`transition_stat` returns. This method only consumes that
-        already-computed ``shrink_stat`` -- reusing both the forward
+        already-computed ``transition_stat`` -- reusing both the forward
         pass's propagation *and* its reduction rather than repeating
         either. See ``docs/mstep_dynamics_noise.md`` for why: recomputing
         either step a second time inside ``shrink`` would be pure waste.
 
-        ``shrink_stat``'s shape/meaning is exactly whatever this
+        ``transition_stat``'s shape/meaning is exactly whatever this
         subclass's own :meth:`transition_stat` returns -- this base class
         and ``core.py`` never assume any particular reduced form (e.g. a
         mean/covariance pair); that choice belongs entirely to the
@@ -240,7 +240,7 @@ class Approx(SubclassRegistryMixin, ABC):
         moment : Array, shape (N, T, param_dim)
             Smoothed moment parameters of ``q(z_t)`` for the full
             sequence.
-        shrink_stat : Any
+        transition_stat : Any
             Whatever this subclass's own :meth:`transition_stat` returns,
             per (batch, time) pair, aligned with ``moment[:, 1:, :]`` --
             already-propagated (via ``core.propagate_transition_points``)
@@ -294,7 +294,7 @@ class Approx(SubclassRegistryMixin, ABC):
         """Reduce a propagated, noise-free point set ``(zs, weights)`` --
         as produced by ``core.propagate_transition_points`` -- to whatever
         family-specific statistic this subclass's own :meth:`shrink`
-        needs as its ``shrink_stat`` argument.
+        needs as its ``transition_stat`` argument.
 
         Called once per (batch, time) pair by ``XFADS``'s own forward
         pass (``core._site_filter``/``nofilt``/``causal``),
@@ -323,7 +323,7 @@ class Approx(SubclassRegistryMixin, ABC):
         reduction at all. This is the safe, zero-assumption default: any
         ``Approx`` subclass that doesn't override this behaves exactly as
         if this method didn't exist (the raw point set passed straight
-        through as ``shrink_stat``). A subclass overrides this only when
+        through as ``transition_stat``). A subclass overrides this only when
         it wants a smaller, reduced per-pair summary instead of the raw
         point set (e.g. a Gaussian family reducing to a weighted
         mean/covariance pair, which is asymptotically smaller than the

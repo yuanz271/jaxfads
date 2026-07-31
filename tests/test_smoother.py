@@ -223,7 +223,7 @@ def test_top_level_dims_override_subconfig_dims():
 
     model = model.initialize(times, y, u, c)
     key, k = jr.split(key)
-    free_energy, post_mom, prior_mom, _shrink_stat = model(times, y, u, c, key=k)
+    free_energy, post_mom, prior_mom, _transition_stat = model(times, y, u, c, key=k)
 
     assert jnp.isfinite(free_energy).all()
     assert jnp.isfinite(post_mom).all()
@@ -294,7 +294,7 @@ def test_mode_smoke_forward_pass(mode, approx_kwargs):
     c = jnp.zeros((1, T, 0))
 
     model = model.initialize(times, y, u, c)
-    _, post_mom, prior_mom, _shrink_stat = model(times, y, u, c, key=jr.key(2))
+    _, post_mom, prior_mom, _transition_stat = model(times, y, u, c, key=jr.key(2))
 
     assert jnp.isfinite(post_mom).all()
     assert jnp.isfinite(prior_mom).all()
@@ -406,7 +406,7 @@ def test_filter_mode_skips_beta_encoder():
     c = jnp.zeros((1, T, 0))
 
     model = model.initialize(times, y, u, c)
-    _, post_mom, prior_mom, _shrink_stat = model(times, y, u, c, key=jr.key(2))
+    _, post_mom, prior_mom, _transition_stat = model(times, y, u, c, key=jr.key(2))
 
     assert jnp.isfinite(post_mom).all()
     assert jnp.isfinite(prior_mom).all()
@@ -466,7 +466,7 @@ def test_xfads_nofilt_mode():
     c = jnp.zeros((1, T, 0))
 
     model = model.initialize(times, y, u, c)
-    nature, post_mom, prior_mom, _shrink_stat = model(times, y, u, c, key=jr.key(2))
+    nature, post_mom, prior_mom, _transition_stat = model(times, y, u, c, key=jr.key(2))
 
     assert jnp.isfinite(nature).all()
     assert jnp.isfinite(post_mom).all()

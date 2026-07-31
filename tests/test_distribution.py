@@ -326,7 +326,7 @@ def test_approx_transition_stat_default_is_identity():
     unconditionally for every model regardless of whether shrink/Q-
     estimation is configured, a non-overriding subclass must keep
     behaving exactly as if this method didn't exist at all (the raw
-    point set passed straight through as shrink_stat)."""
+    point set passed straight through as transition_stat)."""
 
     class _NoReduce(Approx):
         def natural_to_moment(self, natural):
@@ -376,7 +376,7 @@ def test_mvn_shrink_matches_independent_reference(dim, rank):
     independently computed reference on a small linear transition,
     including its own pair-alignment slicing of ``moment`` (full
     sequence in, not pre-sliced pairs) against an already-propagated
-    ``shrink_stat`` -- for both diag (rank=0) and full (rank=dim)
+    ``transition_stat`` -- for both diag (rank=0) and full (rank=dim)
     layouts. One combined method, not two: mirrors Gaussian.mstep calling
     exactly one method, not requiring the orchestrator to sequence a
     separate raw-statistic step itself.
@@ -401,7 +401,7 @@ def test_mvn_shrink_matches_independent_reference(dim, rank):
     prior_dof = 2.0
     prior = (prior_value, prior_dof)
 
-    # shrink_stat = approx.transition_stat(zs, weights) -- exactly as
+    # transition_stat = approx.transition_stat(zs, weights) -- exactly as
     # core._site_filter/nofilt/causal would compute it: propagate via
     # core.propagate_transition_points (core.py's own agnostic recursion),
     # then reduce via this same class's own transition_stat override
@@ -424,11 +424,11 @@ def test_mvn_shrink_matches_independent_reference(dim, rank):
         )
         return approx.transition_stat(zs, weights)
 
-    shrink_stat = jax.vmap(jax.vmap(_propagate_and_reduce))(
+    transition_stat = jax.vmap(jax.vmap(_propagate_and_reduce))(
         keys, moment_tm1, u_zeros, c_zeros
     )
 
-    free = approx.shrink(moment, shrink_stat, prior)
+    free = approx.shrink(moment, transition_stat, prior)
     canon = approx.free_to_canon(free)
     got_cov = canon.chol @ canon.chol.T
 

@@ -1019,7 +1019,7 @@ def mstep_gaussian_cov(model, data, *, key, batch_size: int | None = None):
     for start in range(0, n_trials, batch_size):
         stop = min(start + batch_size, n_trials)
         tb, yb, ub, cb = t[start:stop], y[start:stop], u[start:stop], c[start:stop]
-        _natural, moment, _predicted, _shrink_stat = model(tb, yb, ub, cb, key=key)
+        _natural, moment, _predicted, _transition_stat = model(tb, yb, ub, cb, key=key)
         stat = stat_fn(tb, moment, yb)  # (nb, T, d)
         total_stat = total_stat + jnp.sum(stat, axis=(0, 1))
         total_n += stat.shape[0] * stat.shape[1]
@@ -1070,6 +1070,6 @@ def mstep_observation_cov(model, data, *, key):
         does not override ``mstep``.
     """
     t, y, u, c = data
-    _natural, moment, _predicted, _shrink_stat = model(t, y, u, c, key=key)
+    _natural, moment, _predicted, _transition_stat = model(t, y, u, c, key=key)
     new_observation = model.observation.mstep(t, moment, y, model.approx)
     return eqx.tree_at(lambda m: m.observation, model, new_observation)

@@ -35,7 +35,7 @@ def test_nofilt_shapes_and_finite():
     u = jnp.zeros((T, 0))
     c = jnp.zeros((T, 0))
 
-    nature, moment, moment_p, _shrink_stat = core.nofilt(
+    nature, moment, moment_p, _transition_stat = core.nofilt(
         model, jr.key(1), jnp.arange(T), alpha, u, c
     )
 
