@@ -1233,22 +1233,33 @@ second full pass each epoch.
    inputs; their domains differ. The normal trainer never calls
    `mstep_from_data`.
 
-2. **Expose additive component-owned statistic contracts.** `Observation`
-   and `Approx` each provide counterpart methods called by XFADS:
+2. **Use one symmetric component statistic lifecycle.** `Observation` and
+   `Approx` each provide the *same* methods called by XFADS:
 
    ```python
    component.collect_minibatch_stat(...)
    component.accumulate_minibatch_stat(total, delta)
-   component.mstep(epoch_stat, prior=None)
+   component.mstep(epoch_stat, *, prior=None)
    ```
 
    The first returns one fixed-shape additive delta; the second combines
-   same-component deltas; the third finalizes one epoch accumulator. A
-   no-op component returns/retains `None`. The trainer remains
-   Observation/Approx-family agnostic: it calls only XFADS private lifecycle
-   methods and never imports `observations.py` or assumes mean/covariance
-   layouts. Gaussian R owns masked residual sums and per-feature valid
-   counts; MVN Q owns transition-scatter sums and pair counts.
+   same-component deltas; the third finalizes one epoch accumulator. The
+   common method name is intentional: both components perform an M-step from
+   their own accumulated statistic. Their return types differ naturally:
+   `Observation.mstep(...) -> Observation`, while
+   `Approx.mstep(...) -> noise_free`; XFADS is the only layer that knows
+   where those results are stored. `prior` is ignored by observation
+   components and supplied by XFADS only to the Approx branch.
+
+   Rename the current `Approx.shrink` to `Approx.mstep` as part of this
+   cleanup. Calling it `mstep` does **not** make Approx aware of the
+   `noise_free` attribute: it returns an opaque free-form update, while XFADS
+   writes that value into its own storage. A no-op component returns/retains
+   `None`. The trainer remains Observation/Approx-family agnostic: it calls
+   only XFADS private lifecycle methods and never imports `observations.py`
+   or assumes mean/covariance layouts. Gaussian R owns masked residual sums
+   and per-feature valid counts; MVN Q owns transition-scatter sums and pair
+   counts.
 
 3. **Reuse the existing pre-SGD loss forward pass—never run inference
    post-SGD.** Extend the current `batch_loss` path to return the component
@@ -1311,17 +1322,13 @@ second full pass each epoch.
 
 ## Future generalization (noted, out of scope here)
 
-`XFADS.mstep` converging onto `Observation`'s `mstep` vocabulary at the
-top-level entry point (see [mstep_gaussian_cov](mstep_gaussian_cov.md)) is
-no longer future work -- it's the finalized design (see Design's "Final
-design" subsection). Deliberately **not** converged, and not planned to
-be: `Approx.shrink` keeps its own name rather than being called
-`Approx.mstep`, and there is no `Approx.mstep_frozen_paths` -- both were
-rejected mid-design specifically to keep `Approx` unaware of
-`noise_free`'s existence (see Design's "casualty" note). What remains
-genuinely future/out-of-scope: a dedicated round-based cadence control
-inside `train()` (the current implementation reuses the existing
-minibatch/epoch `mstep_mode`), extending the `transition_stat`/`shrink`
-contract to a genuinely non-MVN `Approx` family, and the deferred
-`noise_free` storage-representation simplification (see Design) once
-`mstep` is confirmed as the permanent mechanism.
+The top-level XFADS coordination and component M-step vocabulary converge
+under the accumulated-statistic lifecycle above: `Observation.mstep` and
+`Approx.mstep` each finalize their own component statistic, while XFADS
+writes their different return types into component-owned observation storage
+or top-level `noise_free` storage respectively. This does not make Approx
+aware of `noise_free`. What remains genuinely future/out-of-scope is a
+separate round-based cadence control beyond the fixed epoch boundary,
+extending the `transition_stat`/Approx-M-step contract to a genuinely
+non-MVN family, and the deferred `noise_free` storage-representation
+simplification once the accumulated mechanism is confirmed as permanent.
