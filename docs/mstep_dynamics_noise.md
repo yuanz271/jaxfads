@@ -13,9 +13,10 @@ The current public configuration is top-level `q_scale` (positive Q
 variance) and `q_mstep` (default `true`). `q_scale` initializes Q and, when
 `q_mstep=true`, centers its M-step prior; the prior pseudocount is derived as
 `state_dim + 1`. `q_mstep=false` leaves Q SGD-managed. The default joint R/Q
-M-step cadence is full-dataset `mstep_mode="epoch"`; explicit
-`mstep_mode="minibatch"` remains experimental. The old configuration names
-appearing below are retained only as historical design record.
+Normal training accumulates pre-SGD minibatch R/Q statistics and finalizes
+both at each epoch boundary without an additional inference pass. The old
+configuration names and cadence discussion appearing below are retained only
+as historical design record.
 
 See also: [mstep_gaussian_cov](mstep_gaussian_cov.md), [transition_points](transition_points.md).
 
@@ -1132,12 +1133,12 @@ model changes.
    updates, or add a forgetting hyperparameter. Those are different
    proximal/online-EM algorithms and require their own ablations.
 
-## Proposed follow-up: unified epoch-local accumulated R/Q MAP without a second full-data pass
+## Implemented: unified epoch-local accumulated R/Q MAP without a second full-data pass
 
-**Status: approved design, not yet implemented.** This supersedes both the
-currently implemented full-dataset epoch-Q path and the asymmetric proposal
-above. It uses one shared epoch-local accumulator and one joint R/Q update,
-while retaining normal minibatch SGD throughout the epoch.
+**Status: implemented and unit-tested.** This supersedes both the former
+full-dataset epoch-Q path and the asymmetric proposal above. It uses one
+shared epoch-local accumulator and one joint R/Q update while retaining
+normal minibatch SGD throughout the epoch.
 
 ### Rationale and interpretation
 
@@ -1248,17 +1249,15 @@ second full pass each epoch.
    MAP step. With `q_mstep=false`, do not create/finalize a Q accumulator;
    leave Q entirely SGD-managed. R remains M-step-owned under both modes.
 
-6. **Update tests and benchmark design.** Add discriminative tests that:
-   (a) batch-statistic accumulation equals an independent sum for a frozen
-   model; (b) R and enabled Q each update exactly once per epoch; (c)
-   accumulators reset while learned R/Q values persist; (d) `q_mstep=false`
-   performs no Q accumulation/update; (e) instrumentation proves one model
-   inference evaluation per minibatch—no post-SGD, epoch-end, or full-data
-   inference pass; (f) auxiliary statistics are not differentiated through;
-   and (g) `transition_stat` remains reused. Benchmark against the current
+6. **Validation.** Unit tests cover public scalar `batch_loss`, frozen-model
+   accumulated-statistic finalization against manual `XFADS.mstep`, exactly
+   one accumulated finalization per epoch with no automatic manual-M-step
+   call, callback visibility of finalized R, Q ownership modes, and full
+   suite regression coverage. A small Lorenz smoke benchmark completes the
+   accumulated path without a full-data M-step. The remaining empirical work
+   is a full VDP rerun and larger benchmark comparison against the former
    full-data epoch path and SGD-Q baseline, reporting wall-clock time, R/Q
-   trajectories, flow RMSE, and posterior RMSE. Re-run the full VDP example
-   only after this replacement is in place.
+   trajectories, flow RMSE, and posterior RMSE.
 
 7. **Keep alternative cadences out of scope.** Do not retain separate R/Q
    cadences, direct replacement-style minibatch M-steps, within-epoch Q

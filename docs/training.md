@@ -197,59 +197,37 @@ For a Gaussian-likelihood model, the observation noise covariance `R` is
 driven by a closed-form EM M-step instead of gradient descent, avoiding a
 Heywood-case degeneracy that plain gradient-based MLE of `R` is prone to
 (see [`mstep_gaussian_cov`](mstep_gaussian_cov.md) for the full rationale).
-There is nothing to opt into for this to take effect -- for a
-Gaussian-likelihood model, `R` is always estimated this way, never by
-gradient descent; `mstep_mode` (below) only controls *when* the update is
-applied, not whether.
+There is nothing to opt into for the Gaussian R update: it is M-step-owned
+rather than gradient-trained. During every minibatch's existing **pre-SGD**
+ELBO forward pass, the trainer derives an additive R statistic from the same
+posterior moments. It sums those statistics across the epoch and finalizes R
+once at the epoch boundary before callbacks/checkpoints, without an extra
+inference pass.
 
 The transition/process-noise covariance `Q` (`model.noise_free`) is
 initialized from positive top-level `conf.q_scale`. By default,
-`conf.q_mstep=True` applies its MAP M-step with prior
-`(q_scale, state_dim + 1)` at the same cadence as `R`; `noise_free` is then
-automatically frozen from SGD. Set `q_mstep=False` to skip `Approx.shrink`
-and train `noise_free` with SGD instead.
+`conf.q_mstep=True` accumulates its additive MAP statistic from those same
+pre-SGD forward passes and finalizes Q once per epoch with prior
+`(q_scale, state_dim + 1)`; `noise_free` is automatically frozen from SGD.
+Set `q_mstep=False` to omit Q statistics/finalization and train
+`noise_free` with SGD instead.
 
-`train(..., mstep_mode="minibatch" | "epoch")` (default `"epoch"`)
-controls the update cadence for both `R` and, when `q_mstep=True`, `Q` --
-both go through the single `model.mstep(...)` call:
-
-- `"minibatch"`: every `train_step`, `model.mstep(t, y, u, c, key=...)` is
-  called from that minibatch's own forward pass -- updating
-  `model.observation` (a no-op for `Observation`/`Likelihood`
-  implementations that don't override `mstep`, e.g. `Poisson`) and, when
-  `conf.q_mstep` is true, `model.noise_free`. Each minibatch's estimate
-  is a noisy sample of the same quantity a full-dataset pass computes
-  exactly (like SGD vs. full-batch gradient descent).
-- `"epoch"`: instead of every minibatch, the update is applied once per
-  completed epoch, from a forward pass over the *whole* training set --
-  an exact (not minibatch-noisy) estimate, at the cost of only refreshing
-  once per epoch rather than continuously.
-
-The default epoch cadence is deliberately more conservative for Q than the
-former minibatch default, but it is still more frequent than the 8--20 epoch
-round cadence used in the current Q benchmarks. Treat `"minibatch"` as an
-explicit experimental override; whether a dedicated coarser
-`mstep_every_n_epochs` control improves dynamics recovery remains an open
-empirical question.
-
-Regardless of `mstep_mode`, `mstep` is applied once more, from a
-full-dataset forward pass, immediately after the final epoch's gradient
-steps complete and right before `train()` returns -- covering normal
-completion, early stopping via `on_epoch_end`, and `KeyboardInterrupt`
-alike, so the returned model always reflects a fresh, full-dataset mstep
-correction regardless of mode or how training ended. This final call is
-skipped only when it would be pure duplication -- `mstep_mode="epoch"`,
-normal completion or early stop, where the last per-epoch update already
-applied to this exact, unchanged model state; a `KeyboardInterrupt`
-mid-epoch in `"epoch"` mode still gets the final call, since more
-training happened since the last per-epoch update.
+This is an epoch-local generalized MAP-EM update: batch statistics are
+computed under models that evolve through SGD within the epoch, so it is not
+an exact final-model full-data M-step. At the next epoch boundary the
+accumulators reset, while the learned R/Q values remain model state for
+inference. An interrupted partial epoch discards its ephemeral accumulated
+statistics.
 
 `model.observation.mstep_frozen_paths()` is always excluded from the
-optimizer automatically (folded into `train()`'s internal freeze mask),
-regardless of `mstep_mode`, so gradient descent never fights this update --
-no `conf.freeze_paths` entry is needed, unlike `param_schedule` above.
-When `conf.q_mstep` is true, `noise_free` is excluded the same way,
-automatically, with no `conf.freeze_paths` entry needed either.
+optimizer automatically (folded into `train()`'s internal freeze mask), so
+gradient descent never fights the epoch-final R update -- no
+`conf.freeze_paths` entry is needed. When `conf.q_mstep` is true,
+`noise_free` is excluded the same way.
+
+For an explicit full-data recomputation outside `train()`—for example,
+manual EM-style alternation—call `model.mstep(...)`. That manual API runs a
+fresh full-data inference pass and composes both R and enabled-Q updates.
 
 For a one-off, standalone recompute outside of `train()` entirely -- e.g.
 for manual EM-style alternation -- two standalone functions are available

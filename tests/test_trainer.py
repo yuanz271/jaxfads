@@ -10,7 +10,7 @@ from omegaconf import OmegaConf
 
 import jaxfads.observations  # noqa: F401 — register GLM subclass
 from jaxfads.smoother import XFADS
-from jaxfads.trainer import train
+from jaxfads.trainer import batch_loss, train
 
 
 @pytest.mark.parametrize("kl_warmup_steps", [0, 1, 4, 10])
@@ -471,6 +471,39 @@ def test_mstep_composes_with_user_freeze_paths(
     )
 
 
+def test_batch_loss_remains_scalar(gaussian_model_conf, gaussian_sample_data):
+    """The public batch_loss API remains a pure scalar objective."""
+    model = XFADS(gaussian_model_conf, jrnd.key(0))
+    loss = batch_loss(model, gaussian_sample_data, jrnd.key(1))
+    assert loss.shape == ()
+
+
+def test_accumulated_stats_match_manual_mstep_for_frozen_model(
+    gaussian_model_conf, trainer_config, gaussian_sample_data
+):
+    """One frozen full-batch epoch finalizes the same R/Q statistics as the
+    manual full-data mstep API."""
+    model = XFADS(gaussian_model_conf, jrnd.key(0))
+    reference_model = XFADS(gaussian_model_conf, jrnd.key(0))
+    trainer_config.max_epoch = 1
+    trainer_config.batch_size = 32
+    trainer_config.learning_rate = 0.0
+    trained = train(
+        model,
+        gaussian_sample_data,
+        conf=trainer_config,
+        optimizer=optax.sgd(0.0),
+    )
+
+    expected = reference_model.mstep(*gaussian_sample_data, key=jrnd.key(1))
+    chex.assert_trees_all_close(
+        trained.observation.likelihood.cov(),
+        expected.observation.likelihood.cov(),
+        atol=1e-5,
+    )
+    chex.assert_trees_all_close(trained.noise_free, expected.noise_free, atol=1e-5)
+
+
 def test_q_mstep_updates_q_and_freezes_noise_free(
     gaussian_model_conf, trainer_config, gaussian_sample_data
 ):
@@ -522,137 +555,55 @@ def test_q_mstep_false_leaves_noise_free_gradient_trained(
     assert not jnp.allclose(jax.device_get(trained_model.noise_free), noise0, atol=1e-3)
 
 
-def test_default_mstep_mode_is_epoch_no_redundant_final_call(
+def test_accumulated_stats_finalize_once_per_epoch_without_manual_mstep(
     monkeypatch, gaussian_model_conf, trainer_config, gaussian_sample_data
 ):
-    """mstep_mode="epoch" must call model.mstep(...) exactly once per
-    epoch (max_epoch times total on normal completion) -- not once more
-    per epoch plus one redundant, unconditional final call duplicating
-    the last epoch's already-fresh full-dataset update."""
+    """Normal training finalizes opaque statistics once per epoch and never
+    invokes the manual full-data XFADS.mstep API."""
     from jaxfads.smoother import XFADS as XFADSClass
 
-    call_count = 0
+    finalize_count = 0
+    mstep_count = 0
+    original_finalize = XFADSClass.mstep_finalize_stats
     original_mstep = XFADSClass.mstep
+
+    def counting_finalize(self, stats):
+        nonlocal finalize_count
+        finalize_count += 1
+        return original_finalize(self, stats)
 
     def counting_mstep(self, *args, **kwargs):
-        nonlocal call_count
-        call_count += 1
+        nonlocal mstep_count
+        mstep_count += 1
         return original_mstep(self, *args, **kwargs)
 
+    monkeypatch.setattr(XFADSClass, "mstep_finalize_stats", counting_finalize)
     monkeypatch.setattr(XFADSClass, "mstep", counting_mstep)
 
-    model = XFADS(gaussian_model_conf, jrnd.key(0))
     trainer_config.max_epoch = 3
-    trainer_config.batch_size = 32  # single batch per epoch
+    trainer_config.batch_size = 32
+    train(XFADS(gaussian_model_conf, jrnd.key(0)), gaussian_sample_data, conf=trainer_config)
 
-    train(model, gaussian_sample_data, conf=trainer_config)
-
-    assert call_count == 3, (
-        f"expected exactly 3 model.mstep(...) calls (one per epoch, no "
-        f"redundant final call), got {call_count}"
-    )
+    assert finalize_count == 3
+    assert mstep_count == 0
 
 
-def test_mstep_minibatch_mode_final_call_not_skipped(
-    monkeypatch, gaussian_model_conf, trainer_config, gaussian_sample_data
-):
-    """mstep_mode="minibatch" must still get the guaranteed full-dataset
-    final call -- the mstep_stale tracking that skips the redundant call
-    in "epoch" mode must not also (incorrectly) skip it here, since
-    finalize_epoch never calls apply_mstep in "minibatch" mode at all."""
-    from jaxfads.smoother import XFADS as XFADSClass
-
-    full_dataset_call_count = 0
-    original_mstep = XFADSClass.mstep
-    t_full = gaussian_sample_data[0]
-
-    def counting_mstep(self, t, y, u, c, **kwargs):
-        nonlocal full_dataset_call_count
-        if t.shape[0] == t_full.shape[0]:
-            full_dataset_call_count += 1
-        return original_mstep(self, t, y, u, c, **kwargs)
-
-    monkeypatch.setattr(XFADSClass, "mstep", counting_mstep)
-
-    model = XFADS(gaussian_model_conf, jrnd.key(0))
-    trainer_config.max_epoch = 2
-    trainer_config.batch_size = 16  # 2 minibatches per epoch, batch-scoped calls
-
-    train(model, gaussian_sample_data, conf=trainer_config, mstep_mode="minibatch")
-
-    assert full_dataset_call_count == 1, (
-        f"expected exactly 1 full-dataset-scope model.mstep(...) call (the "
-        f"guaranteed final one; per-minibatch calls are batch-scoped, not "
-        f"full-dataset), got {full_dataset_call_count}"
-    )
-
-
-def test_mstep_mode_epoch_updates_only_at_epoch_boundaries(
+def test_accumulated_stats_finalize_before_epoch_callback(
     gaussian_model_conf, trainer_config, gaussian_sample_data
 ):
-    """mstep_mode='epoch' must not update R during a given epoch's minibatch
-    training -- R stays at its initial value until that epoch's own
-    end-of-epoch mstep call, confirmed via on_epoch_end (which fires before
-    that epoch's own mstep update). By the end of training, R has been
-    updated."""
+    """Callbacks/checkpoints see epoch-finalized R rather than stale R."""
     model = XFADS(gaussian_model_conf, jrnd.key(0))
-    # Capture the actual initial cov() (not the raw config value -- cov()
-    # always adds _MIN_VARIANCE on top of the constrained config value).
-    # device_get: train()'s donate="all" invalidates model's input buffers,
-    # so materialize this value on host first (same convention as
-    # test_train_freeze_paths_keeps_noise_free_fixed's noise0 capture).
-    wrong_cov = jax.device_get(model.observation.likelihood.cov())
-
+    initial_cov = jax.device_get(model.observation.likelihood.cov())
     seen = []
 
-    def on_epoch_end(m, info):
-        seen.append(m.observation.likelihood.cov())
+    def on_epoch_end(current_model, info):
+        del info
+        seen.append(current_model.observation.likelihood.cov())
         return False
 
     trainer_config.max_epoch = 2
     trainer_config.batch_size = 16
-    trained_model = train(
-        model,
-        gaussian_sample_data,
-        conf=trainer_config,
-        on_epoch_end=on_epoch_end,
-        mstep_mode="epoch",
-    )
+    train(model, gaussian_sample_data, conf=trainer_config, on_epoch_end=on_epoch_end)
 
-    # Epoch 0's on_epoch_end fires before epoch 0's own end-of-epoch mstep
-    # update; gradient descent is always frozen off this path, so nothing
-    # else could have touched R -- it must be exactly unchanged.
-    chex.assert_trees_all_close(seen[0], wrong_cov, atol=0.0)
-
-    assert not jnp.allclose(
-        trained_model.observation.likelihood.cov(), wrong_cov, atol=1e-2
-    )
-
-
-@pytest.mark.parametrize("mstep_mode", ["minibatch", "epoch"])
-def test_mstep_applied_after_final_epoch_regardless_of_mode(
-    mstep_mode, gaussian_model_conf, trainer_config, gaussian_sample_data
-):
-    """Regardless of mstep_mode, mstep must be applied once more, from a
-    full-dataset forward pass, immediately after the final epoch's gradient
-    steps complete -- verified as a fixed point: an independent mstep call
-    on the returned model must reproduce (approximately) the same R value,
-    within the model's inherent mc_size=1 Monte Carlo sampling tolerance
-    (same reasoning as test_mstep_frozen_paths_always_excluded_from_gradients)."""
-    model = XFADS(gaussian_model_conf, jrnd.key(0))
-    trainer_config.max_epoch = 2
-    trainer_config.batch_size = 16
-
-    trained_model = train(
-        model, gaussian_sample_data, conf=trainer_config, mstep_mode=mstep_mode
-    )
-
-    t, y, u, c = gaussian_sample_data
-    _natural, moment, _predicted, _transition_stat = trained_model(t, y, u, c, key=jrnd.key(321))
-    expected_observation = trained_model.observation.mstep(t, moment, y, trained_model.approx)
-
-    chex.assert_trees_all_close(
-        trained_model.observation.likelihood.cov(),
-        expected_observation.likelihood.cov(),
-        atol=0.1,
-    )
+    assert len(seen) == 2
+    assert not jnp.allclose(seen[0], initial_cov, atol=1e-2)

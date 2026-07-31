@@ -267,9 +267,8 @@ def main():
         # Q frozen means it stays at its CONSTANT initial value throughout
         # training -- f's gradient is then scaled by a fixed 1/Q, not a
         # shrinking one, so this isolates "does f learn better without a
-        # moving, damping Q" from any per-epoch update-integration question
-        # (a real trainer-integrated mstep, matching R's mstep_mode, is
-        # future work per the doc -- not implemented in this prototype).
+        # moving, damping Q" from the accumulated epoch-local trainer path
+        # used by the automatic MAP-Q comparison below.
         trained = train(model, train_data, conf=trainer_conf, on_epoch_end=combined_cb)
         if use_mstep:
             q_diag_final = mstep_transition_diag(trained, train_data, approx, floor=1e-6)
@@ -394,7 +393,7 @@ def main():
         prior=1.0, prior_dof_frac=0.1,
     )
     result_d = run_train_integrated(
-        "D: automatic epoch-level train() MAP-Q",
+        "D: automatic accumulated epoch-local train() MAP-Q",
         q_scale=1.0,
     )
 

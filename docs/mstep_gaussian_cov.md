@@ -2,16 +2,15 @@
 
 Status: implemented and unit-tested. `R` (the Gaussian observation noise
 covariance) is estimated via a closed-form EM M-step in two forms sharing
-the same underlying math: an **update built directly into `train()`**
-(always on for any `Observation` implementing `mstep` — never opt-in — with
-a configurable cadence via `mstep_mode="minibatch" | "epoch"`, plus a
-guaranteed final full-dataset update after the last epoch regardless of
-mode), and **standalone functions** (`mstep_gaussian_cov`,
+the same underlying math: an **accumulated epoch-local update built directly
+into `train()`** (always on for any `Observation` implementing `mstep` —
+never opt-in — statistics come from the existing pre-SGD minibatch inference
+passes and are finalized once at the epoch boundary without an additional
+inference pass), and **standalone functions** (`mstep_gaussian_cov`,
 `mstep_observation_cov`) for manual, full-dataset, or chunked use outside of
-`train()`. Both paths are validated against real downstream training (see
-Validation performed below), including a real-data comparison of both
-`mstep_mode` values. The library defaults to the full-dataset `"epoch"`
-update; `"minibatch"` remains an explicit lower-cost option.
+`train()`. `XFADS.mstep(...)` remains the explicit manual full-data
+recomputation API. Cadence discussion below records the superseded direct
+replacement implementation.
 
 See also: [Training](training.md), [Algorithm](algorithm.md).
 
@@ -100,39 +99,15 @@ Implementation (`src/jaxfads/base.py`, `src/jaxfads/observations.py`,
   full-dataset forward pass, no `batch_size` chunking, works for any
   `Observation` overriding `mstep` (a no-op otherwise, e.g. for `Poisson`).
   Not called by `train()` itself (see below) — a manual-use utility only.
-- `train()` / `_run_training_loop()`'s `mstep_mode: {"minibatch", "epoch"} =
-  "epoch"` — cadence for the always-on update, talking only through the
-  `Observation` ABC's `mstep` interface directly (not by calling
-  `mstep_observation_cov` — `trainer.py` never imports anything from
-  `observations.py`, the concrete-implementations module, keeping the
-  trainer strictly `Observation`-agnostic):
-  - `"minibatch"`: every `train_step` calls `model.mstep(t, y, u, c,
-    key=...)` (via a shared, pure `_do_mstep` helper) computed from that
-    minibatch's own forward pass. `XFADS.mstep` composes both this
-    `Observation` update and, when `conf.q_mstep` is true, the
-    transition-noise `Q` update — see
-    [mstep_dynamics_noise](mstep_dynamics_noise.md) for that half; this
-    document only covers `R`.
-  - `"epoch"`: instead, a shared `apply_mstep` closure runs once per
-    completed epoch (inside `finalize_epoch`, after any user
-    `on_epoch_end` callback), from a forward pass over the whole
-    `train_set`.
-  - Regardless of mode, the same `apply_mstep` closure is called once
-    more after the entire `try`/`except`/`finally` training loop —
-    covering normal completion, early stop via `on_epoch_end`, and
-    `KeyboardInterrupt` alike — so the returned model always reflects a
-    fresh, full-`train_set` mstep correction regardless of mode or how
-    training ended. This final call is skipped only when it would be
-    pure duplication of a `finalize_epoch` call that already applied it
-    to the exact same model state (`mstep_mode="epoch"`, normal
-    completion or early stop, no further training since) — tracked via an
-    `mstep_stale` flag; a `KeyboardInterrupt` mid-epoch in `"epoch"` mode
-    still gets the final call, since more `train_step`s ran since the
-    last `apply_mstep`. Invalid `mstep_mode` values raise `ValueError`.
-  - `train()` always folds `model.observation.mstep_frozen_paths()` into
-    its internal gradient-freeze mask regardless of `mstep_mode`, so
-    gradient descent never fights this update — no `conf.freeze_paths`
-    entry, and no flag, are needed.
+- `train()` / `_run_training_loop()` — each pre-SGD minibatch ELBO forward
+  pass emits an additive R statistic through the `Observation` ABC. The
+  trainer, which never imports `observations.py`, sums opaque fixed-shape
+  statistics over the epoch and calls model-level finalization once at the
+  epoch boundary before callbacks/checkpoints. There is no automatic
+  `model.mstep(...)` call and no second full-data inference pass in normal
+  training. `train()` folds `model.observation.mstep_frozen_paths()` into its
+  internal gradient-freeze mask, so gradient descent never fights the
+  epoch-final R update — no `conf.freeze_paths` entry or flag is needed.
 
 `mstep`/`mstep_stat` are not required to be gradient-free on their own
 terms -- they are ordinary functions, not specially guarded against
@@ -157,25 +132,18 @@ belongs at the call site, not duplicated into every implementation.
 
 ## Usage
 
-### Default: automatic, always-on, configurable cadence
+### Default: automatic accumulated epoch update
 
-Nothing to configure to get the closed-form update itself. Any `train()`
-call on a Gaussian-likelihood model always estimates `R` this way; there is
-no way to opt out and fall back to gradient-based `R` (a deliberate
-simplicity choice). `mstep_mode` only controls *when* the update fires:
+Nothing is configured to enable the Gaussian R M-step. Every `train()` call
+collects additive R residual statistics from its ordinary pre-SGD minibatch
+ELBO forward passes, sums them across the epoch, and applies one R update at
+the epoch boundary. The update is epoch-local generalized EM rather than an
+exact final-model full-data M-step because model parameters drift within the
+epoch, but it avoids both replacement-style minibatch covariance estimates
+and an additional full-data inference pass.
 
-```python
-trained = train(model, data, conf=trainer_conf)  # mstep_mode="epoch" (default)
-trained = train(model, data, conf=trainer_conf, mstep_mode="minibatch")
-```
-
-`"minibatch"`: each minibatch's estimate is a noisy sample of the same
-quantity a full-dataset pass computes exactly (like SGD vs. full-batch
-gradient descent). `"epoch"`: an exact, full-dataset estimate, refreshed
-once per epoch instead of continuously. Either way, `train()` always
-applies one more full-dataset update immediately after the final epoch's
-gradient steps, so the returned model is never left with only a
-minibatch-noisy estimate.
+For an exact full-data recomputation, use the standalone functions below or
+call `XFADS.mstep(...)` explicitly.
 
 ### Manual, full-dataset, or chunked: `mstep_gaussian_cov` / `mstep_observation_cov`
 

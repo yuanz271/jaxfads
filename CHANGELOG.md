@@ -11,33 +11,29 @@
   Monte Carlo behavior exactly, bit-for-bit. Real-data validation across
   `state_dim` 8/16/32 showed UT is never worse, and often better/cheaper,
   than Monte Carlo on posterior-RMSE. See `docs/transition_points.md`.
-* Added a closed-form, non-SGD EM M-step for the observation-noise
-  covariance `R` (Gaussian likelihoods), avoiding a Heywood-case
-  degeneracy that plain gradient-based MLE of `R` is prone to (a fitted
-  covariance reaching the numerical floor while its true residual
-  variance was ~10^6x larger). Always-on for Gaussian-likelihood models,
-  no opt-in needed -- `train(..., mstep_mode="minibatch" | "epoch")`
-  (default `"epoch"`) controls the update cadence, and a final update
-  is always applied once more after the last epoch. Standalone
-  `mstep_gaussian_cov`/`mstep_observation_cov` are available for one-off
-  recomputation outside `train()`. See `docs/mstep_gaussian_cov.md`.
-* **Breaking:** transition/process noise now uses required top-level
-  positive `q_scale` and `q_mstep` (default `true`). `q_scale` initializes
-  `Q`; with `q_mstep=true`, `XFADS.mstep` MAP-shrinks Q using
+* Added accumulated epoch-local closed-form EM M-steps for Gaussian
+  observation noise `R` and, when enabled, transition/process noise `Q`.
+  Their additive statistics are emitted by each existing pre-SGD minibatch
+  inference pass and finalized once at the epoch boundary, avoiding both
+  noisy replacement-style minibatch updates and an extra full-data inference
+  pass. R remains always M-step-owned for Gaussian likelihoods. Standalone
+  `mstep_gaussian_cov`/`mstep_observation_cov` and `XFADS.mstep(...)` remain
+  available for explicit full-data recomputation outside `train()`. See
+  `docs/mstep_gaussian_cov.md` and `docs/mstep_dynamics_noise.md`.
+* **Breaking:** transition/process noise uses required top-level positive
+  `q_scale` and `q_mstep` (default `true`). `q_scale` initializes Q; with
+  `q_mstep=true`, epoch-local MAP Q finalization uses
   `(q_scale, state_dim + 1)` and `train()` auto-freezes `noise_free`.
-  `q_mstep=false` skips `Approx.shrink` and leaves Q SGD-managed.
+  `q_mstep=false` omits Q statistics/finalization and leaves Q SGD-managed.
   `dyn_conf.state_noise`, `noise_prior`, and `noise_prior_dof` were removed.
-  See `docs/mstep_dynamics_noise.md`.
 * Added `cuda12`/`cuda13` optional-dependency extras
   (`pip install jaxfads[cuda12]` or `jaxfads[cuda13]`) for one-step GPU
   installs; the base `jax` dependency stays CPU-only. The two extras are
   mutually exclusive (each pulls in a distinct jaxlib/CUDA build);
   `cuda13` also drops some older GPU architectures (Maxwell/Volta/Pascal)
   that `cuda12` still supports.
-* Fixed a redundant full-dataset `mstep` recomputation at the end of
-  training when `mstep_mode="epoch"` -- the last epoch's own update and
-  the guaranteed post-training update were duplicating the same
-  computation on an unchanged model.
+* Removed the superseded direct-replacement `mstep_mode` trainer cadence
+  and its redundant full-dataset recomputation path.
 
 ## 0.10.0
 

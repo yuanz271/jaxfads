@@ -171,6 +171,18 @@ def batch_elbo(
     return _elbo(keys, times, posterior_moments, predicted_moments, observations)
 
 
+def _batch_loss_with_stats(model, batch, key, *, beta=1.0, regularizer=None):
+    times, observations, controls, covariates = batch
+    key, model_key = jr.split(key)
+    _, posterior_moments, prior_moments, transition_stat = model(times, observations, controls, covariates, key=model_key)
+    key, elbo_key = jr.split(key)
+    loss = jnp.mean(-batch_elbo(model, elbo_key, times, posterior_moments, prior_moments, observations, beta=beta))
+    if regularizer is not None:
+        loss = loss + regularizer(model)
+    stats = model.mstep_batch_stats(times, observations, posterior_moments, transition_stat)
+    return loss, stats
+
+
 def batch_loss(
     model,
     batch,
@@ -461,11 +473,19 @@ class EpochHandler:
         )
 
 
+def _tree_add(left, right):
+    """Add fixed-shape opaque statistic pytrees, preserving no-op ``None``."""
+    if left is None:
+        return right
+    if right is None:
+        return left
+    return jax.tree.map(lambda x, y: x + y, left, right)
+
+
 def _run_training_loop(
     model,
     train_set,
     key,
-    batch_loss_fun,
     dataloader,
     batch_size,
     max_epoch,
@@ -474,138 +494,38 @@ def _run_training_loop(
     model_sharding,
     on_epoch_end=None,
     param_schedule=None,
-    mstep_mode="epoch",
+    beta_schedule=None,
+    regularizer=None,
 ):
+    """Run minibatch SGD with one accumulated R/Q update per epoch.
+
+    Each batch's auxiliary M-step statistics are emitted by the same pre-SGD
+    inference call used for its ELBO. They are accumulated outside the JIT and
+    finalized once at the epoch boundary before callbacks/checkpoints. The
+    accumulators are deliberately ephemeral: an interrupted partial epoch is
+    discarded rather than checkpointed or reused under a changed model.
     """
-    Run sharded training for a fixed number of epochs.
-
-    The loop is validation agnostic: it owns the JAX-sensitive training compute
-    (jitted, sharded step) and the progress display, reports the per-epoch
-    training loss, and delegates all epoch-level policy (validation,
-    checkpointing, best tracking, early stopping) to ``on_epoch_end``.
-
-    Parameters
-    ----------
-    model : eqx.Module
-        Model to optimise; may contain PyTree leaves requiring sharding.
-    train_set : Any
-        Training dataset consumed by ``dataloader``.
-    key : Array
-        Base PRNG key; internally split for data loading.
-    batch_loss_fun : Callable
-        Loss for a ``(model, batch, key, step)`` call, where *step* is a scalar
-        ``jnp.int32`` counting training batches processed so far.
-    dataloader : Callable
-        Generator producing ``(batch, epoch, batch_in_epoch)`` tuples.
-    batch_size : int
-        Size of each training batch.
-    max_epoch : int
-        Number of epochs to train for.
-    optimizer : Any
-        Optax-like optimiser with ``init``/``update``.
-    data_sharding, model_sharding : Any
-        Partitioning applied via ``eqx.filter_shard``.
-    on_epoch_end : Callable or None
-        Called once per finished epoch as ``on_epoch_end(model, info)`` where
-        ``info`` is ``{"epoch": int, "step": jnp.int32, "train_loss": float,
-        "train_losses": list[float]}``. Returning a truthy value stops training.
-    param_schedule : Callable or None
-        Optional ``param_schedule(model, step) -> model`` applied at the start
-        of every step, before the loss/gradient computation. Use it to drive a
-        model attribute (e.g. process-noise scale) through an ``optax``
-        schedule keyed on the step counter. The corresponding path(s) should
-        also be listed in ``conf.freeze_paths`` so the optimizer's own
-        gradient-based update does not fight the schedule.
-    mstep_mode : {"minibatch", "epoch"}
-        Cadence for ``model.mstep(...)``, which updates both
-        ``model.observation`` (unconditionally) and, when ``model.conf.
-        q_mstep`` is true, ``noise_free`` (via ``Approx.shrink``).
-        ``"minibatch"``: every ``train_step``, from that minibatch's own
-        forward pass. ``"epoch"`` (default): once per completed
-        epoch, from a forward pass over the whole ``train_set``. Either
-        way, mstep is also always applied once more, from a
-        full-``train_set`` forward pass, immediately after the final
-        epoch's gradient steps complete, right before returning. See
-        :func:`train`'s docstring.
-
-    Notes
-    -----
-    The ``model.observation`` update is a no-op for ``Observation``/
-    ``Likelihood`` implementations that don't override ``mstep`` (e.g.
-    ``Poisson``); the ``noise_free`` update is a no-op whenever
-    ``model.conf.q_mstep`` is false (see ``XFADS.mstep``).
-
-    Returns
-    -------
-    eqx.Module
-        The final-epoch model.
-    """
-    if mstep_mode not in ("minibatch", "epoch"):
-        raise ValueError(
-            f"mstep_mode must be 'minibatch' or 'epoch', got {mstep_mode!r}"
-        )
-
-    def _do_mstep(model, data, mstep_key):
-        """Pure: model.mstep(...) from `data` -- either a single minibatch
-        (train_step's own per-minibatch update) or the whole train_set
-        (apply_mstep's full-dataset update). One shared implementation,
-        not duplicated inline in train_step and again in apply_mstep --
-        deliberately a plain function (no ``nonlocal``), so it's callable
-        from both the JIT-traced train_step (model passed/returned
-        explicitly) and the imperative outer-loop apply_mstep wrapper
-        (which does use ``nonlocal model``, incompatible with JIT tracing
-        if called directly from inside train_step).
-        """
-        t, y, u, c = data
-        return model.mstep(t, y, u, c, key=mstep_key)
 
     @eqx.filter_jit(donate="all")
     def train_step(model, opt_state, batch, key, step):
-        """One optimization step: shard inputs, compute value+grad, and update."""
         model, opt_state = eqx.filter_shard((model, opt_state), model_sharding)
         batch = eqx.filter_shard(batch, data_sharding)
-
         if param_schedule is not None:
             model = param_schedule(model, step)
 
-        loss, grads = eqx.filter_value_and_grad(batch_loss_fun)(
-            model, batch, key, step
-        )
-        # Pass the filtered (trainable-array) params -- matching the structure of
-        # ``grads`` -- so *params-aware* optimizers (AdamW, Lion, LAMB, LARS,
-        # Adafactor, Prodigy, D-Adaptation) see a consistent pytree instead of
-        # the full model's bool/callable leaves.
+        beta = beta_schedule(step) if beta_schedule is not None else 1.0
+        (loss, stats), grads = eqx.filter_value_and_grad(
+            _batch_loss_with_stats, has_aux=True
+        )(model, batch, key, beta=beta, regularizer=regularizer)
         params = eqx.filter(model, eqx.is_inexact_array)
         updates, opt_state = optimizer.update(grads, opt_state, params)
         model = eqx.apply_updates(model, updates)
+        return model, opt_state, step + 1, loss, stats
 
-        if mstep_mode == "minibatch":
-            # model.mstep(...) computed from this minibatch alone: updates
-            # model.observation (a no-op for Observations that don't
-            # override mstep, e.g. Poisson) and, when model.conf.q_mstep
-            # is true, noise_free via Approx.shrink -- one call, one cadence,
-            # for both. Runs outside the differentiated
-            # eqx.filter_value_and_grad call above, so it never carries
-            # gradients. Gradient descent never fights either update:
-            # both observation.mstep's own touched paths and noise_free
-            # (when q_mstep is true) are excluded from the optimizer's
-            # trainable params below, mirroring the same freeze-path
-            # pattern for both.
-            key, mstep_key = jr.split(key)
-            model = _do_mstep(model, batch, mstep_key)
-
-        return model, opt_state, step + 1, loss
-
-    # Initialize on a *copy* of the params so optimizers that store the initial
-    # params (e.g. Prodigy/D-Adaptation) do not alias the live, donated model
-    # buffer (which would trigger a double-donation error).
     opt_state = optimizer.init(_copy_pytree(eqx.filter(model, eqx.is_inexact_array)))
-
-    # put on device
     model, opt_state = eqx.filter_shard((model, opt_state), model_sharding)
 
     train_losses: list = []
-
     pbar = _training_progress()
     task_id = pbar.add_task("Training", total=max_epoch, loss=jnp.inf)
     pbar.start()
@@ -614,59 +534,29 @@ def _run_training_loop(
     key, loader_key = jr.split(key)
     current_epoch = 0
     epoch_batch_losses: list = []
+    epoch_stats = None
 
-    # Tracks whether the full-dataset mstep update is stale (the model has
-    # changed via a train_step since the last apply_mstep call) -- lets the
-    # guaranteed final call below skip itself when it would be pure
-    # duplication (mstep_mode="epoch", normal completion or early stop via
-    # on_epoch_end: the last finalize_epoch call already applied mstep to
-    # this exact model state, no further training happened since). Stays
-    # True whenever it should still fire -- mstep_mode="minibatch" (the
-    # per-epoch apply_mstep never runs in that mode, so the final call is
-    # always the only full-dataset-scope one) and a KeyboardInterrupt
-    # mid-epoch in "epoch" mode (train_step calls happened after the last
-    # apply_mstep, so it's genuinely stale again).
-    mstep_stale = True
-
-    def apply_mstep(mstep_key):
-        """Full-``train_set`` mstep update: ``model.mstep(...)`` from a
-        forward pass over the whole dataset -- updates ``model.
-        observation`` (a no-op for Observations that don't override
-        ``mstep``, e.g. Poisson) and, when ``model.conf.q_mstep`` is true,
-        ``noise_free`` via ``Approx.shrink``.
-        """
-        nonlocal model, mstep_stale
-        model = _do_mstep(model, train_set, mstep_key)
-        mstep_stale = False
-
-    def finalize_epoch(epoch_idx, batch_losses) -> bool:
-        """Record the epoch's training loss, run the callback, and (in
-        ``mstep_mode="epoch"``) apply the once-per-epoch mstep update.
-
-        Returns ``True`` when the callback requests an early stop.
-        """
-        if batch_losses:
-            train_loss = float(jnp.mean(jnp.stack(batch_losses)))
-        else:
-            train_loss = float("nan")
+    def finalize_epoch(epoch_idx, batch_losses):
+        nonlocal model, epoch_stats
+        if epoch_stats is not None:
+            model = model.mstep_finalize_stats(epoch_stats)
+        epoch_stats = None
+        train_loss = (
+            float(jnp.mean(jnp.stack(batch_losses)))
+            if batch_losses
+            else float("nan")
+        )
         train_losses.append(train_loss)
-
         pbar.update(task_id, advance=1, loss=train_loss)
-
-        stop = False
-        if on_epoch_end is not None:
-            info = {
-                "epoch": epoch_idx,
-                "step": step,
-                "train_loss": train_loss,
-                "train_losses": train_losses,
-            }
-            stop = bool(on_epoch_end(model, info))
-
-        if mstep_mode == "epoch":
-            apply_mstep(jr.fold_in(key, epoch_idx))
-
-        return stop
+        if on_epoch_end is None:
+            return False
+        info = {
+            "epoch": epoch_idx,
+            "step": step,
+            "train_loss": train_loss,
+            "train_losses": train_losses,
+        }
+        return bool(on_epoch_end(model, info))
 
     try:
         for batch, epoch, _batch_in_epoch in dataloader(
@@ -679,29 +569,19 @@ def _run_training_loop(
                 current_epoch = epoch
 
             key, batch_key = jr.split(key)
-            batch = eqx.filter_shard(batch, data_sharding)
-            model, opt_state, step, loss = train_step(
+            model, opt_state, step, loss, batch_stats = train_step(
                 model, opt_state, batch, batch_key, step
             )
-            mstep_stale = True
             epoch_batch_losses.append(loss)
+            epoch_stats = _tree_add(epoch_stats, batch_stats)
         else:
             finalize_epoch(current_epoch, epoch_batch_losses)
     except KeyboardInterrupt:
         logger.info(
-            "training interrupted (KeyboardInterrupt); returning current model"
+            "training interrupted; discarding partial epoch M-step statistics"
         )
     finally:
         pbar.stop()
-
-    # Regardless of mstep_mode: one more mstep update, from a
-    # full-train_set forward pass, immediately after the final epoch's
-    # gradient steps complete (covers early stop via on_epoch_end and
-    # KeyboardInterrupt too, not just normal completion) -- skipped only
-    # when it would be pure duplication of a finalize_epoch call that just
-    # applied it to this exact model state (see mstep_stale above).
-    if mstep_stale:
-        apply_mstep(jr.fold_in(key, step))
 
     return model
 
@@ -715,7 +595,6 @@ def train(
     regularizer=None,
     optimizer=None,
     param_schedule=None,
-    mstep_mode="epoch",
 ):
     """
     Training routine for XFADS models with multi-device support.
@@ -726,18 +605,15 @@ def train(
     those are epoch-level policy supplied via ``on_epoch_end`` (see
     :class:`EpochHandler`). The caller owns the train/validation split.
 
-    **Unconditionally**, ``model.mstep(...)`` is called periodically (see
-    ``mstep_mode`` below for the cadence), which updates ``model.
-    observation`` (a no-op for ``Observation``/``Likelihood``
-    implementations that don't override ``mstep``, e.g. ``Poisson``) and,
-    when ``model.conf.q_mstep`` is true, ``noise_free``. For a
-    Gaussian-likelihood model this means the observation noise covariance
-    ``R`` is always estimated via the closed-form EM M-step, never by
-    gradient descent -- ``model.observation.mstep_frozen_paths()`` is always
-    excluded from the optimizer automatically, with no ``conf.freeze_paths``
-    entry or opt-in flag required. When ``q_mstep`` is true, the same
-    auto-exclusion applies to ``noise_free`` -- see
-    [mstep_dynamics_noise](../docs/mstep_dynamics_noise.md).
+Each batch's existing pre-SGD ELBO forward pass emits additive observation
+statistics and, when ``model.conf.q_mstep`` is true, transition-noise
+statistics. The trainer accumulates them over the epoch and finalizes R and
+enabled Q once at the epoch boundary before callbacks/checkpoints, without an
+additional inference pass. For a Gaussian-likelihood model R is therefore
+M-step-owned and excluded from SGD via
+``model.observation.mstep_frozen_paths()``. When ``q_mstep`` is true,
+``noise_free`` is excluded the same way; when false, it remains
+SGD-managed. See [mstep_dynamics_noise](../docs/mstep_dynamics_noise.md).
 
     Parameters
     ----------
@@ -784,18 +660,6 @@ def train(
         otherwise the optimizer's own gradient-based update will fight the
         schedule (e.g. via gradient noise or optimizer momentum, even where
         the raw gradient is itself zero).
-    mstep_mode : {"minibatch", "epoch"}, optional
-        Cadence for the always-on ``model.mstep(...)`` update described
-        above (both ``model.observation`` and, when ``q_mstep`` is true,
-        ``noise_free``). ``"minibatch"``: every ``train_step``, from that
-        minibatch's own forward pass. ``"epoch"`` (default): once per
-        completed epoch, from a forward pass over the whole ``train_data``.
-        Either way, mstep is also always applied once more, from a full-
-        ``train_data`` forward pass, immediately after the final epoch's
-        gradient steps complete, right before returning (covers early stop
-        via ``on_epoch_end`` and ``KeyboardInterrupt`` too, not just normal
-        completion).
-
     Returns
     -------
     XFADS
@@ -904,17 +768,10 @@ def train(
         else optax.constant_schedule(1.0)
     )
 
-    def loss_fn(model, batch, key, step):
-        loss = batch_loss(model, batch, key, beta=beta_schedule(step))
-        if regularizer is not None:
-            loss = loss + regularizer(model)
-        return loss
-
     final_model = _run_training_loop(
         model,
         train_data,
         key,
-        loss_fn,
         dataloader,
         conf.batch_size,
         conf.max_epoch,
@@ -923,7 +780,8 @@ def train(
         model_sharding,
         on_epoch_end=on_epoch_end,
         param_schedule=param_schedule,
-        mstep_mode=mstep_mode,
+        beta_schedule=beta_schedule,
+        regularizer=regularizer,
     )
 
     dt = time.perf_counter() - t0

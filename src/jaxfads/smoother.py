@@ -276,6 +276,30 @@ class XFADS(ConfModule):
         observation = self.observation.initialize(t, y, u, c)
         return eqx.tree_at(lambda m: m.observation, self, observation)
 
+    def mstep_batch_stats(self, t, y, moment, transition_stat):
+        """Return opaque additive R/Q statistics from one inference pass."""
+        r_stats = self.observation.mstep_stats(t, moment, y, self.approx)
+        q_stats = (
+            self.approx.q_mstep_stats(moment, transition_stat)
+            if self.conf.get("q_mstep", True)
+            else None
+        )
+        return r_stats, q_stats
+
+    def mstep_finalize_stats(self, stats):
+        """Apply opaque accumulated R/Q statistics at an epoch boundary."""
+        r_stats, q_stats = stats
+        model = eqx.tree_at(
+            lambda m: m.observation,
+            self,
+            self.observation.mstep_finalize(r_stats),
+        )
+        if q_stats is None:
+            return model
+        prior = (self.conf.q_scale, int(self.conf.state_dim) + 1)
+        noise_free = model.approx.q_mstep_finalize(q_stats, prior)
+        return eqx.tree_at(lambda m: m.noise_free, model, noise_free)
+
     def mstep(self, t, y, u, c, *, key) -> "XFADS":
         """Closed-form, non-SGD parameter update from a full forward pass,
         composing both ``self.observation``'s and ``self.approx``'s own

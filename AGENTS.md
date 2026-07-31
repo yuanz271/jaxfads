@@ -115,12 +115,15 @@ Invariant for callers:
     e.g. `["noise_free"]`); applied on top of the default or a supplied
     optimizer.
 - Process noise uses top-level `q_scale` (positive variance) and `q_mstep`
-  (default `True`). With `q_mstep=True`, Q is updated by `XFADS.mstep` using
-  prior `(q_scale, state_dim + 1)` and `noise_free` is auto-frozen; with
-  `q_mstep=False`, `noise_free` remains SGD-managed. `state_noise`,
-  `noise_prior`, and `noise_prior_dof` are unsupported.
-- The default M-step cadence is `mstep_mode="epoch"`; use
-  `mstep_mode="minibatch"` explicitly when needed.
+  (default `True`). With `q_mstep=True`, pre-SGD minibatch R/Q statistics are
+  accumulated and Q is finalized once per epoch using prior
+  `(q_scale, state_dim + 1)`; `noise_free` is auto-frozen. With
+  `q_mstep=False`, Q statistics are omitted and `noise_free` remains
+  SGD-managed. `state_noise`, `noise_prior`, and `noise_prior_dof` are
+  unsupported.
+- Normal `train()` has one accumulated R/Q update at each epoch boundary and
+  performs no extra inference pass for that update. `XFADS.mstep(...)` remains
+  the explicit manual full-data recomputation API.
 - No built-in covariance-based noise regularization is applied by default.
 
 ## Testing Workflow

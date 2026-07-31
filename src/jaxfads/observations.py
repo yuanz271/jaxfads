@@ -439,6 +439,19 @@ class GLM(Observation):
             return []
         return ["likelihood." + p for p in self.likelihood.mstep_frozen_paths()]
 
+    def mstep_stats(self, t, moment, y, approx):
+        """Return this observation's additive R statistic, if supported."""
+        if isinstance(self.likelihood, Gaussian):
+            return self.likelihood.mstep_stats(t, moment, y, approx, self.readout)
+        return None
+
+    def mstep_finalize(self, stats):
+        """Apply an accumulated R statistic, if this likelihood supports it."""
+        if not isinstance(self.likelihood, Gaussian):
+            return self
+        likelihood = self.likelihood.mstep_finalize(stats)
+        return eqx.tree_at(lambda m: m.likelihood, self, likelihood)
+
     def set_readout(
         self, weight: Array | None = None, bias: Array | None = None
     ) -> "GLM":
@@ -886,6 +899,17 @@ class Gaussian(eqx.Module, strict=True):
         residual_sq = (y - mean_y) ** 2  # (d,)
         propagated_var = jnp.einsum("dj,jk,dk->d", C, cov_z, C)  # (d,) = diag(C cov_z C^T)
         return residual_sq + propagated_var
+
+    def mstep_stats(self, t, moment, y, approx, readout):
+        stat = jax.vmap(jax.vmap(partial(self.mstep_stat, approx=approx, readout=readout)))(t, moment, y)
+        valid = jnp.isfinite(y)
+        return (jnp.sum(jnp.where(valid, stat, 0), axis=(0, 1)), jnp.sum(valid, axis=(0, 1)))
+
+    def mstep_finalize(self, stats):
+        sums, counts = stats
+        r_new = sums / jnp.maximum(counts, 1)
+        new_cov = unconstrain_positive(jnp.maximum(r_new - _MIN_VARIANCE, _EPS))
+        return eqx.tree_at(lambda m: m.unconstrained_cov, self, new_cov)
 
     def mstep(self, t: Array, moment: Array, y: Array, approx: Approx, readout) -> "Gaussian":
         """Closed-form EM M-step update over a full forward pass's worth of

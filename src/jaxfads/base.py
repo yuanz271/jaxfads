@@ -171,6 +171,14 @@ class Approx(SubclassRegistryMixin, ABC):
         moment = self.canon_to_moment(canon)
         return self.moment_to_natural(moment)
 
+    def q_mstep_stats(self, moment, transition_stat):
+        """Return additive Q M-step statistics, or ``None``."""
+        return None
+
+    def q_mstep_finalize(self, stats, prior):
+        """Finalize additive Q statistics (default is a no-op)."""
+        return self
+
     def shrink(
         self,
         moment: Array,
@@ -584,6 +592,14 @@ class Observation(SubclassRegistryMixin, ConfModule):
         Initialize observation parameters from data statistics.
         """
         ...
+
+    def mstep_stats(self, t, moment, y, approx):
+        """Return additive observation M-step statistics, or ``None``."""
+        return None
+
+    def mstep_finalize(self, stats):
+        """Finalize additive statistics into a new observation."""
+        return self
 
     def mstep(self, t: Array, moment: Array, y: Array, approx: Approx) -> Observation:
         """Closed-form, non-SGD parameter update from a full forward pass.

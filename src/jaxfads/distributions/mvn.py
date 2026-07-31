@@ -539,6 +539,40 @@ class MVN(Approx):
         canon = MVNParam(loc=loc_arr, chol=jnp.diag(chol_diag))
         return self.canon_to_free(canon)
 
+    def q_mstep_stats(self, moment, transition_stat):
+        """Return additive transition-noise scatter and pair count."""
+        moment_t = moment[:, 1:, :]
+        mean_f, cov_f = transition_stat
+
+        def one(moment_t_i, mean_f_i, cov_f_i):
+            mean_t, cov_t = self.unpack(moment_t_i)
+            residual = mean_t - mean_f_i
+            return jnp.outer(residual, residual) + cov_t + cov_f_i
+
+        raw = jax.vmap(jax.vmap(one))(moment_t, mean_f, cov_f)
+        return jnp.sum(raw, axis=(0, 1)), jnp.asarray(
+            raw.shape[0] * raw.shape[1], dtype=raw.dtype
+        )
+
+    def q_mstep_finalize(self, stats, prior):
+        """Encode a MAP Q estimate from additive scatter/count statistics."""
+        sums, count = stats
+        value, prior_count = prior
+        d = self._layout.dim
+        value = jnp.asarray(value, dtype=sums.dtype)
+        if value.ndim == 0:
+            value = value * jnp.eye(d, dtype=sums.dtype)
+        elif value.ndim == 1:
+            value = jnp.diag(value)
+
+        cov = (sums + prior_count * value) / (count + prior_count)
+        cov = 0.5 * (cov + cov.T)
+        if self._layout.is_diag:
+            cov = jnp.diag(jnp.diagonal(cov))
+        chol = jnp.linalg.cholesky(cov + _EPS * jnp.eye(d, dtype=cov.dtype))
+        canon = MVNParam(loc=jnp.zeros(d, dtype=cov.dtype), chol=chol)
+        return self.canon_to_free(canon)
+
     def shrink(
         self,
         moment: Array,
@@ -612,37 +646,9 @@ class MVN(Approx):
         gradient has already been computed and applied -- not in an
         internal ``stop_gradient`` here.
         """
-        moment_t = moment[:, 1:, :]
-        mean_f, cov_f = transition_stat
-
-        def _single(moment_t_i, mean_f_i, cov_f_i):
-            mean_t, cov_t = self.unpack(moment_t_i)
-            residual = mean_t - mean_f_i
-            return jnp.outer(residual, residual) + cov_t + cov_f_i
-
-        stat_fn = jax.vmap(jax.vmap(_single))
-        raw_stat = stat_fn(moment_t, mean_f, cov_f)
-
-        d = self._layout.dim
-        value, prior_dof = prior
-        value = jnp.asarray(value, dtype=raw_stat.dtype)
-        if value.ndim == 0:
-            value = value * jnp.eye(d, dtype=raw_stat.dtype)
-        elif value.ndim == 1:
-            value = jnp.diag(value)
-
-        flat_stat = raw_stat.reshape(-1, d, d)
-        n = flat_stat.shape[0]
-        mean_stat = jnp.mean(flat_stat, axis=0)
-
-        shrunk = (n * mean_stat + prior_dof * value) / (n + prior_dof)
-        shrunk = 0.5 * (shrunk + shrunk.T)
-        if self._layout.is_diag:
-            shrunk = jnp.diag(jnp.diagonal(shrunk))
-
-        chol = jnp.linalg.cholesky(shrunk + _EPS * jnp.eye(d, dtype=shrunk.dtype))
-        canon = MVNParam(loc=jnp.zeros(d, dtype=shrunk.dtype), chol=chol)
-        return self.canon_to_free(canon)
+        return self.q_mstep_finalize(
+            self.q_mstep_stats(moment, transition_stat), prior
+        )
 
     # ---------------------------------------------------------------------
     # predictive moments
