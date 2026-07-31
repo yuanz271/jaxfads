@@ -15,6 +15,9 @@ class _DummyModel:
         self.conf = SimpleNamespace(mc_size=mc_size)
         self.noise = Noise(
             approx=self.approx,
+            q_scale=1.0,
+            state_dim=state_dim,
+            mstep_enabled=False,
             free=self.approx.free_from_kw(scale=1.0),
         )
 

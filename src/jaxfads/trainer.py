@@ -34,6 +34,7 @@ from rich.progress import (
 
 from . import vi
 from .logging import get_logger
+from .smoother import StatContext
 
 logger = get_logger(__name__)
 
@@ -179,9 +180,16 @@ def _batch_loss_with_stats(model, batch, key, *, beta=1.0, regularizer=None):
     loss = jnp.mean(-batch_elbo(model, elbo_key, times, posterior_moments, prior_moments, observations, beta=beta))
     if regularizer is not None:
         loss = loss + regularizer(model)
-    stats = model._collect_minibatch_stat(
-        times, observations, posterior_moments, transition_stat
+    context = StatContext(
+        t=times,
+        y=observations,
+        u=controls,
+        c=covariates,
+        moment=posterior_moments,
+        transition_stat=transition_stat,
+        approx=model.approx,
     )
+    stats = model._collect_batch_stat(context)
     return loss, stats
 
 
@@ -569,9 +577,7 @@ def _run_training_loop(
             if epoch_stats is None:
                 epoch_stats = batch_stats
             else:
-                epoch_stats = model._accumulate_minibatch_stat(
-                    epoch_stats, batch_stats
-                )
+                epoch_stats = model._accumulate_batch_stat(epoch_stats, batch_stats)
         else:
             finalize_epoch(current_epoch, epoch_batch_losses)
     except KeyboardInterrupt:

@@ -280,7 +280,13 @@ def test_noise_strategy_registration_is_exact_class_only():
         pass
 
     approx = ExactMVN(dim=2, rank=2)
-    noise = Noise(approx=approx, free=approx.free_from_kw(scale=1.0))
+    noise = Noise(
+        approx=approx,
+        q_scale=1.0,
+        state_dim=2,
+        mstep_enabled=True,
+        free=approx.free_from_kw(scale=1.0),
+    )
     assert not noise.supports_mstep
 
     Noise.register_mstep(ExactMVN, Noise._mstep_strategies[MVN])
@@ -328,10 +334,16 @@ def test_unregistered_noise_strategy_is_noop():
             return jnp.array(0.0)
 
     approx = _NoStat()
-    noise = Noise(approx=approx, free=jnp.array(0.0))
+    noise = Noise(
+        approx=approx,
+        q_scale=1.0,
+        state_dim=1,
+        mstep_enabled=True,
+        free=jnp.array(0.0),
+    )
     assert not noise.supports_mstep
-    assert noise.collect_minibatch_stat(jnp.zeros((1, 2, 1)), None) is None
-    assert noise.mstep(None, prior=None) is noise
+    assert not noise.mstep_active
+    assert noise.mstep(None) is noise
 
 
 def test_approx_transition_stat_default_is_identity():
@@ -387,8 +399,16 @@ def test_approx_transition_stat_default_is_identity():
 def test_mvn_noise_mstep_matches_independent_reference(dim, rank):
     """The exact registered MVN Noise strategy matches an independent Q
     MAP reference for both diagonal and full MVN layouts."""
+    prior_value = 1.0
+    prior_dof = float(dim + 1)
     approx = MVN(dim=dim, rank=rank)
-    noise = Noise(approx=approx, free=approx.free_from_kw(scale=1.0))
+    noise = Noise(
+        approx=approx,
+        q_scale=prior_value,
+        state_dim=dim,
+        mstep_enabled=True,
+        free=approx.free_from_kw(scale=1.0),
+    )
 
     A = 0.9 * jnp.eye(dim) + 0.05 * jrnd.normal(jrnd.key(9), (dim, dim))
     b = jrnd.normal(jrnd.key(10), (dim,))
@@ -403,10 +423,6 @@ def test_mvn_noise_mstep_matches_independent_reference(dim, rank):
     covs = flat_covs.reshape(n_batch, n_time, dim, dim)
 
     moment = jax.vmap(jax.vmap(approx.pack))(means, covs)
-
-    prior_value = 0.5
-    prior_dof = 2.0
-    prior = (prior_value, prior_dof)
 
     # transition_stat = approx.transition_stat(zs, weights) -- exactly as
     # core._site_filter/nofilt/causal would compute it: propagate via
@@ -435,8 +451,19 @@ def test_mvn_noise_mstep_matches_independent_reference(dim, rank):
         keys, moment_tm1, u_zeros, c_zeros
     )
 
-    stat = noise.collect_minibatch_stat(moment, transition_stat)
-    updated_noise = noise.mstep(stat, prior=prior)
+    from jaxfads.smoother import StatContext
+
+    context = StatContext(
+        t=jnp.zeros((n_batch, n_time)),
+        y=jnp.zeros((n_batch, n_time, 0)),
+        u=u_zeros,
+        c=c_zeros,
+        moment=moment,
+        transition_stat=transition_stat,
+        approx=approx,
+    )
+    stat = noise.batch_stat(context)
+    updated_noise = noise.mstep(stat)
     canon = approx.free_to_canon(updated_noise.free)
     got_cov = canon.chol @ canon.chol.T
 

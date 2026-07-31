@@ -411,8 +411,8 @@ class GLM(Observation):
         """
         return self.likelihood.eloglik(key, t, moment, y, approx, mc_size, self.readout)
 
-    def mstep(self, t: Array, moment: Array, y: Array, approx: Approx) -> "GLM":
-        """See :meth:`Observation.mstep`.
+    def mstep_from_data(self, t: Array, moment: Array, y: Array, approx: Approx) -> "GLM":
+        """See :meth:`Observation.mstep_from_data`.
 
         Dispatches to ``self.likelihood.mstep`` via ``hasattr`` rather than
         requiring every ``Likelihood`` to implement it, since ``Likelihood``
@@ -423,7 +423,9 @@ class GLM(Observation):
         """
         if not hasattr(self.likelihood, "mstep"):
             return self
-        new_likelihood = self.likelihood.mstep(t, moment, y, approx, self.readout)
+        new_likelihood = self.likelihood.mstep_from_data(
+            t, moment, y, approx, self.readout
+        )
         return eqx.tree_at(lambda m: m.likelihood, self, new_likelihood)
 
     def mstep_frozen_paths(self) -> list[str]:
@@ -439,17 +441,17 @@ class GLM(Observation):
             return []
         return ["likelihood." + p for p in self.likelihood.mstep_frozen_paths()]
 
-    def mstep_stats(self, t, moment, y, approx):
+    def batch_stat(self, context):
         """Return this observation's additive R statistic, if supported."""
         if isinstance(self.likelihood, Gaussian):
-            return self.likelihood.mstep_stats(t, moment, y, approx, self.readout)
+            return self.likelihood.batch_stat(context, self.readout)
         return None
 
-    def mstep_finalize(self, stats):
+    def mstep(self, stats):
         """Apply an accumulated R statistic, if this likelihood supports it."""
         if not isinstance(self.likelihood, Gaussian):
             return self
-        likelihood = self.likelihood.mstep_finalize(stats)
+        likelihood = self.likelihood.mstep(stats)
         return eqx.tree_at(lambda m: m.likelihood, self, likelihood)
 
     def set_readout(
@@ -900,18 +902,25 @@ class Gaussian(eqx.Module, strict=True):
         propagated_var = jnp.einsum("dj,jk,dk->d", C, cov_z, C)  # (d,) = diag(C cov_z C^T)
         return residual_sq + propagated_var
 
-    def mstep_stats(self, t, moment, y, approx, readout):
-        stat = jax.vmap(jax.vmap(partial(self.mstep_stat, approx=approx, readout=readout)))(t, moment, y)
-        valid = jnp.isfinite(y)
-        return (jnp.sum(jnp.where(valid, stat, 0), axis=(0, 1)), jnp.sum(valid, axis=(0, 1)))
+    def batch_stat(self, context, readout):
+        stat = jax.vmap(
+            jax.vmap(
+                partial(self.mstep_stat, approx=context.approx, readout=readout)
+            )
+        )(context.t, context.moment, context.y)
+        valid = jnp.isfinite(context.y)
+        return (
+            jnp.sum(jnp.where(valid, stat, 0), axis=(0, 1)),
+            jnp.sum(valid, axis=(0, 1)),
+        )
 
-    def mstep_finalize(self, stats):
+    def mstep(self, stats):
         sums, counts = stats
         r_new = sums / jnp.maximum(counts, 1)
         new_cov = unconstrain_positive(jnp.maximum(r_new - _MIN_VARIANCE, _EPS))
         return eqx.tree_at(lambda m: m.unconstrained_cov, self, new_cov)
 
-    def mstep(self, t: Array, moment: Array, y: Array, approx: Approx, readout) -> "Gaussian":
+    def mstep_from_data(self, t: Array, moment: Array, y: Array, approx: Approx, readout) -> "Gaussian":
         """Closed-form EM M-step update over a full forward pass's worth of
         ``(t, moment, y)`` (all (batch, time) instances at once), reusing
         :meth:`mstep_stat`'s per-instance math (see its docstring for the
@@ -1090,11 +1099,13 @@ def mstep_observation_cov(model, data, *, key):
     -------
     XFADS
         A new model with ``observation`` replaced by the result of
-        ``model.observation.mstep(t, moment, y, model.approx)``; all other
+        ``model.observation.mstep_from_data(t, moment, y, model.approx)``; all other
         attributes unchanged. Identical to ``model`` if ``observation``
         does not override ``mstep``.
     """
     t, y, u, c = data
     _natural, moment, _predicted, _transition_stat = model(t, y, u, c, key=key)
-    new_observation = model.observation.mstep(t, moment, y, model.approx)
+    new_observation = model.observation.mstep_from_data(
+        t, moment, y, model.approx
+    )
     return eqx.tree_at(lambda m: m.observation, model, new_observation)

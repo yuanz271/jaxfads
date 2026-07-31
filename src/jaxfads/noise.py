@@ -22,6 +22,9 @@ class Noise(eqx.Module):
     """
 
     approx: Approx = eqx.field(static=True)
+    q_scale: float = eqx.field(static=True)
+    state_dim: int = eqx.field(static=True)
+    mstep_enabled: bool = eqx.field(static=True)
     free: Array
 
     _mstep_strategies: ClassVar[dict[type[Approx], Any]] = {}
@@ -40,6 +43,10 @@ class Noise(eqx.Module):
     def supports_mstep(self) -> bool:
         return self.mstep_strategy is not None
 
+    @property
+    def mstep_active(self) -> bool:
+        return self.mstep_enabled and self.supports_mstep
+
     def moment(self) -> Array:
         """Decode the free Q representation into Approx moment parameters."""
         return self.approx.canon_to_moment(self.approx.free_to_canon(self.free))
@@ -48,14 +55,13 @@ class Noise(eqx.Module):
         """Delegate transition prediction under this component's noise state."""
         return self.approx.predictive_moment(z, self.moment())
 
-    def collect_minibatch_stat(self, moment: Array, transition_stat: Any) -> Any:
-        """Return one additive Q-statistic delta, or ``None`` if unsupported."""
-        strategy = self.mstep_strategy
-        if strategy is None:
+    def batch_stat(self, context: Any) -> Any:
+        """Return one additive Q statistic, or ``None`` when inactive."""
+        if not self.mstep_active:
             return None
-        return strategy.collect_minibatch_stat(self, moment, transition_stat)
+        return self.mstep_strategy.batch_stat(self, context)
 
-    def accumulate_minibatch_stat(self, total: Any, delta: Any) -> Any:
+    def accumulate_stat(self, total: Any, delta: Any) -> Any:
         """Add fixed-shape Q-statistic pytrees while preserving no-op ``None``."""
         if total is None:
             return delta
@@ -63,10 +69,10 @@ class Noise(eqx.Module):
             return total
         return jax.tree.map(lambda left, right: left + right, total, delta)
 
-    def mstep(self, epoch_stat: Any, *, prior: Any) -> "Noise":
+    def mstep(self, epoch_stat: Any) -> "Noise":
         """Return an updated component from accumulated Q statistics."""
-        strategy = self.mstep_strategy
-        if strategy is None or epoch_stat is None:
+        if not self.mstep_active or epoch_stat is None:
             return self
-        free = strategy.mstep(self, epoch_stat, prior=prior)
+        prior = (self.q_scale, self.state_dim + 1)
+        free = self.mstep_strategy.mstep(self, epoch_stat, prior=prior)
         return eqx.tree_at(lambda noise: noise.free, self, free)

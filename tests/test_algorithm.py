@@ -47,7 +47,13 @@ class _DummyModel:
         self.conf = SimpleNamespace(mc_size=mc_size)
         self.transition = _Identity(state_dim)
         self.backward = _Identity(state_dim)
-        self.noise = Noise(approx=approx, free=approx.free_from_kw(scale=cov))
+        self.noise = Noise(
+            approx=approx,
+            q_scale=cov,
+            state_dim=state_dim,
+            mstep_enabled=False,
+            free=approx.free_from_kw(scale=cov),
+        )
 
     def prior_natural(self):
         return self.approx.moment_to_natural(

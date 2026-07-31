@@ -12,7 +12,7 @@ from omegaconf import OmegaConf
 from jaxfads.constraints import unconstrain_positive
 from jaxfads.distributions import MVN
 from jaxfads.observations import GLM, mstep_gaussian_cov
-from jaxfads.smoother import XFADS
+from jaxfads.smoother import XFADS, StatContext
 
 
 def _poisson_conf(state_dim: int, observation_dim: int, *, n_steps: int = 0):
@@ -243,8 +243,19 @@ def test_glm_mstep_matches_mstep_gaussian_cov():
     mstep_key = jrnd.key(2)
     via_driver = mstep_gaussian_cov(model, (times, y, u, c), key=mstep_key)
 
-    _natural, moment, _pred, _transition_stat = model(times, y, u, c, key=mstep_key)
-    new_observation = model.observation.mstep(times, moment, y, model.approx)
+    _natural, moment, _pred, transition_stat = model(times, y, u, c, key=mstep_key)
+    context = StatContext(
+        t=times,
+        y=y,
+        u=u,
+        c=c,
+        moment=moment,
+        transition_stat=transition_stat,
+        approx=model.approx,
+    )
+    new_observation = model.observation.mstep(
+        model.observation.batch_stat(context)
+    )
 
     chex.assert_trees_all_close(
         new_observation.likelihood.cov(),
@@ -268,7 +279,16 @@ def test_glm_mstep_is_noop_for_poisson():
     single = approx.pack(jnp.zeros(state_dim), jnp.eye(state_dim))
     moment = jnp.broadcast_to(single, (batch, T) + single.shape)
 
-    updated = observation.mstep(times, moment, y, approx)
+    context = StatContext(
+        t=times,
+        y=y,
+        u=jnp.zeros((batch, T, 0)),
+        c=jnp.zeros((batch, T, 0)),
+        moment=moment,
+        transition_stat=None,
+        approx=approx,
+    )
+    updated = observation.mstep(observation.batch_stat(context))
     assert updated is observation
 
 

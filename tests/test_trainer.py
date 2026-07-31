@@ -412,13 +412,13 @@ def test_mstep_frozen_paths_always_excluded_from_gradients(
 
     trained_model = train(model, gaussian_sample_data, conf=trainer_config)
 
-    t, y, u, c = gaussian_sample_data
-    _natural, moment, _predicted, _transition_stat = trained_model(t, y, u, c, key=jrnd.key(123))
-    expected_observation = trained_model.observation.mstep(t, moment, y, trained_model.approx)
+    expected_model = trained_model.mstep_from_data(
+        *gaussian_sample_data, key=jrnd.key(123)
+    )
 
     chex.assert_trees_all_close(
         trained_model.observation.likelihood.cov(),
-        expected_observation.likelihood.cov(),
+        expected_model.observation.likelihood.cov(),
         atol=0.1,
     )
 

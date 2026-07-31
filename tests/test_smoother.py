@@ -12,7 +12,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from jaxfads.base import Encoder
 from jaxfads.distributions.mvn import MVN
-from jaxfads.smoother import XFADS
+from jaxfads.smoother import XFADS, StatContext
 
 
 class UnregisteredMVN(MVN):
@@ -559,10 +559,16 @@ def test_q_mstep_uses_q_scale_center_and_state_dim_plus_one():
     model = model.initialize(times, y, u, c)
 
     _natural, moment, _predicted, transition_stat = model(times, y, u, c, key=jr.key(2))
-    expected_noise = model.noise.mstep(
-        model.noise.collect_minibatch_stat(moment, transition_stat),
-        prior=(0.7, z_size + 1),
+    context = StatContext(
+        t=times,
+        y=y,
+        u=u,
+        c=c,
+        moment=moment,
+        transition_stat=transition_stat,
+        approx=model.approx,
     )
+    expected_noise = model.noise.mstep(model.noise.batch_stat(context))
     new_model = model.mstep_from_data(times, y, u, c, key=jr.key(2))
 
     chex.assert_trees_all_close(new_model.noise.free, expected_noise.free)

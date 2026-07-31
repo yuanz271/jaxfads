@@ -501,15 +501,15 @@ class Observation(SubclassRegistryMixin, ConfModule):
         """
         ...
 
-    def mstep_stats(self, t, moment, y, approx):
-        """Return additive observation M-step statistics, or ``None``."""
+    def batch_stat(self, context):
+        """Return one additive observation statistic, or ``None``."""
         return None
 
-    def mstep_finalize(self, stats):
-        """Finalize additive statistics into a new observation."""
+    def mstep(self, stats):
+        """Finalize one accumulated observation statistic into an Observation."""
         return self
 
-    def accumulate_minibatch_stat(self, total, delta):
+    def accumulate_stat(self, total, delta):
         """Add fixed-shape observation statistic pytrees, preserving ``None``."""
         if total is None:
             return delta
@@ -517,7 +517,7 @@ class Observation(SubclassRegistryMixin, ConfModule):
             return total
         return jax.tree.map(lambda left, right: left + right, total, delta)
 
-    def mstep(self, t: Array, moment: Array, y: Array, approx: Approx) -> Observation:
+    def mstep_from_data(self, t: Array, moment: Array, y: Array, approx: Approx) -> Observation:
         """Closed-form, non-SGD parameter update from a full forward pass.
 
         Computes a closed-form (EM M-step-style) update for this

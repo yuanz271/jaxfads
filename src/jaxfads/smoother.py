@@ -11,7 +11,7 @@ import math
 from collections.abc import Callable
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import equinox as eqx
 from gearax.modules import ConfModule, load_model, save_model
@@ -36,6 +36,25 @@ from .noise import Noise
 from .util import vmap_with_key
 
 logger = get_logger(__name__)
+
+
+class StatContext(eqx.Module):
+    """Batch inputs and inference outputs available to component statistics."""
+
+    t: Array
+    y: Array
+    u: Array
+    c: Array
+    moment: Array
+    transition_stat: Any
+    approx: Approx = eqx.field(static=True)
+
+
+class MstepStats(NamedTuple):
+    """Additive observation/noise statistic bundle for any data batch."""
+
+    observation: Any
+    noise: Any
 
 
 class XFADS(ConfModule):
@@ -201,7 +220,13 @@ class XFADS(ConfModule):
         approx_kwargs = dict(self.conf.approx_kwargs)
         approx_kwargs.setdefault("rank", self.conf.state_dim)
         approx = approx_cls(dim=self.conf.state_dim, **approx_kwargs)
-        self.noise = Noise(approx=approx, free=approx.free_from_kw(scale=q_scale))
+        self.noise = Noise(
+            approx=approx,
+            q_scale=q_scale,
+            state_dim=int(self.conf.state_dim),
+            mstep_enabled=self.conf.get("q_mstep", True),
+            free=approx.free_from_kw(scale=q_scale),
+        )
 
         obs_conf = OmegaConf.merge(
             self.conf.obs_conf,
@@ -285,45 +310,34 @@ class XFADS(ConfModule):
     @property
     def q_mstep_active(self) -> bool:
         """Whether this concrete Noise/Approx pairing has MAP-Q support."""
-        return self.conf.get("q_mstep", True) and self.noise.supports_mstep
+        return self.noise.mstep_active
 
-    def _collect_minibatch_stat(self, t, y, moment, transition_stat):
-        """Return one opaque additive R/Q minibatch statistic delta."""
-        observation_stat = self.observation.mstep_stats(t, moment, y, self.approx)
-        noise_stat = (
-            self.noise.collect_minibatch_stat(moment, transition_stat)
-            if self.q_mstep_active
-            else None
+    def _collect_batch_stat(self, context: StatContext) -> MstepStats:
+        """Return one additive component statistic bundle for any data batch."""
+        return MstepStats(
+            observation=self.observation.batch_stat(context),
+            noise=self.noise.batch_stat(context),
         )
-        return observation_stat, noise_stat
 
-    def _accumulate_minibatch_stat(self, total, delta):
-        """Accumulate component-owned statistic deltas for one epoch."""
-        total_observation, total_noise = total
-        delta_observation, delta_noise = delta
-        return (
-            self.observation.accumulate_minibatch_stat(
-                total_observation, delta_observation
+    def _accumulate_batch_stat(
+        self, total: MstepStats, delta: MstepStats
+    ) -> MstepStats:
+        """Accumulate component-owned statistics for one epoch."""
+        return MstepStats(
+            observation=self.observation.accumulate_stat(
+                total.observation, delta.observation
             ),
-            self.noise.accumulate_minibatch_stat(total_noise, delta_noise),
+            noise=self.noise.accumulate_stat(total.noise, delta.noise),
         )
 
-    def _apply_mstep_stat(self, stats):
+    def _apply_mstep_stat(self, stats: MstepStats):
         """Apply accumulated component statistics at an epoch boundary."""
-        observation_stat, noise_stat = stats
         model = eqx.tree_at(
             lambda m: m.observation,
             self,
-            self.observation.mstep_finalize(observation_stat),
+            self.observation.mstep(stats.observation),
         )
-        if noise_stat is None:
-            return model
-        prior = (self.conf.q_scale, int(self.conf.state_dim) + 1)
-        return eqx.tree_at(
-            lambda m: m.noise,
-            model,
-            model.noise.mstep(noise_stat, prior=prior),
-        )
+        return eqx.tree_at(lambda m: m.noise, model, model.noise.mstep(stats.noise))
 
     def mstep_from_data(self, t, y, u, c, *, key) -> "XFADS":
         """Apply one explicit full-data R/Q recomputation.
@@ -340,8 +354,16 @@ class XFADS(ConfModule):
         SGD-managed.
         """
         _natural, moment, _predicted, transition_stat = self(t, y, u, c, key=key)
-        stat = self._collect_minibatch_stat(t, y, moment, transition_stat)
-        return self._apply_mstep_stat(stat)
+        context = StatContext(
+            t=t,
+            y=y,
+            u=u,
+            c=c,
+            moment=moment,
+            transition_stat=transition_stat,
+            approx=self.approx,
+        )
+        return self._apply_mstep_stat(self._collect_batch_stat(context))
 
     @classmethod
     def load(cls, path: str | Path):
