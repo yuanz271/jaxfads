@@ -1246,8 +1246,8 @@ second full pass each epoch.
    Noise.register_mstep(MyApprox, MyApproxNoiseMstep())
    ```
 
-   For an unregistered Approx, Noise returns no Q minibatch delta and its
-   M-step is a no-op. This gives the desired policy without `isinstance`
+   For an unregistered Approx, Noise returns no Q statistic and its M-step is
+   a no-op. This gives the desired policy without `isinstance`
    branches in XFADS/trainer: Noise itself defines
    `mstep_active = mstep_enabled and strategy is not None`; only an active
    Noise contributes MAP-Q statistics or is frozen from SGD. Otherwise Q
@@ -1294,11 +1294,13 @@ second full pass each epoch.
    ```
 
    Use `MstepStats` for the returned additive component bundle (a
-   NamedTuple/pytree with `observation` and `noise` fields). A `MstepStats`
-   value means either one minibatch delta or its epoch reduction; the trainer
-   stores only one reduced epoch value, never a list of batch values.
-   `_collect_batch_stat` returns one additive **minibatch delta**; it never
-   stores history or mutates a collection. The trainer owns exactly one
+   NamedTuple/pytree with `observation` and `noise` fields). Its type and
+   semantics do not depend on batch scope: it may come from one training
+   minibatch, a full dataset, or any other supplied batch. The trainer's epoch
+   reduction is simply repeated `accumulate_stat` application over training
+   minibatches; a manual full-data M-step is the one-element reduction of the
+   same type. `_collect_batch_stat` returns one additive batch statistic; it
+   never stores history or mutates a collection. The trainer owns exactly one
    ephemeral `epoch_stat` accumulator and resets it each epoch.
    `_accumulate_batch_stat` is model-owned even though its present operation
    is reduction: it delegates to each component's `accumulate_stat` instead
@@ -1315,8 +1317,8 @@ second full pass each epoch.
 
    Rename the current public full-data convenience method to
    `XFADS.mstep_from_data(t, y, u, c, *, key)`. It explicitly performs
-   `data -> inference -> StatContext -> minibatch statistic ->
-   _apply_mstep_stat` once over supplied data. Do **not** overload `mstep`
+   `data -> inference -> StatContext -> MstepStats -> _apply_mstep_stat`
+   once over supplied data. Do **not** overload `mstep`
    between data and statistic inputs; their domains differ. The normal trainer
    never calls `mstep_from_data`.
 
@@ -1354,9 +1356,9 @@ second full pass each epoch.
    `_apply_mstep_stat` call per epoch with no automatic
    `mstep_from_data` call, callback visibility of finalized R, Q ownership
    modes, and full suite regression coverage. Add direct tests that one
-   minibatch delta is returned by `_collect_minibatch_stat`, accumulation
-   stores one reduced epoch statistic rather than a list, and the Q prior is
-   absent from the accumulator but applied exactly once at finalization. A
+   batch statistic is returned by `_collect_batch_stat`, accumulation stores
+   one reduced epoch statistic rather than a list, and the Q prior is absent
+   from the accumulator but applied exactly once at finalization. A
    small Lorenz smoke benchmark completes the accumulated path without a
    full-data M-step. The remaining empirical work is a full VDP rerun and
    larger benchmark comparison against the former full-data epoch path and
