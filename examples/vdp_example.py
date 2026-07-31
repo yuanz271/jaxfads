@@ -291,7 +291,7 @@ def evaluate(
     D = latent_states.shape[-1]
 
     # Inference
-    _, means, _ = trained(times, obs, inputs, covs, key=key)
+    _, means, _, _transition_stat = trained(times, obs, inputs, covs, key=key)
     means, post_covs = jax.vmap(jax.vmap(approx.unpack))(means)
 
     # Procrustes alignment
@@ -679,6 +679,7 @@ def main() -> None:
     conf3 = OmegaConf.create(
         {
             **shared_conf,
+            "q_mstep": False,
             "approx": "MVN",
             "approx_kwargs": {"rank": 1},
             "dynamics": "Functional",

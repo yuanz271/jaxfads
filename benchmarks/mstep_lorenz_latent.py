@@ -288,7 +288,7 @@ def main():
         print(f"Q_final diag (applied to model): {jnp.diag(Q_final)} (true={args.q_true})")
 
         t, y, u, c = data
-        _, means, _ = trained(t, y, u, c, key=jr.key(123))
+        _, means, _, _transition_stat = trained(t, y, u, c, key=jr.key(123))
         means, _ = jax.vmap(jax.vmap(approx.unpack))(means)
         aff = procrustes_affine(latent.reshape(-1, 3), means.reshape(-1, 3))
 
@@ -352,61 +352,9 @@ def main():
         print(f"posterior-mean RMSE (aligned) vs true latent: {post_rmse:.5f}")
         return dict(name=name, q_final=q_trace[-1], flow_rmse=rmse, post_rmse=post_rmse)
 
-    def run_shipped_api(name, *, n_rounds, epochs_per_round, prior, prior_dof_frac):
-        """Same alternating-EM design as run_alternating_em (Approach C),
-        but using the actual shipped library API -- Approx.shrink /
-        XFADS.mstep -- instead of this script's own prototype
-        mstep_transition_diag + manual eqx.tree_at. Validates that the
-        shipped implementation reproduces Approach C's already-validated
-        results, not just the prototype math.
-
-        q_scale and q_mstep are set at construction. The library's fixed
-        M-step prior is (q_scale, state_dim + 1), so this benchmark's older
-        user-selected prior_dof argument is retained only for its label."""
-        del prior_dof_frac
-        conf_with_prior = OmegaConf.merge(conf, {"q_scale": prior, "q_mstep": True})
-        model = XFADS(conf_with_prior, key_model).initialize(*train_data)
-        approx = model.approx
-        q_trace = []
-
-        for round_idx in range(n_rounds):
-            trainer_conf = OmegaConf.create({
-                "seed": args.seed, "learning_rate": 1e-3,
-                "max_epoch": epochs_per_round, "batch_size": args.batch_size,
-                "freeze_paths": ["noise_free"],
-            })
-            model = train(model, train_data, conf=trainer_conf)
-            model = model.mstep(*train_data, key=jr.key(1000 + round_idx))
-            _, Q = approx.unpack(
-                approx.canon_to_moment(approx.free_to_canon(model.noise_free))
-            )
-            q_trace.append(np.asarray(jnp.diag(Q)))
-
-        print(f"\n=== {name} ===")
-        print("Q diag trace (per round):")
-        for i, q in enumerate(q_trace):
-            print(f"  round {i}: {q}")
-        print(f"Q_final diag: {q_trace[-1]} (true={args.q_true})")
-
-        t, y, u, c = data
-        _, means, _, _transition_stat = model(t, y, u, c, key=jr.key(123))
-        means, _ = jax.vmap(jax.vmap(approx.unpack))(means)
-        aff = procrustes_affine(latent.reshape(-1, 3), means.reshape(-1, 3))
-
-        eval_pts = latent.reshape(-1, 3)[:: max(1, latent.reshape(-1, 3).shape[0] // 2000)]
-        rmse = flow_field_rmse(model, aff, eval_pts)
-        print(f"flow-field RMSE vs true Lorenz one-step map (aligned, "
-              f"n_eval_pts={eval_pts.shape[0]}): {rmse:.5f}")
-
-        aligned_means = align(aff, means)
-        post_rmse = float(jnp.sqrt(jnp.mean((aligned_means - latent) ** 2)))
-        print(f"posterior-mean RMSE (aligned) vs true latent: {post_rmse:.5f}")
-        return dict(name=name, q_final=q_trace[-1], flow_rmse=rmse, post_rmse=post_rmse)
-
-    def run_train_integrated(name, *, prior, prior_dof_frac, mstep_mode):
-        """Fully automatic path using top-level q_scale/q_mstep."""
-        del prior_dof_frac
-        conf_with_prior = OmegaConf.merge(conf, {"q_scale": prior, "q_mstep": True})
+    def run_train_integrated(name, *, q_scale):
+        """Fully automatic epoch-level MAP-Q path through train()."""
+        conf_with_prior = OmegaConf.merge(conf, {"q_scale": q_scale, "q_mstep": True})
         model = XFADS(conf_with_prior, key_model).initialize(*train_data)
         approx = model.approx
 
@@ -414,7 +362,7 @@ def main():
             "seed": args.seed, "learning_rate": 1e-3,
             "max_epoch": args.max_epoch, "batch_size": args.batch_size,
         })
-        model = train(model, train_data, conf=trainer_conf, mstep_mode=mstep_mode)
+        model = train(model, train_data, conf=trainer_conf)
 
         _, Q_final = approx.unpack(
             approx.canon_to_moment(approx.free_to_canon(model.noise_free))
@@ -445,26 +393,21 @@ def main():
         n_rounds=5, epochs_per_round=max(1, args.max_epoch // 5),
         prior=1.0, prior_dof_frac=0.1,
     )
-    result_d = run_shipped_api(
-        "D: alternating EM via shipped Approx.shrink/XFADS.mstep",
-        n_rounds=5, epochs_per_round=max(1, args.max_epoch // 5),
-        prior=1.0, prior_dof_frac=0.1,
-    )
-    result_e = run_train_integrated(
-        "E: fully automatic train()-integration, mstep_mode='minibatch' (untested cadence)",
-        prior=1.0, prior_dof_frac=0.1, mstep_mode="minibatch",
+    result_d = run_train_integrated(
+        "D: automatic epoch-level train() MAP-Q",
+        q_scale=1.0,
     )
 
     print("\n=== Summary ===")
     header = (f"{'metric':<20}{'A (joint)':<20}{'B (mstep)':<20}"
-              f"{'C (alt. EM+shrink)':<20}{'D (shipped API)':<20}{'E (train-integrated)':<22}")
+              f"{'C (prototype alt. EM)':<25}{'D (epoch MAP-Q)':<22}")
     print(header)
     print(f"{'Q_final mean':<20}{result_a['q_final'].mean():<20.5f}{result_b['q_final'].mean():<20.5f}"
-          f"{result_c['q_final'].mean():<20.5f}{result_d['q_final'].mean():<20.5f}{result_e['q_final'].mean():<22.5f}")
+          f"{result_c['q_final'].mean():<25.5f}{result_d['q_final'].mean():<22.5f}")
     print(f"{'flow RMSE':<20}{result_a['flow_rmse']:<20.5f}{result_b['flow_rmse']:<20.5f}"
-          f"{result_c['flow_rmse']:<20.5f}{result_d['flow_rmse']:<20.5f}{result_e['flow_rmse']:<22.5f}")
+          f"{result_c['flow_rmse']:<25.5f}{result_d['flow_rmse']:<22.5f}")
     print(f"{'post RMSE':<20}{result_a['post_rmse']:<20.5f}{result_b['post_rmse']:<20.5f}"
-          f"{result_c['post_rmse']:<20.5f}{result_d['post_rmse']:<20.5f}{result_e['post_rmse']:<22.5f}")
+          f"{result_c['post_rmse']:<25.5f}{result_d['post_rmse']:<22.5f}")
 
 
 if __name__ == "__main__":

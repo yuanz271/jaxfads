@@ -1008,6 +1008,126 @@ removed rather than translated.
    question remains an empirical follow-up, not a reason to retain the
    minibatch default.
 
+## Proposed follow-up: epoch-local accumulated Q MAP without a second full-data pass
+
+**Status: approved design, not yet implemented.** This supersedes the
+currently implemented full-dataset epoch-Q path described above. That path
+is statistically clean but, on the VDP example, imposes an expensive second
+full-dataset inference pass after every epoch. The replacement keeps R's
+fast minibatch M-step while giving Q one accumulated MAP update per epoch.
+
+### Rationale and interpretation
+
+The training dataset is replayed every epoch while dynamics, encoders, and
+observation parameters change through SGD. Q statistics from a previous
+epoch were therefore computed under a different approximate model and must
+not be carried forward as new independent evidence. Each epoch is treated as
+a new approximate E/M iteration for the current evolving model.
+
+At the same time, resetting the *accumulator* must **not** reset the learned
+Q parameter. Let $Q_{e,0}=Q_{e-1,\mathrm{end}}$ be the Q value carried into
+epoch $e$. Only the evidence accumulator is reset to the fixed canonical
+MAP prior:
+
+$$
+n_{e,0}=\nu_0=d+1,
+\qquad
+S_{e,0}=\nu_0 Q_0,
+\qquad
+Q_0=q_{\mathrm{scale}}I_d.
+$$
+
+For each minibatch $b$ in the epoch, collect its additive transition-noise
+sufficient statistic $(n_b,S_b)$, where $n_b=B_b(T_b-1)$ and, for MVN's
+current v1 approximation,
+
+$$
+S_b=
+\sum_{i,t}
+\left[
+(m_t-m_f)(m_t-m_f)^\mathsf{T}+P_t+P_f
+\right].
+$$
+
+Accumulate only within the epoch:
+
+$$
+n_{e,b+1}=n_{e,b}+n_b,
+\qquad
+S_{e,b+1}=S_{e,b}+S_b.
+$$
+
+Then, after the final minibatch, apply one Q update:
+
+$$
+Q_{e,\mathrm{end}}
+=
+\frac{S_{e,\mathrm{end}}}{n_{e,\mathrm{end}}}.
+$$
+
+Thus the previous Q remains the model state used for inference at the start
+of the new epoch, but its old *confidence* is discarded. The fixed
+$q_{\mathrm{scale}}I_d$ prior remains the explicit MAP regularizer each
+epoch. This is not exact posterior Bayes over the whole neural-training
+trajectory; it is an epoch-local stochastic/generalized MAP-EM
+approximation. It is preferable to indefinite accumulation, which would
+repeatedly double-count replayed data and make Q increasingly inert as the
+model changes.
+
+### Implementation plan
+
+1. **Restore minibatch R cadence.** Change the default `mstep_mode` back to
+   `"minibatch"`; it controls the existing inexpensive observation M-step.
+   Keep `"epoch"` as an explicit R-only full-data option. Do not use
+   `mstep_mode` to trigger a second full-data Q pass.
+
+2. **Split the trainer-facing operations by statistical scope.** Preserve
+   `XFADS.mstep` as a convenient manual full-data operation if useful, but
+   give the trainer a model-level path that, after each gradient update,
+   performs the existing minibatch R update and returns a Q batch statistic
+   from that same forward pass. The trainer must remain `Observation`-
+   agnostic and must not import `observations.py`.
+
+3. **Factor the Q family math into additive statistics.** The current
+   `Approx.shrink(moment, transition_stat, prior)` combines three jobs:
+   derive the family-specific Q statistic, blend the prior, and encode Q.
+   Refactor it so the concrete Approx can produce an additive
+   transition-noise statistic from `(moment, transition_stat)` and convert
+   an accumulated prior-plus-data statistic into `noise_free`. The exact
+   method names may be chosen during implementation, but their contract
+   must keep `core.py` Approx-agnostic and let the trainer add only
+   array-valued statistic pytrees. For MVN, the statistic is full scatter
+   matrix plus effective pair count; its initial prior statistic is
+   `((d+1) q_scale I_d, d+1)`.
+
+4. **Keep transition-stat reuse.** The minibatch R M-step already needs a
+   post-gradient minibatch inference pass. Derive Q's batch statistic from
+   that same call's `transition_stat`; do not add another transition
+   propagation or another model inference pass. This preserves the value
+   reuse established by `Approx.transition_stat`.
+
+5. **Make epoch boundaries explicit in trainer state.** Store the running
+   Q statistic in ephemeral trainer state, not in `XFADS` or checkpoints.
+   At each epoch start, initialize it from the fixed `(q_scale I_d,d+1)`
+   prior; tree-add each batch statistic; at epoch end, update only
+   `noise_free` if `q_mstep=true`, then discard the accumulator. With
+   `q_mstep=false`, do not create a Q accumulator and leave Q SGD-managed.
+
+6. **Update tests and benchmarks.** Add discriminative coverage that:
+   (a) the Q accumulator resets while Q itself persists across epochs;
+   (b) accumulated minibatch scatter/count matches an independent
+   whole-epoch sum under frozen model parameters; (c) exactly one Q update
+   occurs per epoch, while R retains minibatch updates; (d) no second
+   full-dataset inference pass is made for Q; and (e) `q_mstep=false`
+   remains pure SGD-Q. Re-run the Lorenz latent benchmark and VDP example,
+   comparing wall-clock time, Q trace, flow RMSE, and posterior RMSE against
+   the current epoch-full-pass and SGD-Q baselines.
+
+7. **Keep further online variants out of scope.** Do not recenter the prior
+   at the preceding Q, carry counts indefinitely, introduce within-epoch Q
+   updates, or add a forgetting hyperparameter. Those are different
+   proximal/online-EM algorithms and require their own ablations.
+
 ## Dependencies
 
 - `transition_points.md`: **done** — shipped and `MVN` now defaults to
