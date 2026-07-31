@@ -902,10 +902,11 @@ full suite (133 tests), and `train()` integration has already landed.
 
 ## Approved next implementation plan: canonical Q scale and epoch-level joint M-step
 
-This is the agreed next change. It intentionally makes Q M-step ownership
-structural rather than opt-in, and is a breaking configuration/checkpoint
-migration: old `dyn_conf.state_noise`, `noise_prior`, and `noise_prior_dof`
-settings are removed rather than translated.
+This is the agreed next change. It makes the Q-prior scale canonical while
+retaining an explicit switch for whether Q is currently MAP-updated or
+SGD-updated. It is a breaking configuration/checkpoint migration: old
+`dyn_conf.state_noise`, `noise_prior`, and `noise_prior_dof` settings are
+removed rather than translated.
 
 1. **Introduce one canonical top-level Q-scale option.** Replace
    `dyn_conf.state_noise`, `conf.noise_prior`, and
@@ -923,22 +924,25 @@ settings are removed rather than translated.
    update's dimension-aware pseudocount/prior weight, not a claim that the
    code implements a literal inverse-Wishart distribution.
 
-2. **Make Q M-step ownership structural in `XFADS`.** Initialize
-   `noise_free` from `q_scale`, remove the static `XFADS.noise_prior`
-   field and all `None`/opt-in branches, and have `XFADS.mstep` always
-   construct `(q_scale, state_dim + 1)` and pass it to
-   `Approx.shrink(moment, transition_stat, prior)`. `Approx.shrink` keeps
-   its loud `NotImplementedError` default: a non-MVN family must implement
-   Q estimation explicitly before it can use the standard training path.
+2. **Add an explicit Q-M-step switch.** Introduce top-level
+   `conf.q_mstep: bool = true`. Initialize `noise_free` from `q_scale` in
+   either mode and remove the static `XFADS.noise_prior` field. When
+   `q_mstep=true`, `XFADS.mstep` constructs `(q_scale, state_dim + 1)` and
+   calls `Approx.shrink(moment, transition_stat, prior)`; `noise_free` is
+   auto-frozen from SGD. When `q_mstep=false`, `XFADS.mstep` skips Q
+   shrinkage entirely and `noise_free` remains SGD-managed. Consequently,
+   `Approx.shrink`'s `NotImplementedError` default is reached only when a
+   user enables `q_mstep` for an Approx family that has not implemented
+   Q estimation; disabling Q shrink remains a valid path for such a family.
 
 3. **Make the joint `XFADS.mstep` epoch-level by default.** Change the
    trainer's default `mstep_mode` from `"minibatch"` to `"epoch"`.
    After each completed epoch, run one fresh inference pass over the whole
-   training set and call one `model.mstep(...)`, jointly updating R and Q
-   from the same posterior, data scope, and cadence. Preserve the existing
-   stale-update guard so a normal final epoch does not duplicate that final
-   full-dataset M-step. Keep `"minibatch"` as an explicit experimental
-   override, not the recommended default.
+   training set and call one `model.mstep(...)`, updating R and, when
+   `q_mstep=true`, Q from the same posterior, data scope, and cadence.
+   Preserve the existing stale-update guard so a normal final epoch does
+   not duplicate that final full-dataset M-step. Keep `"minibatch"` as an
+   explicit experimental override, not the recommended default.
 
 4. **Retain `transition_stat` unchanged.** Epoch cadence does not make it
    redundant. The full-dataset inference pass already propagates transition
@@ -949,11 +953,15 @@ settings are removed rather than translated.
    stacks/returns its result; `MVN.transition_stat` retains the
    MVN-specific weighted mean/covariance reduction.
 
-5. **Resolve Q scheduling ownership explicitly.** Since `noise_free` is
-   always M-step-owned, always exclude it from SGD. A `noise_schedule` that
-   modifies `noise_free` cannot coexist silently with automatic Q M-steps:
-   reject that combination (or remove the Q-specific scheduling path)
-   rather than letting epoch M-steps overwrite scheduled values.
+5. **Temporarily disable the dedicated Q scheduling path.** Remove
+   `trainer.noise_schedule`, its tests, and its documentation rather than
+   attempting to support it alongside MAP updates. The generic
+   `param_schedule` mechanism remains available for unrelated attributes.
+   In the temporary `q_mstep=false` mode, Q is simply SGD-managed without
+   the built-in scheduling helper. A later explicit public choice, e.g.
+   `q_update_mode: "sgd" | "map"`, can restore scheduled SGD-Q behavior
+   with unambiguous ownership semantics; do not add that broader mode API
+   in this change.
 
 6. **Apply the breaking config migration everywhere.** Update test
    fixtures, examples, benchmarks, README/config snippets, `AGENTS.md`,
@@ -970,18 +978,21 @@ settings are removed rather than translated.
 
    ```yaml
    q_scale: 1.0
+   q_mstep: true
    ```
 
    Do not preserve old config or checkpoint compatibility.
 
 7. **Update the discriminative tests.** Verify that `q_scale=s` initializes
    $Q=sI_d$; the direct Q M-step reference uses center $sI_d$ and
-   pseudocount $d+1$; `noise_free` is always optimizer-frozen; default
-   training makes one full-dataset joint M-step per epoch; and the existing
-   epoch/final-update deduplication behavior remains correct. Retain a test
-   that the epoch path produces and consumes `transition_stat` rather than
-   repeating transition propagation. Replace obsolete opt-in/
-   `noise_prior=None` cases.
+   pseudocount $d+1$; `q_mstep=true` auto-freezes `noise_free` and makes
+   the default training path perform one full-dataset joint M-step per
+   epoch; and the existing epoch/final-update deduplication behavior remains
+   correct. Verify separately that `q_mstep=false` skips `Approx.shrink`,
+   leaves `noise_free` SGD-managed, and lets an unsupported Approx train
+   without raising. Retain a test that the epoch path produces and consumes
+   `transition_stat` rather than repeating transition propagation. Remove
+   the Q-specific scheduling-helper tests along with that helper.
 
 8. **Validate in order.** During implementation, run the scoped
    distribution, smoother, trainer, and configuration-bearing tests; before
