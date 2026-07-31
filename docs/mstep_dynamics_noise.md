@@ -1214,36 +1214,45 @@ second full pass each epoch.
    predictive_moment(z, noise_moment)
    ```
 
-   Move Q storage and all Q-M-step behavior out of Approx into
-   `Noise(approx, free)`. Noise owns the free Q array and delegates every
-   distribution operation to its composed concrete Approx; it does not
-   duplicate MVN packing, constraints, Cholesky, moment conversion, or
-   point-propagation functionality. `XFADS.noise.free` replaces the special
-   top-level `noise_free`, while `XFADS.approx` returns the single concrete
-   Approx composed by `noise`. Thus core/posterior code retains one canonical
-   Approx object and no duplicate reconstruction.
+   Move Q storage and all Q-M-step behavior out of Approx into one generic,
+   unconfigured `Noise(approx, free)` component. Noise owns the free Q array
+   and delegates every distribution operation to its composed concrete Approx;
+   it does not duplicate MVN packing, constraints, Cholesky, moment
+   conversion, or point-propagation functionality. `XFADS.noise.free`
+   replaces the special top-level `noise_free`, while `XFADS.approx` returns
+   the single concrete Approx composed by `noise`. Thus core/posterior code
+   retains one canonical Approx object and no duplicate reconstruction. Do
+   not add a `noise:` config field yet: there is only one generic Noise
+   representation; a configurable Noise class is premature until a genuinely
+   different noise representation exists.
 
-2. **Use an optional Approx-family Noise-M-step strategy registry.** A
+2. **Use an optional exact-Approx-class Noise-M-step strategy registry.** A
    generic Noise has no intrinsic Q-M-step formula. It dispatches optional
-   M-step behavior through a registered strategy for the concrete Approx
-   family it composes:
+   M-step behavior through a strategy registered for the **exact concrete**
+   Approx class it composes:
 
    ```python
-   @Noise.register_mstep(MVN)
-   class MVNNoiseMstep:
-       ...
+   Noise.register_mstep(MVN, MVNNoiseMstep())
    ```
 
    The strategy delegates MVN operations back to `noise.approx` and owns only
-   the pairing-specific transition scatter/count formula and MAP update. For
-   an unregistered Approx family, Noise returns no Q minibatch delta and its
+   the pairing-specific transition scatter/count formula and MAP update. Do
+   **not** use MRO/subclass fallback: each concrete Approx class receives an
+   M-step only when it is registered explicitly. A user-defined Approx can
+   opt into MAP-Q by colocating an explicit registration with its class:
+
+   ```python
+   Noise.register_mstep(MyApprox, MyApproxNoiseMstep())
+   ```
+
+   For an unregistered Approx, Noise returns no Q minibatch delta and its
    M-step is a no-op. This gives the desired policy without `isinstance`
-   branches in XFADS/trainer: `q_mstep=true` activates MAP-Q only when a
-   compatible strategy exists; otherwise Q remains SGD-managed. Users can
-   register their own strategy for a particular Approx class. Initially,
-   dispatching on `type(noise.approx)` is sufficient; generalize to a pairwise
-   `(Noise type, Approx type)` registry only when a second noise
-   representation exists.
+   branches in XFADS/trainer: `q_mstep=true` activates MAP-Q only when an
+   exact registered strategy exists; otherwise Q remains SGD-managed.
+   Noise itself owns generic additive accumulation of fixed-shape statistic
+   pytrees; a strategy only supplies `collect_minibatch_stat(...)` and
+   `mstep(...)`. Generalize to a pairwise `(Noise type, Approx type)` registry
+   only when a second noise representation exists.
 
 3. **Use an explicit XFADS-owned statistic lifecycle.** The private,
    trainer-facing methods are
