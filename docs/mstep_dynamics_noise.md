@@ -1205,23 +1205,50 @@ second full pass each epoch.
 
 ### Implementation plan
 
-1. **Replace `mstep_mode` with one accumulated-epoch mechanism.** Remove
-   direct replacement-style minibatch/epoch M-step cadence from normal
-   training. Each epoch always accumulates R statistics and, when
-   `q_mstep=true`, Q statistics; it applies one joint update at the epoch
-   boundary. Preserve a manual `XFADS.mstep(...)` for explicit full-data
-   recomputation outside the trainer if it remains useful, but it is not the
-   normal training path.
+1. **Use an explicit XFADS-owned statistic lifecycle.** The private,
+   trainer-facing methods are
 
-2. **Expose additive component-owned statistic contracts.** Refactor the R
-   implementation behind `Observation` and the Q implementation behind
-   `Approx` so each can: (a) derive a per-minibatch additive statistic from
-   the already-computed inference output, (b) define its zero/initial
-   accumulator, and (c) finalize an accumulated statistic into its updated
-   storage form. The trainer must remain Observation/Approx-family agnostic:
-   it calls generic model-level composition methods and tree-adds opaque
-   statistics; it must not import `observations.py` or assume mean/covariance
-   layouts.
+   ```python
+   batch_stat = model._collect_minibatch_stat(
+       t, y, posterior_moment, transition_stat
+   )
+   epoch_stat = model._accumulate_minibatch_stat(epoch_stat, batch_stat)
+   model = model._apply_mstep_stat(epoch_stat)
+   ```
+
+   `_collect_minibatch_stat` returns one additive **minibatch delta**; it
+   never stores history or mutates a collection. The trainer owns exactly one
+   ephemeral `epoch_stat` accumulator and resets it at each epoch boundary.
+   `_accumulate_minibatch_stat` is model-owned even though its present
+   operation is tree addition: it defines the additive-statistic contract at
+   the model/component boundary instead of teaching the trainer which
+   component leaves exist. `_apply_mstep_stat` delegates each final update to
+   the relevant concrete component and writes any top-level model-owned
+   result, such as `noise_free`, back into `XFADS`.
+
+   Rename the current public full-data convenience method to
+   `XFADS.mstep_from_data(t, y, u, c, *, key)`. It explicitly performs
+   `data -> inference -> minibatch statistic -> _apply_mstep_stat` once over
+   supplied data. Do **not** overload `mstep` between data and statistic
+   inputs; their domains differ. The normal trainer never calls
+   `mstep_from_data`.
+
+2. **Expose additive component-owned statistic contracts.** `Observation`
+   and `Approx` each provide counterpart methods called by XFADS:
+
+   ```python
+   component.collect_minibatch_stat(...)
+   component.accumulate_minibatch_stat(total, delta)
+   component.mstep(epoch_stat, prior=None)
+   ```
+
+   The first returns one fixed-shape additive delta; the second combines
+   same-component deltas; the third finalizes one epoch accumulator. A
+   no-op component returns/retains `None`. The trainer remains
+   Observation/Approx-family agnostic: it calls only XFADS private lifecycle
+   methods and never imports `observations.py` or assumes mean/covariance
+   layouts. Gaussian R owns masked residual sums and per-feature valid
+   counts; MVN Q owns transition-scatter sums and pair counts.
 
 3. **Reuse the existing pre-SGD loss forward pass—never run inference
    post-SGD.** Extend the current `batch_loss` path to return the component
@@ -1231,33 +1258,39 @@ second full pass each epoch.
    `eqx.filter_value_and_grad(..., has_aux=True)` so autodiff differentiates
    only the scalar loss while the trainer receives those already-materialized
    statistics after the gradient calculation. Apply the SGD update normally,
-   then add the returned pre-update batch statistics to the epoch
-   accumulators. `transition_stat` therefore avoids a second dynamics
-   propagation for Q; deriving R's residual scatter from the same posterior
-   is similarly only a reduction, not new inference.
+   then pass the returned pre-update delta to
+   `_accumulate_minibatch_stat`. `transition_stat` therefore avoids a second
+   dynamics propagation for Q; deriving R's residual scatter from the same
+   posterior is similarly only a reduction, not new inference.
 
-4. **Keep trainer state ephemeral and reset it at each epoch.** Store R/Q
-   accumulators only in `_run_training_loop`, never in `XFADS`, optimizer
-   state, or checkpoints. Initialize R's accumulator according to its
-   component contract. Initialize Q's only when `q_mstep=true`, with prior
-   scatter/count `((d+1)q_scale I_d, d+1)`. Apply joint finalization after
-   the epoch's final minibatch, then start the next epoch with fresh
-   accumulators and the updated model parameters.
+4. **Keep trainer state ephemeral and reset it at each epoch.** Store the
+   single R/Q `epoch_stat` only in `_run_training_loop`, never in `XFADS`,
+   optimizer state, or checkpoints. Begin from the model-owned zero statistic
+   (not from a prior). Apply Q's fixed prior `((d+1)q_scale I_d, d+1)` exactly
+   once inside its component finalization, after all minibatch evidence has
+   been accumulated. At the epoch boundary call `_apply_mstep_stat`, discard
+   `epoch_stat`, and begin the next epoch with fresh evidence but the updated
+   model parameters. A partial interrupted epoch is intentionally discarded.
 
 5. **Preserve Q ownership modes.** With `q_mstep=true`, `noise_free` remains
    auto-frozen from SGD and is updated only by the epoch-final accumulated
-   MAP step. With `q_mstep=false`, do not create/finalize a Q accumulator;
-   leave Q entirely SGD-managed. R remains M-step-owned under both modes.
+   MAP step. With `q_mstep=false`, XFADS returns no Q delta, performs no Q
+   finalization, and leaves Q entirely SGD-managed. R remains M-step-owned
+   under both modes.
 
 6. **Validation.** Unit tests cover public scalar `batch_loss`, frozen-model
-   accumulated-statistic finalization against manual `XFADS.mstep`, exactly
-   one accumulated finalization per epoch with no automatic manual-M-step
-   call, callback visibility of finalized R, Q ownership modes, and full
-   suite regression coverage. A small Lorenz smoke benchmark completes the
-   accumulated path without a full-data M-step. The remaining empirical work
-   is a full VDP rerun and larger benchmark comparison against the former
-   full-data epoch path and SGD-Q baseline, reporting wall-clock time, R/Q
-   trajectories, flow RMSE, and posterior RMSE.
+   accumulated-statistic finalization against `mstep_from_data`, exactly one
+   `_apply_mstep_stat` call per epoch with no automatic
+   `mstep_from_data` call, callback visibility of finalized R, Q ownership
+   modes, and full suite regression coverage. Add direct tests that one
+   minibatch delta is returned by `_collect_minibatch_stat`, accumulation
+   stores one reduced epoch statistic rather than a list, and the Q prior is
+   absent from the accumulator but applied exactly once at finalization. A
+   small Lorenz smoke benchmark completes the accumulated path without a
+   full-data M-step. The remaining empirical work is a full VDP rerun and
+   larger benchmark comparison against the former full-data epoch path and
+   SGD-Q baseline, reporting wall-clock time, R/Q trajectories, flow RMSE,
+   and posterior RMSE.
 
 7. **Keep alternative cadences out of scope.** Do not retain separate R/Q
    cadences, direct replacement-style minibatch M-steps, within-epoch Q
