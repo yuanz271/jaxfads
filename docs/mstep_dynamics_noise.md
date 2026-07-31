@@ -1008,13 +1008,17 @@ removed rather than translated.
    question remains an empirical follow-up, not a reason to retain the
    minibatch default.
 
-## Proposed follow-up: epoch-local accumulated Q MAP without a second full-data pass
+## Superseded proposal: epoch-local accumulated Q MAP without a second full-data pass
 
-**Status: approved design, not yet implemented.** This supersedes the
-currently implemented full-dataset epoch-Q path described above. That path
-is statistically clean but, on the VDP example, imposes an expensive second
-full-dataset inference pass after every epoch. The replacement keeps R's
-fast minibatch M-step while giving Q one accumulated MAP update per epoch.
+**Status: superseded before implementation.** This proposal correctly
+identified that Q should accumulate minibatch statistics and update once per
+epoch without a second full-data inference pass. Its proposed asymmetric
+cadence—minibatch R replacement updates but epoch-accumulated Q updates—is
+now rejected: the expensive operation is obtaining the minibatch posterior
+and propagating transition points, while deriving either R or Q's additive
+statistic once those quantities exist is comparatively cheap. Maintaining
+separate R/Q cadence machinery would add complexity without a commensurate
+compute benefit. The unified replacement plan below supersedes this section.
 
 ### Rationale and interpretation
 
@@ -1127,6 +1131,128 @@ model changes.
    at the preceding Q, carry counts indefinitely, introduce within-epoch Q
    updates, or add a forgetting hyperparameter. Those are different
    proximal/online-EM algorithms and require their own ablations.
+
+## Proposed follow-up: unified epoch-local accumulated R/Q MAP without a second full-data pass
+
+**Status: approved design, not yet implemented.** This supersedes both the
+currently implemented full-dataset epoch-Q path and the asymmetric proposal
+above. It uses one shared epoch-local accumulator and one joint R/Q update,
+while retaining normal minibatch SGD throughout the epoch.
+
+### Rationale and interpretation
+
+Each minibatch already performs the expensive work: approximate inference for
+its latent trajectory and, for transition terms, propagation through the
+dynamics. From those outputs, both the observation-noise and transition-noise
+sufficient statistics are inexpensive reductions. Accumulating them avoids a
+second full-dataset inference pass, so the desired shared cadence has nearly
+the same heavy-lifting cost as ordinary minibatch training.
+
+The training dataset is replayed every epoch while dynamics, encoders,
+readout, and latent posteriors change through SGD. Statistics from a prior
+epoch therefore belong to an older approximate model and must not be carried
+forward as new independent evidence. At each epoch boundary, reset the
+**accumulators** but retain the learned model parameters, including R and Q.
+Thus the next epoch starts from the prior epoch's learned R/Q values for
+inference, but accumulates fresh evidence only from its own minibatches.
+
+For minibatch $b$, let the component-owned additive statistics be
+$(n_R^{(b)}, S_R^{(b)})$ and $(n_Q^{(b)}, S_Q^{(b)})$. The trainer treats them
+as opaque compatible array pytrees and adds them over the epoch:
+
+$$
+n_R \leftarrow n_R + n_R^{(b)},
+\qquad
+S_R \leftarrow S_R + S_R^{(b)},
+$$
+
+$$
+n_Q \leftarrow n_Q + n_Q^{(b)},
+\qquad
+S_Q \leftarrow S_Q + S_Q^{(b)}.
+$$
+
+At epoch end, update both components once:
+
+$$
+R \leftarrow \operatorname{finalize}_R(S_R,n_R),
+$$
+
+and, when `q_mstep=true`,
+
+$$
+Q \leftarrow
+\frac{S_Q+(d+1)q_{\mathrm{scale}}I_d}
+{n_Q+d+1}.
+$$
+
+Then discard both accumulators. The Q prior stays fixed at
+$q_{\mathrm{scale}}I_d$ with pseudocount $d+1$; do **not** recenter it at the
+previous Q, carry confidence indefinitely, or introduce forgetting. The
+previous Q is retained only as the model parameter used during the next
+epoch's inference.
+
+This is an epoch-local stochastic/generalized MAP-EM approximation, not an
+exact final-model batch M-step: minibatch statistics within the epoch are
+computed under parameters that drift through SGD. That approximation applies
+symmetrically to R and Q and is preferable to either repeatedly replacing
+parameters with independent minibatch estimates or paying for a second full
+pass each epoch.
+
+### Implementation plan
+
+1. **Replace `mstep_mode` with one accumulated-epoch mechanism.** Remove
+   direct replacement-style minibatch/epoch M-step cadence from normal
+   training. Each epoch always accumulates R statistics and, when
+   `q_mstep=true`, Q statistics; it applies one joint update at the epoch
+   boundary. Preserve a manual `XFADS.mstep(...)` for explicit full-data
+   recomputation outside the trainer if it remains useful, but it is not the
+   normal training path.
+
+2. **Expose additive component-owned statistic contracts.** Refactor the R
+   implementation behind `Observation` and the Q implementation behind
+   `Approx` so each can: (a) derive a per-minibatch additive statistic from
+   the already-computed inference output, (b) define its zero/initial
+   accumulator, and (c) finalize an accumulated statistic into its updated
+   storage form. The trainer must remain Observation/Approx-family agnostic:
+   it calls generic model-level composition methods and tree-adds opaque
+   statistics; it must not import `observations.py` or assume mean/covariance
+   layouts.
+
+3. **Reuse one minibatch inference pass.** After each SGD update, use one
+   post-update minibatch inference call to produce posterior moments,
+   predictions, and `transition_stat`. Derive both R and Q batch statistics
+   from this same output. `transition_stat` continues to avoid a second
+   dynamics propagation for Q; deriving R's residual scatter from the same
+   posterior is similarly only a reduction, not new inference.
+
+4. **Keep trainer state ephemeral and reset it at each epoch.** Store R/Q
+   accumulators only in `_run_training_loop`, never in `XFADS`, optimizer
+   state, or checkpoints. Initialize R's accumulator according to its
+   component contract. Initialize Q's only when `q_mstep=true`, with prior
+   scatter/count `((d+1)q_scale I_d, d+1)`. Apply joint finalization after
+   the epoch's final minibatch, then start the next epoch with fresh
+   accumulators and the updated model parameters.
+
+5. **Preserve Q ownership modes.** With `q_mstep=true`, `noise_free` remains
+   auto-frozen from SGD and is updated only by the epoch-final accumulated
+   MAP step. With `q_mstep=false`, do not create/finalize a Q accumulator;
+   leave Q entirely SGD-managed. R remains M-step-owned under both modes.
+
+6. **Update tests and benchmark design.** Add discriminative tests that:
+   (a) batch-statistic accumulation equals an independent sum for a frozen
+   model; (b) R and enabled Q each update exactly once per epoch; (c)
+   accumulators reset while learned R/Q values persist; (d) `q_mstep=false`
+   performs no Q accumulation/update; (e) the trainer makes no second
+   full-dataset inference pass; and (f) `transition_stat` remains reused.
+   Benchmark against the current full-data epoch path and SGD-Q baseline,
+   reporting wall-clock time, R/Q trajectories, flow RMSE, and posterior
+   RMSE. Re-run the full VDP example only after this replacement is in place.
+
+7. **Keep alternative cadences out of scope.** Do not retain separate R/Q
+   cadences, direct replacement-style minibatch M-steps, within-epoch Q
+   updates, indefinite confidence accumulation, prior recentering, or
+   forgetting parameters unless a later ablation establishes a need.
 
 ## Dependencies
 
