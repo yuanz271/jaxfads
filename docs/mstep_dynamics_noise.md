@@ -529,14 +529,13 @@ class XFADS:
 reusing the forward pass's own propagation rather than having `shrink`
 repeat it (see revision 6 above).
 
-**Casualty carried forward from the earlier design, unaffected by this
-merge**: `Approx.mstep_frozen_paths` (declaring `["noise_free"]`) still
-doesn't survive cleanly -- it would require `Approx` to know that external
-attribute name. Since automatic `train()`-integration/cadence-control is
-already deferred (see Steps toward implementation), auto-derived
-freeze-paths for `Q` are deferred alongside it, not solved with a
-workaround now. Callers pass `freeze_paths=["noise_free"]` to `train()`
-explicitly for now, exactly as the validated prototype scripts already do.
+**Resolved implementation concern from the earlier design**:
+`Approx.mstep_frozen_paths` is still intentionally absent because it would
+require `Approx` to know the external attribute name `noise_free`. This is
+not needed: `XFADS` owns both `noise_prior` and `noise_free`, and
+`trainer.py` derives the `noise_free` freeze path at the model/trainer
+level whenever a Q prior is configured. Thus `Approx` remains unaware of
+storage details while `train()` can safely compose the R and Q M-steps.
 
 **Deliberate contract difference from `Observation.mstep`, stated
 explicitly so it isn't mistaken for an inconsistency**: `Observation.mstep`
@@ -713,8 +712,11 @@ arguments, bypassing this entirely.
 
 **Steps 1-6 below are done, implemented and merged** (`src/jaxfads/base.py`,
 `core.py`, `distributions/mvn.py`, `smoother.py`; tests in
-`test_distribution.py`, `test_algorithm.py`, `test_smoother.py`). Step 7
-remains deferred, as planned. Two corrections surfaced during
+`test_distribution.py`, `test_algorithm.py`, `test_smoother.py`). The
+original Step 7 (automatic Q freeze-path derivation and `train()`
+integration) is also complete; the implementation now has 133 passing
+library tests. The historical numbering is retained below because it
+records how the design evolved. Two corrections surfaced during
 implementation, worth recording rather than silently fixing:
 
 - `MVN.shrink` returns its result via
@@ -747,9 +749,10 @@ implementation, worth recording rather than silently fixing:
   method, not two the orchestrator must call).
 
 Sequencing mirrored `mstep_gaussian_cov`'s own precedent: ship the core,
-correctness-tested mechanism as a standalone utility first;
-train()-integration and further real-world validation follow as separate,
-later steps, not blockers.
+correctness-tested mechanism first, then integrate it into `train()` and
+validate it on benchmark/example workflows. Those implementation steps
+are complete; the remaining work is scientific validation of cadence,
+robustness, and generalization, not missing core functionality.
 
 1. **Placement is settled**: one combined `Approx.shrink`
    method (concrete `NotImplementedError` default), and `XFADS.mstep` as
@@ -854,14 +857,15 @@ later steps, not blockers.
   comparison against a real XFADS model with posterior inference, Lorenz,
   single seed.
 
-**Still pending, tracked as Open questions below, not blocking initial
-implementation**: unit tests for the actual library implementation (Step 4
-above, distinct from the ad hoc prototype scripts); multi-seed replication;
+**Remaining validation work, tracked as Open questions below, is not
+blocking the implemented mechanism**: multi-seed replication;
 VDP/oscillator-bank coverage; a with/without cross-covariance-term
-ablation; a cadence sweep (round-based only tested so far); a
-prior/prior_dof_frac sensitivity check; correcting the SNR mismatch
-(intended `1`, actually run at `~0.1`); a real downstream Lorenz campaign
-without hand-tuned annealing, once `train()` integration exists.
+ablation; a cadence sweep (round-based behavior was validated, while
+`train()` also supports minibatch/epoch cadence); a prior/prior_dof_frac
+sensitivity check; correcting the SNR mismatch (intended `1`, actually
+run at `~0.1`); and a real downstream Lorenz campaign without hand-tuned
+annealing. The library implementation itself is covered by the current
+full suite (133 tests), and `train()` integration has already landed.
 
 ## Open questions
 
@@ -917,8 +921,9 @@ be: `Approx.shrink` keeps its own name rather than being called
 `Approx.mstep`, and there is no `Approx.mstep_frozen_paths` -- both were
 rejected mid-design specifically to keep `Approx` unaware of
 `noise_free`'s existence (see Design's "casualty" note). What remains
-genuinely future/out-of-scope: automatic cadence control inside `train()`
-and auto-derived freeze-paths for `Q` (Steps toward implementation, item
-6), extending the `shrink` contract to non-`MVN` `Approx` families, and
-the deferred `noise_free` storage-representation simplification (see
-Design) once `mstep` is confirmed as the permanent mechanism.
+genuinely future/out-of-scope: a dedicated round-based cadence control
+inside `train()` (the current implementation reuses the existing
+minibatch/epoch `mstep_mode`), extending the `transition_stat`/`shrink`
+contract to a genuinely non-MVN `Approx` family, and the deferred
+`noise_free` storage-representation simplification (see Design) once
+`mstep` is confirmed as the permanent mechanism.
