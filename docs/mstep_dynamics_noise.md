@@ -1193,11 +1193,14 @@ previous Q is retained only as the model parameter used during the next
 epoch's inference.
 
 This is an epoch-local stochastic/generalized MAP-EM approximation, not an
-exact final-model batch M-step: minibatch statistics within the epoch are
-computed under parameters that drift through SGD. That approximation applies
-symmetrically to R and Q and is preferable to either repeatedly replacing
-parameters with independent minibatch estimates or paying for a second full
-pass each epoch.
+exact final-model batch M-step: each minibatch statistic is evaluated under
+that minibatch's **pre-SGD** model parameters, and those parameters drift
+through the epoch. That convention is deliberate: it lets the trainer reuse
+the exact forward inference already required to evaluate the ELBO, rather
+than perform any post-SGD or epoch-end inference pass. The approximation
+applies symmetrically to R and Q and is preferable to either repeatedly
+replacing parameters with independent minibatch estimates or paying for a
+second full pass each epoch.
 
 ### Implementation plan
 
@@ -1219,12 +1222,18 @@ pass each epoch.
    statistics; it must not import `observations.py` or assume mean/covariance
    layouts.
 
-3. **Reuse one minibatch inference pass.** After each SGD update, use one
-   post-update minibatch inference call to produce posterior moments,
-   predictions, and `transition_stat`. Derive both R and Q batch statistics
-   from this same output. `transition_stat` continues to avoid a second
-   dynamics propagation for Q; deriving R's residual scatter from the same
-   posterior is similarly only a reduction, not new inference.
+3. **Reuse the existing pre-SGD loss forward pass—never run inference
+   post-SGD.** Extend the current `batch_loss` path to return the component
+   statistics as auxiliary output from the exact `model(...)` call that
+   already produces posterior moments, predictive moments, and
+   `transition_stat` for ELBO evaluation. Use
+   `eqx.filter_value_and_grad(..., has_aux=True)` so autodiff differentiates
+   only the scalar loss while the trainer receives those already-materialized
+   statistics after the gradient calculation. Apply the SGD update normally,
+   then add the returned pre-update batch statistics to the epoch
+   accumulators. `transition_stat` therefore avoids a second dynamics
+   propagation for Q; deriving R's residual scatter from the same posterior
+   is similarly only a reduction, not new inference.
 
 4. **Keep trainer state ephemeral and reset it at each epoch.** Store R/Q
    accumulators only in `_run_training_loop`, never in `XFADS`, optimizer
@@ -1243,11 +1252,13 @@ pass each epoch.
    (a) batch-statistic accumulation equals an independent sum for a frozen
    model; (b) R and enabled Q each update exactly once per epoch; (c)
    accumulators reset while learned R/Q values persist; (d) `q_mstep=false`
-   performs no Q accumulation/update; (e) the trainer makes no second
-   full-dataset inference pass; and (f) `transition_stat` remains reused.
-   Benchmark against the current full-data epoch path and SGD-Q baseline,
-   reporting wall-clock time, R/Q trajectories, flow RMSE, and posterior
-   RMSE. Re-run the full VDP example only after this replacement is in place.
+   performs no Q accumulation/update; (e) instrumentation proves one model
+   inference evaluation per minibatch—no post-SGD, epoch-end, or full-data
+   inference pass; (f) auxiliary statistics are not differentiated through;
+   and (g) `transition_stat` remains reused. Benchmark against the current
+   full-data epoch path and SGD-Q baseline, reporting wall-clock time, R/Q
+   trajectories, flow RMSE, and posterior RMSE. Re-run the full VDP example
+   only after this replacement is in place.
 
 7. **Keep alternative cadences out of scope.** Do not retain separate R/Q
    cadences, direct replacement-style minibatch M-steps, within-epoch Q
