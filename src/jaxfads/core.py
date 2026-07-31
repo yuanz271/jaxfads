@@ -53,12 +53,12 @@ def propagate_transition_points(
     predictive distribution ``p(z_t)``) and, via ``approx.
     transition_stat(zs, weights)`` (see ``_site_filter``/``nofilt``,
     which reduce this same point set through that method before it is
-    passed along as ``transition_stat``), ``Approx.shrink`` -- whichever
-    subclass-specific reduction of this same point set a concrete
-    ``Approx`` needs for its own noise-free transition-noise statistic.
-    The transition/process noise ``Q`` is precisely the quantity this
-    function deliberately excludes, since ``Q`` is what ``shrink`` is
-    estimating.
+    passed along as ``transition_stat``), the generic ``Noise`` component's
+    optional exact-Approx-class M-step strategy -- whichever pairing-specific
+    reduction this point set needs for its own noise-free transition-noise
+    statistic. The transition/process noise ``Q`` is precisely the quantity
+    this function deliberately excludes, since Q is what the Noise strategy
+    may estimate.
 
     Parameters
     ----------
@@ -169,8 +169,9 @@ def _average_predictive_moment(
     with callers (e.g. ``_site_filter``) that need to reuse the same
     propagated points for a second, noise-*free* purpose (reduced via
     ``approx.transition_stat(zs, weights)`` into ``transition_stat``, for
-    ``Approx.shrink`` to consume however its own family requires) without
-    calling :func:`propagate_transition_points` a second time.
+    an optional Noise M-step strategy to consume according to its exact
+    Approx-family pairing) without calling
+    :func:`propagate_transition_points` a second time.
     """
     predictive_moment_samples = jax.vmap(
         partial(approx.predictive_moment, noise=noise)
@@ -280,7 +281,7 @@ def _site_filter(
     approx = model.approx
     nature_p_1 = model.prior_natural()
 
-    noise = approx.canon_to_moment(approx.free_to_canon(model.noise_free))
+    noise = model.noise.moment()
     f = model.transition
     mc_size = model.conf.mc_size
 
@@ -401,7 +402,7 @@ def nofilt(
     ``propagate_transition_points`` call.
     """
     approx = model.approx
-    noise = approx.canon_to_moment(approx.free_to_canon(model.noise_free))
+    noise = model.noise.moment()
     f = model.transition
     mc_size = model.conf.mc_size
 
@@ -487,7 +488,7 @@ def _bismooth(
     approx = model.approx
     nature_prior = model.prior_natural()
 
-    noise = approx.canon_to_moment(approx.free_to_canon(model.noise_free))
+    noise = model.noise.moment()
 
     natural_to_moment = jax.vmap(approx.natural_to_moment)
     expected_moment_forward = partial(

@@ -23,8 +23,10 @@
 * **Breaking:** transition/process noise uses required top-level positive
   `q_scale` and `q_mstep` (default `true`). `q_scale` initializes Q; with
   `q_mstep=true`, epoch-local MAP Q finalization uses
-  `(q_scale, state_dim + 1)` and `train()` auto-freezes `noise_free`.
-  `q_mstep=false` omits Q statistics/finalization and leaves Q SGD-managed.
+  `(q_scale, state_dim + 1)` when the generic Noise component has a registered
+  exact-Approx-class strategy (built in for `MVN`), and `train()` auto-freezes
+  `noise.free`. `q_mstep=false`, or no matching strategy, omits Q
+  statistics/finalization and leaves Q SGD-managed.
   `dyn_conf.state_noise`, `noise_prior`, and `noise_prior_dof` were removed.
 * Added `cuda12`/`cuda13` optional-dependency extras
   (`pip install jaxfads[cuda12]` or `jaxfads[cuda13]`) for one-step GPU

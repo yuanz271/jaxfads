@@ -101,9 +101,9 @@ Invariant for callers:
     scalar penalty to the per-batch objective (`loss = -ELBO +
     regularizer(model)`).
   - `batch_loss` stays a pure objective; the trainer composes the penalty.
-  - Penalize the intended quantity in its own space (e.g. transform
-    `noise_free` via the Approx to regularize Q; do not penalize the raw free
-    parameters).
+  - Penalize the intended quantity in its own space (e.g. decode
+    `model.noise.free` through `model.noise.moment()` to regularize Q; do not
+    penalize the raw free parameters).
 - Optimizer policy is user-ownable. The default optimizer applies **no weight
   decay**: in a plugin framework the trainer cannot know which leaves are
   weight matrices vs variances/biases, so it makes no decay assumption. Pass
@@ -112,18 +112,19 @@ Invariant for callers:
   no `weight_decay` config field.
 - Parameter freezing is configured declaratively via:
   - `trainer_conf.freeze_paths: list[str]` (dot-separated model attribute paths,
-    e.g. `["noise_free"]`); applied on top of the default or a supplied
+    e.g. `["noise.free"]`); applied on top of the default or a supplied
     optimizer.
 - Process noise uses top-level `q_scale` (positive variance) and `q_mstep`
   (default `True`). With `q_mstep=True`, pre-SGD minibatch R/Q statistics are
   accumulated and Q is finalized once per epoch using prior
-  `(q_scale, state_dim + 1)`; `noise_free` is auto-frozen. With
-  `q_mstep=False`, Q statistics are omitted and `noise_free` remains
-  SGD-managed. `state_noise`, `noise_prior`, and `noise_prior_dof` are
-  unsupported.
+  `(q_scale, state_dim + 1)` when the generic Noise component has a registered
+  exact-Approx-class M-step strategy; then `noise.free` is auto-frozen. With
+  `q_mstep=False`, or no registered strategy, Q statistics are omitted and
+  `noise.free` remains SGD-managed. `state_noise`, `noise_prior`, and
+  `noise_prior_dof` are unsupported.
 - Normal `train()` has one accumulated R/Q update at each epoch boundary and
-  performs no extra inference pass for that update. `XFADS.mstep(...)` remains
-  the explicit manual full-data recomputation API.
+  performs no extra inference pass for that update. `XFADS.mstep_from_data(...)`
+  remains the explicit manual full-data recomputation API.
 - No built-in covariance-based noise regularization is applied by default.
 
 ## Testing Workflow

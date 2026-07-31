@@ -1,13 +1,14 @@
+import chex
 import jax
 import pytest
+import tensorflow_probability.substrates.jax.distributions as tfp
 from jax import numpy as jnp
 from jax import random as jrnd
-import chex
-import tensorflow_probability.substrates.jax.distributions as tfp
 
 from jaxfads.base import Approx
 from jaxfads.core import propagate_transition_points
 from jaxfads.distributions import MVN
+from jaxfads.noise import Noise
 
 # rank=0 → diagonal, rank=dim → full
 _RANK_CASES = [(4, 4), (4, 0)]  # (dim, rank)
@@ -272,11 +273,25 @@ def test_transition_points_explicit_mc_matches_base_contract(dim, rank):
     chex.assert_trees_all_close(weights, jnp.full((mc_size,), 1.0 / mc_size), atol=1e-8)
 
 
-def test_approx_shrink_default_raises():
-    """Approx.shrink's base-class default raises NotImplementedError for
-    a non-overriding Approx subclass -- callers (XFADS.mstep) only reach
-    it when a prior has been explicitly configured, so a loud failure is
-    preferable to silently returning the wrong shape."""
+def test_noise_strategy_registration_is_exact_class_only():
+    """Noise uses exact Approx-class registration, not MRO fallback."""
+
+    class ExactMVN(MVN):
+        pass
+
+    approx = ExactMVN(dim=2, rank=2)
+    noise = Noise(approx=approx, free=approx.free_from_kw(scale=1.0))
+    assert not noise.supports_mstep
+
+    Noise.register_mstep(ExactMVN, Noise._mstep_strategies[MVN])
+    try:
+        assert noise.supports_mstep
+    finally:
+        del Noise._mstep_strategies[ExactMVN]
+
+
+def test_unregistered_noise_strategy_is_noop():
+    """An exact-unregistered Approx remains usable without MAP-Q behavior."""
 
     class _NoStat(Approx):
         def natural_to_moment(self, natural):
@@ -312,12 +327,11 @@ def test_approx_shrink_default_raises():
         def free_from_kw(self, **kwargs):
             return jnp.array(0.0)
 
-    with pytest.raises(NotImplementedError):
-        _NoStat().shrink(
-            jnp.zeros((1, 2, 1)),
-            (jnp.zeros((1, 1, 1)), jnp.zeros((1, 1, 1, 1))),
-            prior=None,
-        )
+    approx = _NoStat()
+    noise = Noise(approx=approx, free=jnp.array(0.0))
+    assert not noise.supports_mstep
+    assert noise.collect_minibatch_stat(jnp.zeros((1, 2, 1)), None) is None
+    assert noise.mstep(None, prior=None) is noise
 
 
 def test_approx_transition_stat_default_is_identity():
@@ -370,18 +384,11 @@ def test_approx_transition_stat_default_is_identity():
 
 
 @pytest.mark.parametrize("dim,rank", _RANK_CASES)
-def test_mvn_shrink_matches_independent_reference(dim, rank):
-    """MVN.shrink's combined formula (v1 statistic, no
-    cross-covariance term, then MAP-shrunk toward prior) matches an
-    independently computed reference on a small linear transition,
-    including its own pair-alignment slicing of ``moment`` (full
-    sequence in, not pre-sliced pairs) against an already-propagated
-    ``transition_stat`` -- for both diag (rank=0) and full (rank=dim)
-    layouts. One combined method, not two: mirrors Gaussian.mstep calling
-    exactly one method, not requiring the orchestrator to sequence a
-    separate raw-statistic step itself.
-    """
+def test_mvn_noise_mstep_matches_independent_reference(dim, rank):
+    """The exact registered MVN Noise strategy matches an independent Q
+    MAP reference for both diagonal and full MVN layouts."""
     approx = MVN(dim=dim, rank=rank)
+    noise = Noise(approx=approx, free=approx.free_from_kw(scale=1.0))
 
     A = 0.9 * jnp.eye(dim) + 0.05 * jrnd.normal(jrnd.key(9), (dim, dim))
     b = jrnd.normal(jrnd.key(10), (dim,))
@@ -428,8 +435,9 @@ def test_mvn_shrink_matches_independent_reference(dim, rank):
         keys, moment_tm1, u_zeros, c_zeros
     )
 
-    free = approx.shrink(moment, transition_stat, prior)
-    canon = approx.free_to_canon(free)
+    stat = noise.collect_minibatch_stat(moment, transition_stat)
+    updated_noise = noise.mstep(stat, prior=prior)
+    canon = approx.free_to_canon(updated_noise.free)
     got_cov = canon.chol @ canon.chol.T
 
     raw_stats = []

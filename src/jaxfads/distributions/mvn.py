@@ -37,6 +37,7 @@ from tensorflow_probability.substrates.jax import distributions as tfd
 
 from ..base import Approx
 from ..constraints import _EPS, constrain_positive, unconstrain_positive
+from ..noise import Noise
 
 
 def _weighted_moments(zs: Array, weights: Array) -> tuple[Array, Array]:
@@ -539,117 +540,6 @@ class MVN(Approx):
         canon = MVNParam(loc=loc_arr, chol=jnp.diag(chol_diag))
         return self.canon_to_free(canon)
 
-    def q_mstep_stats(self, moment, transition_stat):
-        """Return additive transition-noise scatter and pair count."""
-        moment_t = moment[:, 1:, :]
-        mean_f, cov_f = transition_stat
-
-        def one(moment_t_i, mean_f_i, cov_f_i):
-            mean_t, cov_t = self.unpack(moment_t_i)
-            residual = mean_t - mean_f_i
-            return jnp.outer(residual, residual) + cov_t + cov_f_i
-
-        raw = jax.vmap(jax.vmap(one))(moment_t, mean_f, cov_f)
-        return jnp.sum(raw, axis=(0, 1)), jnp.asarray(
-            raw.shape[0] * raw.shape[1], dtype=raw.dtype
-        )
-
-    def q_mstep_finalize(self, stats, prior):
-        """Encode a MAP Q estimate from additive scatter/count statistics."""
-        sums, count = stats
-        value, prior_count = prior
-        d = self._layout.dim
-        value = jnp.asarray(value, dtype=sums.dtype)
-        if value.ndim == 0:
-            value = value * jnp.eye(d, dtype=sums.dtype)
-        elif value.ndim == 1:
-            value = jnp.diag(value)
-
-        cov = (sums + prior_count * value) / (count + prior_count)
-        cov = 0.5 * (cov + cov.T)
-        if self._layout.is_diag:
-            cov = jnp.diag(jnp.diagonal(cov))
-        chol = jnp.linalg.cholesky(cov + _EPS * jnp.eye(d, dtype=cov.dtype))
-        canon = MVNParam(loc=jnp.zeros(d, dtype=cov.dtype), chol=chol)
-        return self.canon_to_free(canon)
-
-    def shrink(
-        self,
-        moment: Array,
-        transition_stat: tuple[Array, Array],  # (mean_f, cov_f) -- see Approx.transition_stat
-        prior: tuple[Array, float],
-    ) -> Array:
-        """See base class.
-
-        Own pair-alignment slicing: ``moment_t = moment[:, 1:, :]`` --
-        the *destination* time step of each pair, aligned with
-        ``transition_stat``'s own ``(mean_f, cov_f)``, which the caller
-        (``XFADS.mstep``) already computed for source steps ``t-1``, one
-        entry per pair, via this same class's own :meth:`transition_stat`
-        override (called by ``core.py``'s forward pass, not by this
-        method) -- so ``transition_stat`` arrives already reduced, not a raw
-        point set.
-
-        v1 approximation: no cross-covariance term (``Cov(z_t, z_{t-1})``
-        is not exposed by this repo's smoothing algorithm -- see
-        ``docs/mstep_dynamics_noise.md``). Per (batch, time) pair::
-
-            m', P' = self.unpack(moment_t)
-            mean_f, cov_f = transition_stat  # already propagated + reduced, upstream
-            r = m' - mean_f
-            raw_stat = outer(r, r) + P' + cov_f
-
-        ``transition_stat`` is computed once, upstream, by ``XFADS``'s own
-        forward pass (``core._site_filter``/``nofilt``/``causal``),
-        which already propagates each pair's ``q(z_{t-1})`` through the
-        transition (via ``approx.transition_points`` -- Monte Carlo, or
-        -- ``MVN``'s current default -- deterministic unscented-transform
-        sigma points) for its own noise-included predictive-moment term,
-        and then reduces the resulting points via this class's own
-        :meth:`transition_stat` (:func:`_weighted_moments`). This method
-        does **not** repeat either step -- it only consumes the
-        already-propagated, already-reduced ``(mean_f, cov_f)``, avoiding
-        both a second, redundant call to ``propagate_transition_points``
-        and a second reduction of the same points. (Two earlier versions
-        of this method did more work internally: one did its own
-        propagation given ``transition_fn``/``u``/``c``/``mc_size``/
-        ``key`` as call arguments; a later one still did its own
-        reduction of a raw point set passed in as ``transition_stat`` --
-        both superseded once checked against the actual cost and against
-        ``core.py``'s own agnosticism invariant (a raw-point-set
-        ``transition_stat``, reduced by ``core.py`` itself, would presume a
-        Gaussian-shaped sufficient statistic that a different ``Approx``
-        family need not share). Reducing via ``transition_stat`` at
-        collection time, not at consumption time, means ``core.py``'s
-        ``scan``/``vmap`` only ever stacks the smaller, already-reduced
-        form across time steps -- not the full raw point set. See
-        ``docs/mstep_dynamics_noise.md``.)
-
-        Then MAP-shrinks the mean of that per-pair statistic toward
-        ``prior = (value, prior_dof)``:
-        ``(n * mean(raw_stat) + prior_dof * value) / (n + prior_dof)``,
-        where ``n`` is the total pair count. ``value`` may be a scalar
-        (isotropic), a ``(D,)`` vector (diagonal), or a ``(D, D)`` matrix
-        (full) -- broadcast to a full matrix before blending.
-
-        Returns a free-form array via ``self.canon_to_free`` -- *not*
-        ``self.free_from_kw``, which only accepts a diagonal/scalar scale
-        for initialization and cannot round-trip an arbitrary full shrunk
-        covariance. ``loc`` is set to zero, matching how
-        :meth:`predictive_moment` already discards ``noise``'s ``loc``
-        component entirely.
-
-        Not required to be gradient-free on its own terms: the actual
-        guarantee against interfering with SGD lives at the call site
-        (``train()``'s ``train_step``/``apply_mstep``, via ``XFADS.
-        mstep``), which only invokes this after the current step's
-        gradient has already been computed and applied -- not in an
-        internal ``stop_gradient`` here.
-        """
-        return self.q_mstep_finalize(
-            self.q_mstep_stats(moment, transition_stat), prior
-        )
-
     # ---------------------------------------------------------------------
     # predictive moments
     # ---------------------------------------------------------------------
@@ -665,6 +555,50 @@ class MVN(Approx):
         """
         _, Q = self.unpack(noise)
         return self.pack(z, Q)
+
+
+class _MVNNoiseMstep:
+    """Exact-MVN Noise M-step strategy, delegating algebra to ``noise.approx``."""
+
+    @staticmethod
+    def collect_minibatch_stat(noise, moment: Array, transition_stat):
+        approx = noise.approx
+        moment_t = moment[:, 1:, :]
+        mean_f, cov_f = transition_stat
+
+        def one(moment_t_i, mean_f_i, cov_f_i):
+            mean_t, cov_t = approx.unpack(moment_t_i)
+            residual = mean_t - mean_f_i
+            return jnp.outer(residual, residual) + cov_t + cov_f_i
+
+        raw = jax.vmap(jax.vmap(one))(moment_t, mean_f, cov_f)
+        return jnp.sum(raw, axis=(0, 1)), jnp.asarray(
+            raw.shape[0] * raw.shape[1], dtype=raw.dtype
+        )
+
+    @staticmethod
+    def mstep(noise, epoch_stat, *, prior):
+        approx = noise.approx
+        sums, count = epoch_stat
+        value, prior_count = prior
+        d = approx._layout.dim
+        value = jnp.asarray(value, dtype=sums.dtype)
+        if value.ndim == 0:
+            value = value * jnp.eye(d, dtype=sums.dtype)
+        elif value.ndim == 1:
+            value = jnp.diag(value)
+
+        cov = (sums + prior_count * value) / (count + prior_count)
+        cov = 0.5 * (cov + cov.T)
+        if approx._layout.is_diag:
+            cov = jnp.diag(jnp.diagonal(cov))
+        chol = jnp.linalg.cholesky(cov + _EPS * jnp.eye(d, dtype=cov.dtype))
+        canon = MVNParam(loc=jnp.zeros(d, dtype=cov.dtype), chol=chol)
+        return approx.canon_to_free(canon)
+
+
+Noise.register_mstep(MVN, _MVNNoiseMstep())
+
 
 
 # ---------------------------------------------------------------------------

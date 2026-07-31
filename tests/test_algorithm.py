@@ -22,8 +22,8 @@ from jax import random as jr
 from jaxfads import core
 from jaxfads.base import Dynamics
 from jaxfads.core import expected_predictive_moment
+from jaxfads.noise import Noise
 from jaxfads.vi import elbo
-
 
 # -----------------------------------------------------------------------------
 # Filtering / smoothing shape + finiteness
@@ -47,7 +47,7 @@ class _DummyModel:
         self.conf = SimpleNamespace(mc_size=mc_size)
         self.transition = _Identity(state_dim)
         self.backward = _Identity(state_dim)
-        self.noise_free = approx.free_from_kw(scale=cov)
+        self.noise = Noise(approx=approx, free=approx.free_from_kw(scale=cov))
 
     def prior_natural(self):
         return self.approx.moment_to_natural(

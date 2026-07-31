@@ -52,7 +52,7 @@ DEFAULT_TRAINER_CONFIG = DictConfig(
         "seed": 0,
         "kl_warmup_steps": 0,
         # Optional list of dot-separated attribute paths to freeze.
-        # Example: ["noise_free", "unconstrained_prior_natural"]
+        # Example: ["noise.free", "unconstrained_prior_natural"]
         "freeze_paths": [],
     }
 )
@@ -179,7 +179,9 @@ def _batch_loss_with_stats(model, batch, key, *, beta=1.0, regularizer=None):
     loss = jnp.mean(-batch_elbo(model, elbo_key, times, posterior_moments, prior_moments, observations, beta=beta))
     if regularizer is not None:
         loss = loss + regularizer(model)
-    stats = model.mstep_batch_stats(times, observations, posterior_moments, transition_stat)
+    stats = model._collect_minibatch_stat(
+        times, observations, posterior_moments, transition_stat
+    )
     return loss, stats
 
 
@@ -473,15 +475,6 @@ class EpochHandler:
         )
 
 
-def _tree_add(left, right):
-    """Add fixed-shape opaque statistic pytrees, preserving no-op ``None``."""
-    if left is None:
-        return right
-    if right is None:
-        return left
-    return jax.tree.map(lambda x, y: x + y, left, right)
-
-
 def _run_training_loop(
     model,
     train_set,
@@ -539,7 +532,7 @@ def _run_training_loop(
     def finalize_epoch(epoch_idx, batch_losses):
         nonlocal model, epoch_stats
         if epoch_stats is not None:
-            model = model.mstep_finalize_stats(epoch_stats)
+            model = model._apply_mstep_stat(epoch_stats)
         epoch_stats = None
         train_loss = (
             float(jnp.mean(jnp.stack(batch_losses)))
@@ -573,7 +566,12 @@ def _run_training_loop(
                 model, opt_state, batch, batch_key, step
             )
             epoch_batch_losses.append(loss)
-            epoch_stats = _tree_add(epoch_stats, batch_stats)
+            if epoch_stats is None:
+                epoch_stats = batch_stats
+            else:
+                epoch_stats = model._accumulate_minibatch_stat(
+                    epoch_stats, batch_stats
+                )
         else:
             finalize_epoch(current_epoch, epoch_batch_losses)
     except KeyboardInterrupt:
@@ -612,7 +610,7 @@ enabled Q once at the epoch boundary before callbacks/checkpoints, without an
 additional inference pass. For a Gaussian-likelihood model R is therefore
 M-step-owned and excluded from SGD via
 ``model.observation.mstep_frozen_paths()``. When ``q_mstep`` is true,
-``noise_free`` is excluded the same way; when false, it remains
+``noise.free`` is excluded the same way; when false, it remains
 SGD-managed. See [mstep_dynamics_noise](../docs/mstep_dynamics_noise.md).
 
     Parameters
@@ -637,7 +635,7 @@ SGD-managed. See [mstep_dynamics_noise](../docs/mstep_dynamics_noise.md).
         per-batch objective (``loss = -ELBO + regularizer(model)``). It is a
         pure function of the model, so any parameter penalty must be written
         in the relevant parameter space (e.g. a penalty on the process-noise
-        covariance Q must transform ``noise_free`` via the Approx, not act on
+        covariance Q must decode ``noise.free`` through ``model.noise``, not act on
         the raw free parameters).
     optimizer : optax.GradientTransformation or None, optional
         Optimizer to use. When ``None`` (default), the built-in optimizer is
@@ -725,10 +723,10 @@ SGD-managed. See [mstep_dynamics_noise](../docs/mstep_dynamics_noise.md).
     # caller. mstep is applied to model.observation unconditionally at its
     # configured cadence, so gradient descent must never
     # fight it, for any model (a no-op path list for Observations that
-    # don't override mstep, e.g. Poisson). Same reasoning for noise_free
-    # whenever model.conf.q_mstep is true: model.mstep's Q-shrinkage update
-    # would otherwise immediately overwrite whatever gradient descent just
-    # computed for noise_free -- not a numerical-stability issue (the LL
+    # don't override mstep, e.g. Poisson). Same reasoning for noise.free
+    # whenever model.q_mstep_active is true: Noise's Q M-step update would
+    # otherwise immediately overwrite whatever gradient descent just
+    # computed for noise.free -- not a numerical-stability issue (the LL
     # and KL terms are independent given a fixed posterior, so computing
     # each update from that same posterior is well-defined regardless),
     # just wasted, silently-discarded gradient computation unless excluded
@@ -736,8 +734,8 @@ SGD-managed. See [mstep_dynamics_noise](../docs/mstep_dynamics_noise.md).
     freeze_paths = [str(p) for p in conf.freeze_paths] + [
         "observation." + p for p in model.observation.mstep_frozen_paths()
     ]
-    if model.conf.get("q_mstep", True):
-        freeze_paths = freeze_paths + ["noise_free"]
+    if model.q_mstep_active:
+        freeze_paths = freeze_paths + ["noise.free"]
     for path in freeze_paths:
         parts = tuple(path.split("."))
         _ = _resolve_attr_path(model, parts)  # fail fast if path is invalid

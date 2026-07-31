@@ -10,15 +10,13 @@ from jax import numpy as jnp
 from jax import random as jr
 from omegaconf import DictConfig, OmegaConf
 
-from jaxfads.base import Approx, Encoder
+from jaxfads.base import Encoder
 from jaxfads.distributions.mvn import MVN
 from jaxfads.smoother import XFADS
 
 
-class UnsupportedShrinkMVN(MVN):
-    """Forward-capable Approx whose Q M-step is deliberately unsupported."""
-
-    shrink = Approx.shrink
+class UnregisteredMVN(MVN):
+    """Exact-class Noise lookup must not inherit MVN's registered strategy."""
 
 
 class IdentityEncoder(Encoder):
@@ -96,8 +94,8 @@ def test_constructor():
     model = XFADS(model_conf, jr.key(seed))
 
     # Verify noise is on the model, not on the dynamics module
-    assert model.noise_free is not None
-    assert not hasattr(model.dynamics, "noise_free")
+    assert model.noise.free is not None
+    assert not hasattr(model.dynamics, "noise.free")
 
     with TemporaryDirectory() as tmp_dir:
         path = Path(tmp_dir) / "model.zip"
@@ -495,7 +493,7 @@ def test_q_scale_initializes_isotropic_q():
     """q_scale initializes Q to q_scale times identity."""
     model = _gaussian_model(5, 4, 3, q_scale=0.25)
     _mean, q = model.approx.unpack(
-        model.approx.canon_to_moment(model.approx.free_to_canon(model.noise_free))
+        model.approx.canon_to_moment(model.approx.free_to_canon(model.noise.free))
     )
     chex.assert_trees_all_close(q, 0.25 * jnp.eye(3), atol=1e-5)
 
@@ -517,17 +515,17 @@ def test_q_mstep_false_updates_observation_only():
     c = jnp.zeros((2, T, 0))
     model = model.initialize(times, y, u, c)
 
-    new_model = model.mstep(times, y, u, c, key=jr.key(2))
+    new_model = model.mstep_from_data(times, y, u, c, key=jr.key(2))
 
     assert not jnp.allclose(
         new_model.observation.likelihood.unconstrained_cov,
         model.observation.likelihood.unconstrained_cov,
     )
-    chex.assert_trees_all_close(new_model.noise_free, model.noise_free)
+    chex.assert_trees_all_close(new_model.noise.free, model.noise.free)
 
 
-def test_q_mstep_false_does_not_require_shrink_support():
-    """Unsupported Approx raises only when q_mstep is enabled."""
+def test_unregistered_approx_keeps_q_sgd_managed():
+    """An exact-unregistered Approx has no MAP-Q strategy in either mode."""
     T, y_size, z_size = 5, 4, 3
     times = jnp.broadcast_to(jnp.arange(T), (2, T))
     y = jr.normal(jr.key(1), (2, T, y_size))
@@ -535,15 +533,19 @@ def test_q_mstep_false_does_not_require_shrink_support():
     c = jnp.zeros((2, T, 0))
 
     disabled = _gaussian_model(
-        T, y_size, z_size, q_mstep=False, approx="UnsupportedShrinkMVN"
+        T, y_size, z_size, q_mstep=False, approx="UnregisteredMVN"
     ).initialize(times, y, u, c)
-    disabled.mstep(times, y, u, c, key=jr.key(2))
-
     enabled = _gaussian_model(
-        T, y_size, z_size, q_mstep=True, approx="UnsupportedShrinkMVN"
+        T, y_size, z_size, q_mstep=True, approx="UnregisteredMVN"
     ).initialize(times, y, u, c)
-    with pytest.raises(NotImplementedError):
-        enabled.mstep(times, y, u, c, key=jr.key(2))
+
+    assert not disabled.noise.supports_mstep
+    assert not enabled.noise.supports_mstep
+    assert not enabled.q_mstep_active
+    chex.assert_trees_all_close(
+        enabled.mstep_from_data(times, y, u, c, key=jr.key(2)).noise.free,
+        enabled.noise.free,
+    )
 
 
 def test_q_mstep_uses_q_scale_center_and_state_dim_plus_one():
@@ -557,9 +559,10 @@ def test_q_mstep_uses_q_scale_center_and_state_dim_plus_one():
     model = model.initialize(times, y, u, c)
 
     _natural, moment, _predicted, transition_stat = model(times, y, u, c, key=jr.key(2))
-    expected_noise_free = model.approx.shrink(
-        moment, transition_stat, (0.7, z_size + 1)
+    expected_noise = model.noise.mstep(
+        model.noise.collect_minibatch_stat(moment, transition_stat),
+        prior=(0.7, z_size + 1),
     )
-    new_model = model.mstep(times, y, u, c, key=jr.key(2))
+    new_model = model.mstep_from_data(times, y, u, c, key=jr.key(2))
 
-    chex.assert_trees_all_close(new_model.noise_free, expected_noise_free)
+    chex.assert_trees_all_close(new_model.noise.free, expected_noise.free)

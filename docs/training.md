@@ -45,7 +45,7 @@ Pass a `DictConfig` (or plain dict) as `conf`. Missing keys are filled from
 | `max_epoch` | `50` | Number of training epochs (always run in full unless a callback stops early) |
 | `batch_size` | `1` | Mini-batch size (must be divisible by device count) |
 | `seed` | `0` | Random seed for shuffling |
-| `freeze_paths` | `[]` | Optional list of dot-separated model attribute paths to freeze (e.g. `["noise_free"]`) |
+| `freeze_paths` | `[]` | Optional list of dot-separated model attribute paths to freeze (e.g. `["noise.free"]`) |
 
 The default optimizer is **vanilla Adam** and `learning_rate` is its only
 knob. It applies **no gradient clipping, no gradient noise, and no weight
@@ -87,7 +87,7 @@ an `optax` optimizer with a model-derived mask and pass it to `train`:
 import jax, equinox as eqx, optax
 
 # Decay only 2-D leaves (weight matrices); skip biases, scales, and the
-# free-form covariance parameters (noise_free, unconstrained_prior_natural).
+# free-form covariance parameters (noise.free, unconstrained_prior_natural).
 wd_mask = jax.tree.map(lambda p: eqx.is_inexact_array(p) and p.ndim >= 2, model)
 
 optimizer = optax.chain(
@@ -124,7 +124,7 @@ configs:
 
 ```python
 trainer_conf = {
-    "freeze_paths": ["noise_free"],  # freeze process noise
+    "freeze_paths": ["noise.free"],  # freeze process noise
 }
 ```
 
@@ -160,9 +160,10 @@ the loss is evaluated on and what persists in the returned model. It is a
 general mechanism — the trainer only calls the function and does not
 interpret what it changes.
 
-Do **not** schedule `noise_free`. When `q_mstep=true` (the default), the
-joint epoch M-step owns Q and would overwrite a scheduled value. When
-`q_mstep=false`, Q is SGD-managed but the dedicated Q scheduling helper has
+Do **not** schedule `noise.free`. When `q_mstep=true` and Noise has an exact
+registered Approx-family M-step strategy, the joint epoch update owns Q and
+would overwrite a scheduled value. Otherwise Q is SGD-managed, but the
+dedicated Q scheduling helper has
 been intentionally removed until a future explicit `q_update_mode="sgd" |
 "map"` API defines unambiguous ownership semantics.
 
@@ -204,13 +205,14 @@ posterior moments. It sums those statistics across the epoch and finalizes R
 once at the epoch boundary before callbacks/checkpoints, without an extra
 inference pass.
 
-The transition/process-noise covariance `Q` (`model.noise_free`) is
-initialized from positive top-level `conf.q_scale`. By default,
-`conf.q_mstep=True` accumulates its additive MAP statistic from those same
-pre-SGD forward passes and finalizes Q once per epoch with prior
-`(q_scale, state_dim + 1)`; `noise_free` is automatically frozen from SGD.
-Set `q_mstep=False` to omit Q statistics/finalization and train
-`noise_free` with SGD instead.
+The transition/process-noise covariance `Q` (`model.noise.free`) is
+initialized from positive top-level `conf.q_scale`. When `conf.q_mstep=True`
+and the generic Noise component has an exact registered Approx-family M-step
+strategy (built in for `MVN`), it accumulates its additive MAP statistic from
+those same pre-SGD forward passes and finalizes Q once per epoch with prior
+`(q_scale, state_dim + 1)`; `noise.free` is then automatically frozen from
+SGD. Set `q_mstep=False`, or use an Approx without a registered strategy, to
+leave `noise.free` SGD-managed.
 
 This is an epoch-local generalized MAP-EM update: batch statistics are
 computed under models that evolve through SGD within the epoch, so it is not
@@ -223,7 +225,7 @@ statistics.
 optimizer automatically (folded into `train()`'s internal freeze mask), so
 gradient descent never fights the epoch-final R update -- no
 `conf.freeze_paths` entry is needed. When `conf.q_mstep` is true,
-`noise_free` is excluded the same way.
+`noise.free` is excluded the same way when Noise has an active M-step strategy.
 
 For an explicit full-data recomputation outside `train()`—for example,
 manual EM-style alternation—call `model.mstep(...)`. That manual API runs a
@@ -333,7 +335,7 @@ agnostic to the latent family (not every `Approx` has a covariance-like noise).
 ### Example: regularizing the process-noise covariance Q
 
 The penalty must be written in the quantity you intend to regularize. To
-regularize the process-noise covariance Q, transform `noise_free` through the
+regularize the process-noise covariance Q, decode `noise.free` through the
 Approx rather than penalizing the raw free parameters (which live in a
 nonlinear chart and are not a meaningful function of Q):
 
@@ -342,7 +344,7 @@ import jax.numpy as jnp
 
 def q_regularizer(model):
     approx = model.approx
-    moment = approx.canon_to_moment(approx.free_to_canon(model.noise_free))
+    moment = model.noise.moment()
     _, Q = approx.unpack(moment)          # full (D, D) covariance
     return 1e-4 * jnp.trace(Q)            # well-defined function of Q
 

@@ -246,7 +246,7 @@ def main():
 
         def on_epoch_end(m, info):
             _, Q = approx.unpack(
-                approx.canon_to_moment(approx.free_to_canon(m.noise_free))
+                approx.canon_to_moment(approx.free_to_canon(m.noise.free))
             )
             q_trace.append(np.asarray(jnp.diag(Q)))
             return False
@@ -262,7 +262,7 @@ def main():
             "batch_size": args.batch_size,
         })
         if freeze_q:
-            trainer_conf.freeze_paths = ["noise_free"]
+            trainer_conf.freeze_paths = ["noise.free"]
 
         # Q frozen means it stays at its CONSTANT initial value throughout
         # training -- f's gradient is then scaled by a fixed 1/Q, not a
@@ -273,7 +273,7 @@ def main():
         if use_mstep:
             q_diag_final = mstep_transition_diag(trained, train_data, approx, floor=1e-6)
             trained = eqx.tree_at(
-                lambda mm: mm.noise_free, trained, approx.free_from_kw(scale=q_diag_final)
+                lambda mm: mm.noise.free, trained, approx.free_from_kw(scale=q_diag_final)
             )
 
         print(f"\n=== {name} ===")
@@ -282,7 +282,7 @@ def main():
         for i, q in enumerate(q_trace):
             print(f"  epoch {i}: {q}")
         _, Q_final = approx.unpack(
-            approx.canon_to_moment(approx.free_to_canon(trained.noise_free))
+            approx.canon_to_moment(approx.free_to_canon(trained.noise.free))
         )
         print(f"Q_final diag (applied to model): {jnp.diag(Q_final)} (true={args.q_true})")
 
@@ -317,16 +317,16 @@ def main():
             trainer_conf = OmegaConf.create({
                 "seed": args.seed, "learning_rate": 1e-3,
                 "max_epoch": epochs_per_round, "batch_size": args.batch_size,
-                "freeze_paths": ["noise_free"],
+                "freeze_paths": ["noise.free"],
             })
             model = train(model, train_data, conf=trainer_conf)
             raw_stat = mstep_transition_diag(model, train_data, approx, floor=1e-6)
             q_shrunk = (n_pairs * raw_stat + prior_dof * prior) / (n_pairs + prior_dof)
             model = eqx.tree_at(
-                lambda m: m.noise_free, model, approx.free_from_kw(scale=q_shrunk)
+                lambda m: m.noise.free, model, approx.free_from_kw(scale=q_shrunk)
             )
             _, Q = approx.unpack(
-                approx.canon_to_moment(approx.free_to_canon(model.noise_free))
+                approx.canon_to_moment(approx.free_to_canon(model.noise.free))
             )
             q_trace.append(np.asarray(jnp.diag(Q)))
 
@@ -364,7 +364,7 @@ def main():
         model = train(model, train_data, conf=trainer_conf)
 
         _, Q_final = approx.unpack(
-            approx.canon_to_moment(approx.free_to_canon(model.noise_free))
+            approx.canon_to_moment(approx.free_to_canon(model.noise.free))
         )
         print(f"\n=== {name} ===")
         print(f"Q_final diag: {jnp.diag(Q_final)} (true={args.q_true})")

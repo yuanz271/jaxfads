@@ -76,7 +76,7 @@ def model_conf():
 
 
 def test_train_with_param_schedule_anneals_noise_free(model_conf, sample_data):
-    """``train(..., param_schedule=...)`` drives noise_free through the
+    """``train(..., param_schedule=...)`` drives noise.free through the
     schedule during training; the final model reflects the scheduled Q, and
     the schedule dominates over whatever gradient updates would otherwise
     apply (via ``freeze_paths``)."""
@@ -93,33 +93,33 @@ def test_train_with_param_schedule_anneals_noise_free(model_conf, sample_data):
 
     def schedule(m, step):
         return eqx.tree_at(
-            lambda x: x.noise_free, m, approx.free_from_kw(scale=decay(step))
+            lambda x: x.noise.free, m, approx.free_from_kw(scale=decay(step))
         )
     conf = OmegaConf.create(
         {
             "max_epoch": max_epoch,
             "batch_size": batch_size,
             "seed": 0,
-            "freeze_paths": ["noise_free"],
+            "freeze_paths": ["noise.free"],
         }
     )
 
     trained = train(model, sample_data, conf=conf, param_schedule=schedule)
 
     expected_final = approx.free_from_kw(scale=0.01)
-    assert jnp.allclose(trained.noise_free, expected_final, atol=1e-5)
+    assert jnp.allclose(trained.noise.free, expected_final, atol=1e-5)
 
 
 def test_param_schedule_without_freeze_paths_gets_fought_by_optimizer(
     model_conf, sample_data
 ):
-    """Without ``freeze_paths``, the schedule sets ``noise_free`` at the start
+    """Without ``freeze_paths``, the schedule sets ``noise.free`` at the start
     of each step, but the optimizer's own gradient-based update (plus
     gradient noise / momentum) then moves it away again within the same
     step -- so the final model does *not* end up at the scheduled value.
     This confirms ``freeze_paths`` is necessary, not merely a best practice
     (see :func:`test_train_with_param_schedule_anneals_noise_free`, which
-    passes ``freeze_paths=["noise_free"]`` and lands exactly on schedule).
+    passes ``freeze_paths=["noise.free"]`` and lands exactly on schedule).
     """
     model = XFADS(model_conf, jax.random.key(0)).initialize(*sample_data)
     approx = model.approx
@@ -129,8 +129,8 @@ def test_param_schedule_without_freeze_paths_gets_fought_by_optimizer(
     )
     def schedule(m, step):
         del step
-        return eqx.tree_at(lambda x: x.noise_free, m, approx.free_from_kw(scale=1.0))
+        return eqx.tree_at(lambda x: x.noise.free, m, approx.free_from_kw(scale=1.0))
 
     trained = train(model, sample_data, conf=conf, param_schedule=schedule)
     expected = approx.free_from_kw(scale=1.0)
-    assert not jnp.allclose(trained.noise_free, expected, atol=1e-5)
+    assert not jnp.allclose(trained.noise.free, expected, atol=1e-5)

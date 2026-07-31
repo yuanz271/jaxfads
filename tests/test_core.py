@@ -6,13 +6,17 @@ from jax import random as jr
 
 from jaxfads import core
 from jaxfads.distributions import MVN
+from jaxfads.noise import Noise
 
 
 class _DummyModel:
     def __init__(self, state_dim: int, mc_size: int = 1):
         self.approx = MVN(dim=state_dim, rank=state_dim)
         self.conf = SimpleNamespace(mc_size=mc_size)
-        self.noise_free = self.approx.free_from_kw(scale=1.0)
+        self.noise = Noise(
+            approx=self.approx,
+            free=self.approx.free_from_kw(scale=1.0),
+        )
 
     def transition(self, z, u, c, *, key=None):
         del u, c, key

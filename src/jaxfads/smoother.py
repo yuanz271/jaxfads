@@ -32,6 +32,7 @@ from .base import Approx, Dynamics, Encoder, Integrator, Observation
 from .core import Mode
 from .logging import get_logger
 from .nn import DataMasker
+from .noise import Noise
 from .util import vmap_with_key
 
 logger = get_logger(__name__)
@@ -76,8 +77,9 @@ class XFADS(ConfModule):
         Dropout masker for pseudo-observations during training.
     unconstrained_prior_natural : Array
         Free-form prior parameters (constrained to natural at inference).
-    noise_free : Array
-        Free-form noise parameters (constrained to canon/mean at inference).
+    noise : Noise
+        Generic transition-noise component holding static Approx configuration
+        and free process-noise parameters.
 
     Notes
     -----
@@ -129,7 +131,7 @@ class XFADS(ConfModule):
     beta_encoder: Callable | None
     masker: DataMasker
     unconstrained_prior_natural: Any
-    noise_free: Any
+    noise: Noise
 
     def __init__(
         self, conf, key=None
@@ -195,7 +197,11 @@ class XFADS(ConfModule):
             raise ValueError(
                 f"q_scale must be a positive finite variance, got {q_scale!r}"
             )
-        self.noise_free = self.approx.free_from_kw(scale=q_scale)
+        approx_cls = Approx.get_subclass(self.conf.approx)
+        approx_kwargs = dict(self.conf.approx_kwargs)
+        approx_kwargs.setdefault("rank", self.conf.state_dim)
+        approx = approx_cls(dim=self.conf.state_dim, **approx_kwargs)
+        self.noise = Noise(approx=approx, free=approx.free_from_kw(scale=q_scale))
 
         obs_conf = OmegaConf.merge(
             self.conf.obs_conf,
@@ -276,98 +282,66 @@ class XFADS(ConfModule):
         observation = self.observation.initialize(t, y, u, c)
         return eqx.tree_at(lambda m: m.observation, self, observation)
 
-    def mstep_batch_stats(self, t, y, moment, transition_stat):
-        """Return opaque additive R/Q statistics from one inference pass."""
-        r_stats = self.observation.mstep_stats(t, moment, y, self.approx)
-        q_stats = (
-            self.approx.q_mstep_stats(moment, transition_stat)
-            if self.conf.get("q_mstep", True)
+    @property
+    def q_mstep_active(self) -> bool:
+        """Whether this concrete Noise/Approx pairing has MAP-Q support."""
+        return self.conf.get("q_mstep", True) and self.noise.supports_mstep
+
+    def _collect_minibatch_stat(self, t, y, moment, transition_stat):
+        """Return one opaque additive R/Q minibatch statistic delta."""
+        observation_stat = self.observation.mstep_stats(t, moment, y, self.approx)
+        noise_stat = (
+            self.noise.collect_minibatch_stat(moment, transition_stat)
+            if self.q_mstep_active
             else None
         )
-        return r_stats, q_stats
+        return observation_stat, noise_stat
 
-    def mstep_finalize_stats(self, stats):
-        """Apply opaque accumulated R/Q statistics at an epoch boundary."""
-        r_stats, q_stats = stats
+    def _accumulate_minibatch_stat(self, total, delta):
+        """Accumulate component-owned statistic deltas for one epoch."""
+        total_observation, total_noise = total
+        delta_observation, delta_noise = delta
+        return (
+            self.observation.accumulate_minibatch_stat(
+                total_observation, delta_observation
+            ),
+            self.noise.accumulate_minibatch_stat(total_noise, delta_noise),
+        )
+
+    def _apply_mstep_stat(self, stats):
+        """Apply accumulated component statistics at an epoch boundary."""
+        observation_stat, noise_stat = stats
         model = eqx.tree_at(
             lambda m: m.observation,
             self,
-            self.observation.mstep_finalize(r_stats),
+            self.observation.mstep_finalize(observation_stat),
         )
-        if q_stats is None:
+        if noise_stat is None:
             return model
         prior = (self.conf.q_scale, int(self.conf.state_dim) + 1)
-        noise_free = model.approx.q_mstep_finalize(q_stats, prior)
-        return eqx.tree_at(lambda m: m.noise_free, model, noise_free)
+        return eqx.tree_at(
+            lambda m: m.noise,
+            model,
+            model.noise.mstep(noise_stat, prior=prior),
+        )
 
-    def mstep(self, t, y, u, c, *, key) -> "XFADS":
-        """Closed-form, non-SGD parameter update from a full forward pass,
-        composing both ``self.observation``'s and ``self.approx``'s own
-        ``mstep``-style updates in one call -- the single entry point for
-        both, rather than separate driver functions per parameter.
+    def mstep_from_data(self, t, y, u, c, *, key) -> "XFADS":
+        """Apply one explicit full-data R/Q recomputation.
 
-        This is the only place that knows ``noise_free`` is an attribute
-        name -- ``self.approx.shrink`` knows it's computing/shrinking a
-        transition-noise statistic, but not that the result gets stored
-        as ``noise_free`` (see ``docs/mstep_dynamics_noise.md``). One
-        combined call, mirroring ``GLM.mstep`` calling exactly one method
-        (``Gaussian.mstep``), not two separately-sequenced steps.
+        This convenience method performs one inference pass over supplied
+        data, collects one component statistic bundle, and applies it through
+        ``_apply_mstep_stat``. Normal ``train()`` never calls this method;
+        it instead accumulates pre-SGD minibatch statistic deltas across an
+        epoch without an additional inference pass.
 
-        Whether this method updates ``noise_free`` is owned by top-level
-        ``conf.q_mstep`` (default ``True``). When enabled, it constructs the
-        fixed MAP prior ``(conf.q_scale, conf.state_dim + 1)`` at the M-step
-        boundary; when disabled, it leaves ``noise_free`` for SGD alone.
-        The Approx remains stateless and the caller need not pass Q-specific
-        arguments.
-
-        Parameters
-        ----------
-        t, y, u, c : Array
-            As accepted by ``__call__``.
-        key : Array
-            JAX PRNG key for the forward pass.
-
-        Returns
-        -------
-        XFADS
-            A new model with ``observation`` updated (if it overrides
-            ``mstep``) and, when ``conf.q_mstep`` is true, ``noise_free``
-            updated via ``self.approx.shrink`` with prior
-            ``(conf.q_scale, conf.state_dim + 1)``. All other attributes
-            unchanged.
-
-        Not required to be gradient-free on its own terms: this method,
-        ``self.observation.mstep``, and ``self.approx.shrink`` are
-        ordinary functions, not specially guaranteed against carrying
-        gradients if called inside a differentiated context. The actual
-        invariant lives at the *call site*: ``train()``'s ``train_step``/
-        ``apply_mstep`` only ever call this after the current step's
-        gradient (if any) has already been computed and applied, using an
-        already-concrete, already-updated ``model`` -- so nothing this
-        method computes can feed back into that step's SGD update. Do not
-        rely on this method itself to protect a caller that violates that
-        ordering.
-
-        Reuses ``self(...)``'s own ``transition_stat`` (the 4th return value,
-        always computed -- see ``__call__``) for ``self.approx.shrink``
-        instead of having ``shrink`` re-propagate ``q(z_{t-1})`` through
-        ``self.transition`` a second time: the forward pass already did
-        this propagation once for its own noise-included predictive-moment
-        term, at negligible marginal cost for also reducing it to the
-        noise-free statistic ``shrink`` needs (see
-        ``docs/mstep_dynamics_noise.md``).
+        An active Q update requires both ``conf.q_mstep`` and an exact
+        concrete-Approx-class Noise M-step strategy. Otherwise the generic
+        Noise component remains unchanged and its ``free`` leaf is
+        SGD-managed.
         """
-        approx = self.approx
         _natural, moment, _predicted, transition_stat = self(t, y, u, c, key=key)
-        new_observation = self.observation.mstep(t, moment, y, approx)
-        model = eqx.tree_at(lambda m: m.observation, self, new_observation)
-
-        if not self.conf.get("q_mstep", True):
-            return model
-
-        prior = (self.conf.q_scale, int(self.conf.state_dim) + 1)
-        new_noise_free = approx.shrink(moment, transition_stat, prior)
-        return eqx.tree_at(lambda m: m.noise_free, model, new_noise_free)
+        stat = self._collect_minibatch_stat(t, y, moment, transition_stat)
+        return self._apply_mstep_stat(stat)
 
     @classmethod
     def load(cls, path: str | Path):
@@ -413,11 +387,7 @@ class XFADS(ConfModule):
             An approximation instance configured from ``approx`` and
             ``approx_kwargs``.
         """
-        cls = Approx.get_subclass(self.conf.approx)
-        kwargs = dict(self.conf.approx_kwargs)
-        # Default rank to state_dim (full rank) when not specified.
-        kwargs.setdefault("rank", self.conf.state_dim)
-        return cls(dim=self.conf.state_dim, **kwargs)
+        return self.noise.approx
 
     def prior_natural(self) -> Array:
         """

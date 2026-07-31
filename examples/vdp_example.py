@@ -536,7 +536,7 @@ def main() -> None:
             **base_trainer_conf,
             "max_epoch": 100,
             # Keep transition noise fixed for this low-rank encoder demo.
-            "freeze_paths": ["noise_free"],
+            "freeze_paths": ["noise.free"],
         }
     )
 

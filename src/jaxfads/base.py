@@ -11,6 +11,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
+import jax
 from gearax.mixin import SubclassRegistryMixin
 from gearax.modules import ConfModule
 from jax import Array
@@ -170,99 +171,6 @@ class Approx(SubclassRegistryMixin, ABC):
         canon = self.free_to_canon(free)
         moment = self.canon_to_moment(canon)
         return self.moment_to_natural(moment)
-
-    def q_mstep_stats(self, moment, transition_stat):
-        """Return additive Q M-step statistics, or ``None``."""
-        return None
-
-    def q_mstep_finalize(self, stats, prior):
-        """Finalize additive Q statistics (default is a no-op)."""
-        return self
-
-    def shrink(
-        self,
-        moment: Array,
-        transition_stat: Any,
-        prior: Any,
-    ) -> Array:
-        """Closed-form, non-SGD transition-noise (``Q``) update: computes
-        the per-(batch,time) sufficient statistic from smoothed moments
-        and an already-propagated statistic, and MAP-shrinks it toward
-        ``prior`` in one call, returning the result encoded as a free-form
-        array (ready to replace ``XFADS.noise_free``).
-
-        One combined method, not two -- mirrors ``Observation.mstep``/
-        ``Gaussian.mstep``'s own shape exactly: the orchestrator
-        (``XFADS.mstep``) calls exactly one method here, the same way
-        ``GLM.mstep`` calls exactly one method (``Gaussian.mstep``), never
-        needing to sequence a separate raw-statistic step itself.
-
-        Takes the *full* ``moment`` (not pre-sliced ``(t, t-1)`` pairs)
-        and performs its own pair-alignment slicing internally -- the
-        caller should not need to know this method needs shifted, aligned
-        pairs at all.
-
-        Does **not** itself propagate a distribution through the
-        transition, and does **not** itself reduce the propagated point
-        set to a statistic -- ``transition_stat`` is computed once, upstream,
-        by ``XFADS``'s own forward pass (``core._site_filter``/
-        ``nofilt``/``causal``), which propagates ``q(z_{t-1})`` through
-        the transition with no noise added (via ``core.
-        propagate_transition_points``, already needed there for the
-        noise-included predictive moment) and then reduces the resulting
-        point set to whatever this same subclass's own
-        :meth:`transition_stat` returns. This method only consumes that
-        already-computed ``transition_stat`` -- reusing both the forward
-        pass's propagation *and* its reduction rather than repeating
-        either. See ``docs/mstep_dynamics_noise.md`` for why: recomputing
-        either step a second time inside ``shrink`` would be pure waste.
-
-        ``transition_stat``'s shape/meaning is exactly whatever this
-        subclass's own :meth:`transition_stat` returns -- this base class
-        and ``core.py`` never assume any particular reduced form (e.g. a
-        mean/covariance pair); that choice belongs entirely to the
-        subclass pairing its own ``transition_stat`` override with its
-        own ``shrink`` implementation.
-
-        Deliberately opaque at this level about ``raw_stat``'s
-        shape/meaning and ``prior``'s structure (a single value? a
-        ``(value, strength)`` pair? something else for a non-conjugate
-        scheme?) -- defined entirely by the subclass; not every ``Approx``
-        family need define this meaningfully (e.g. a hypothetical
-        discrete-state family might have no shrinkable dispersion concept
-        at all). ``prior`` is a call argument (not construction-time
-        ``Approx`` config): it's owned by ``XFADS``'s top-level configuration
-        (``q_scale`` and ``q_mstep``, read via ``XFADS.mstep``), not by
-        ``Approx``, since ``Approx`` (``XFADS.approx``) is a stateless
-        property freshly reconstructed on every access -- not a natural
-        home for a specific model's chosen hyperparameter value.
-
-        Default: not supported -- raises ``NotImplementedError``. Callers
-        (``XFADS.mstep``) only reach this when ``q_mstep`` is enabled, so
-        a loud failure here is preferable to silently returning something
-        the wrong shape.
-
-        Parameters
-        ----------
-        moment : Array, shape (N, T, param_dim)
-            Smoothed moment parameters of ``q(z_t)`` for the full
-            sequence.
-        transition_stat : Any
-            Whatever this subclass's own :meth:`transition_stat` returns,
-            per (batch, time) pair, aligned with ``moment[:, 1:, :]`` --
-            already-propagated (via ``core.propagate_transition_points``)
-            and already-reduced (via ``transition_stat``); this method
-            need not do either step itself.
-        prior : Any
-            Subclass-defined prior spec.
-
-        Returns
-        -------
-        Array
-            A free-form array, shape/meaning defined by the concrete
-            subclass (matching whatever ``XFADS.noise_free`` expects).
-        """
-        raise NotImplementedError(f"{type(self).__name__} does not implement shrink")
 
     def transition_points(
         self, key: Array, moment: Array, mc_size: int
@@ -600,6 +508,14 @@ class Observation(SubclassRegistryMixin, ConfModule):
     def mstep_finalize(self, stats):
         """Finalize additive statistics into a new observation."""
         return self
+
+    def accumulate_minibatch_stat(self, total, delta):
+        """Add fixed-shape observation statistic pytrees, preserving ``None``."""
+        if total is None:
+            return delta
+        if delta is None:
+            return total
+        return jax.tree.map(lambda left, right: left + right, total, delta)
 
     def mstep(self, t: Array, moment: Array, y: Array, approx: Approx) -> Observation:
         """Closed-form, non-SGD parameter update from a full forward pass.

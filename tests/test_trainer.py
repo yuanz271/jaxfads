@@ -145,7 +145,7 @@ def test_train_accepts_user_optimizer(model_conf, trainer_config, sample_data):
     custom = run(optax.sgd(1e-2))  # very different update rule than the default
 
     # A different optimizer yields a different trained model.
-    assert jnp.any(default.noise_free != custom.noise_free)
+    assert jnp.any(default.noise.free != custom.noise.free)
 
 
 @pytest.mark.parametrize(
@@ -174,15 +174,15 @@ def test_train_with_params_aware_optimizer(
     }
 
     model = XFADS(model_conf, jrnd.key(0))
-    before = np.asarray(model.noise_free)  # snapshot: train() donates buffers
+    before = np.asarray(model.noise.free)  # snapshot: train() donates buffers
     trained = train(
         model, sample_data, conf=trainer_config, optimizer=optimizers[opt_name]
     )
 
     assert trained is not None
-    assert jnp.all(jnp.isfinite(trained.noise_free))
+    assert jnp.all(jnp.isfinite(trained.noise.free))
     # The optimizer actually updated the model.
-    assert np.any(np.asarray(trained.noise_free) != before)
+    assert np.any(np.asarray(trained.noise.free) != before)
 
 
 def test_user_optimizer_composes_with_freeze_paths(
@@ -191,16 +191,16 @@ def test_user_optimizer_composes_with_freeze_paths(
     """``freeze_paths`` is applied on top of a user-supplied optimizer."""
     trainer_config.max_epoch = 5
     trainer_config.batch_size = 64
-    trainer_config.freeze_paths = ["noise_free"]
+    trainer_config.freeze_paths = ["noise.free"]
 
     model = XFADS(model_conf, jrnd.key(0))
     # Snapshot to host: train() donates the input model's buffers.
-    before = np.asarray(model.noise_free)
+    before = np.asarray(model.noise.free)
     trained = train(
         model, sample_data, conf=trainer_config, optimizer=optax.sgd(1e-1)
     )
 
-    np.testing.assert_allclose(np.asarray(trained.noise_free), before, atol=0.0)
+    np.testing.assert_allclose(np.asarray(trained.noise.free), before, atol=0.0)
 
 
 def test_train_lora_rank1_end_to_end(trainer_config, sample_data):
@@ -271,15 +271,15 @@ def test_train_lora_rank1_end_to_end(trainer_config, sample_data):
 def test_train_freeze_paths_keeps_noise_free_fixed(
     model_conf, trainer_config, sample_data
 ):
-    """freeze_paths can freeze model.noise_free updates."""
+    """freeze_paths can freeze model.noise.free updates."""
     model = XFADS(model_conf, jrnd.key(0))
-    noise0 = jax.device_get(model.noise_free)
+    noise0 = jax.device_get(model.noise.free)
 
     trainer_config.max_epoch = 3
     trainer_config.batch_size = 64
-    trainer_config.freeze_paths = ["noise_free"]
+    trainer_config.freeze_paths = ["noise.free"]
     trained_model = train(model, sample_data, conf=trainer_config)
-    noise_trained = jax.device_get(trained_model.noise_free)
+    noise_trained = jax.device_get(trained_model.noise.free)
     chex.assert_trees_all_close(noise_trained, noise0, atol=0.0)
 
 
@@ -455,16 +455,16 @@ def test_mstep_composes_with_user_freeze_paths(
     mstep_frozen_paths() entries -- the two sources of frozen paths compose,
     neither overwrites the other."""
     model = XFADS(gaussian_model_conf, jrnd.key(0))
-    noise0 = jax.device_get(model.noise_free)
+    noise0 = jax.device_get(model.noise.free)
 
     trainer_config.max_epoch = 2
     trainer_config.batch_size = 16
-    trainer_config.freeze_paths = ["noise_free"]
+    trainer_config.freeze_paths = ["noise.free"]
 
     trained_model = train(model, gaussian_sample_data, conf=trainer_config)
 
     chex.assert_trees_all_close(
-        jax.device_get(trained_model.noise_free), noise0, atol=0.0
+        jax.device_get(trained_model.noise.free), noise0, atol=0.0
     )
     assert not jnp.allclose(
         trained_model.observation.likelihood.cov(), jnp.full((10,), 1e-4), atol=1e-2
@@ -495,35 +495,35 @@ def test_accumulated_stats_match_manual_mstep_for_frozen_model(
         optimizer=optax.sgd(0.0),
     )
 
-    expected = reference_model.mstep(*gaussian_sample_data, key=jrnd.key(1))
+    expected = reference_model.mstep_from_data(*gaussian_sample_data, key=jrnd.key(1))
     chex.assert_trees_all_close(
         trained.observation.likelihood.cov(),
         expected.observation.likelihood.cov(),
         atol=1e-5,
     )
-    chex.assert_trees_all_close(trained.noise_free, expected.noise_free, atol=1e-5)
+    chex.assert_trees_all_close(trained.noise.free, expected.noise.free, atol=1e-5)
 
 
 def test_q_mstep_updates_q_and_freezes_noise_free(
     gaussian_model_conf, trainer_config, gaussian_sample_data
 ):
-    """q_mstep=true updates Q through shrink and auto-freezes noise_free."""
+    """q_mstep=true updates Q through shrink and auto-freezes noise.free."""
     conf = OmegaConf.merge(gaussian_model_conf, {"q_scale": 1.0, "q_mstep": True})
     model = XFADS(conf, jrnd.key(0))
-    noise0 = jax.device_get(model.noise_free)
+    noise0 = jax.device_get(model.noise.free)
 
     trainer_config.max_epoch = 2
     trainer_config.batch_size = 16
     trained_model = train(model, gaussian_sample_data, conf=trainer_config)
 
-    assert not jnp.allclose(jax.device_get(trained_model.noise_free), noise0, atol=1e-3)
-    chex.assert_tree_all_finite(trained_model.noise_free)
+    assert not jnp.allclose(jax.device_get(trained_model.noise.free), noise0, atol=1e-3)
+    chex.assert_tree_all_finite(trained_model.noise.free)
 
 
 def test_q_mstep_noise_free_matches_independent_mstep(
     gaussian_model_conf, trainer_config, gaussian_sample_data
 ):
-    """q_mstep=true excludes noise_free from SGD, leaving the M-step value."""
+    """q_mstep=true excludes noise.free from SGD, leaving the M-step value."""
     conf = OmegaConf.merge(gaussian_model_conf, {"q_scale": 1.0, "q_mstep": True})
     model = XFADS(conf, jrnd.key(0))
 
@@ -533,26 +533,26 @@ def test_q_mstep_noise_free_matches_independent_mstep(
     trained_model = train(model, gaussian_sample_data, conf=trainer_config)
 
     t, y, u, c = gaussian_sample_data
-    expected_model = trained_model.mstep(t, y, u, c, key=jrnd.key(123))
+    expected_model = trained_model.mstep_from_data(t, y, u, c, key=jrnd.key(123))
 
     chex.assert_trees_all_close(
-        trained_model.noise_free, expected_model.noise_free, atol=0.2
+        trained_model.noise.free, expected_model.noise.free, atol=0.2
     )
 
 
 def test_q_mstep_false_leaves_noise_free_gradient_trained(
     gaussian_model_conf, trainer_config, gaussian_sample_data
 ):
-    """q_mstep=false skips shrink and leaves noise_free SGD-managed."""
+    """q_mstep=false skips shrink and leaves noise.free SGD-managed."""
     conf = OmegaConf.merge(gaussian_model_conf, {"q_scale": 1.0, "q_mstep": False})
     model = XFADS(conf, jrnd.key(0))
-    noise0 = jax.device_get(model.noise_free)
+    noise0 = jax.device_get(model.noise.free)
 
     trainer_config.max_epoch = 2
     trainer_config.batch_size = 16
     trained_model = train(model, gaussian_sample_data, conf=trainer_config)
 
-    assert not jnp.allclose(jax.device_get(trained_model.noise_free), noise0, atol=1e-3)
+    assert not jnp.allclose(jax.device_get(trained_model.noise.free), noise0, atol=1e-3)
 
 
 def test_accumulated_stats_finalize_once_per_epoch_without_manual_mstep(
@@ -564,21 +564,23 @@ def test_accumulated_stats_finalize_once_per_epoch_without_manual_mstep(
 
     finalize_count = 0
     mstep_count = 0
-    original_finalize = XFADSClass.mstep_finalize_stats
-    original_mstep = XFADSClass.mstep
+    original_finalize = XFADSClass._apply_mstep_stat
+    original_mstep_from_data = XFADSClass.mstep_from_data
 
     def counting_finalize(self, stats):
         nonlocal finalize_count
         finalize_count += 1
         return original_finalize(self, stats)
 
-    def counting_mstep(self, *args, **kwargs):
+    def counting_mstep_from_data(self, *args, **kwargs):
         nonlocal mstep_count
         mstep_count += 1
-        return original_mstep(self, *args, **kwargs)
+        return original_mstep_from_data(self, *args, **kwargs)
 
-    monkeypatch.setattr(XFADSClass, "mstep_finalize_stats", counting_finalize)
-    monkeypatch.setattr(XFADSClass, "mstep", counting_mstep)
+    monkeypatch.setattr(XFADSClass, "_apply_mstep_stat", counting_finalize)
+    monkeypatch.setattr(
+        XFADSClass, "mstep_from_data", counting_mstep_from_data
+    )
 
     trainer_config.max_epoch = 3
     trainer_config.batch_size = 32
