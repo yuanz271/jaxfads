@@ -900,13 +900,105 @@ full suite (133 tests), and `train()` integration has already landed.
   backstop) is still needed given how well the alternating-EM mechanism
   performed without it in these experiments, or can be dropped.
 
+## Approved next implementation plan: canonical Q scale and epoch-level joint M-step
+
+This is the agreed next change. It intentionally makes Q M-step ownership
+structural rather than opt-in, and is a breaking configuration/checkpoint
+migration: old `dyn_conf.state_noise`, `noise_prior`, and `noise_prior_dof`
+settings are removed rather than translated.
+
+1. **Introduce one canonical top-level Q-scale option.** Replace
+   `dyn_conf.state_noise`, `conf.noise_prior`, and
+   `conf.noise_prior_dof` with required top-level `conf.q_scale`, a
+   positive process **variance**. Its semantics are
+
+   $$
+   Q_{\mathrm{init}} = Q_0 = q_{\mathrm{scale}} I_d,
+   \qquad
+   \nu_0 = d + 1,
+   $$
+
+   where $d = \texttt{state_dim}$. Thus the initialized Q and the center
+   of its MAP shrinkage prior always agree. `d + 1` is the implemented
+   update's dimension-aware pseudocount/prior weight, not a claim that the
+   code implements a literal inverse-Wishart distribution.
+
+2. **Make Q M-step ownership structural in `XFADS`.** Initialize
+   `noise_free` from `q_scale`, remove the static `XFADS.noise_prior`
+   field and all `None`/opt-in branches, and have `XFADS.mstep` always
+   construct `(q_scale, state_dim + 1)` and pass it to
+   `Approx.shrink(moment, transition_stat, prior)`. `Approx.shrink` keeps
+   its loud `NotImplementedError` default: a non-MVN family must implement
+   Q estimation explicitly before it can use the standard training path.
+
+3. **Make the joint `XFADS.mstep` epoch-level by default.** Change the
+   trainer's default `mstep_mode` from `"minibatch"` to `"epoch"`.
+   After each completed epoch, run one fresh inference pass over the whole
+   training set and call one `model.mstep(...)`, jointly updating R and Q
+   from the same posterior, data scope, and cadence. Preserve the existing
+   stale-update guard so a normal final epoch does not duplicate that final
+   full-dataset M-step. Keep `"minibatch"` as an explicit experimental
+   override, not the recommended default.
+
+4. **Retain `transition_stat` unchanged.** Epoch cadence does not make it
+   redundant. The full-dataset inference pass already propagates transition
+   points through $f$ to form predictive moments; `transition_stat` reuses
+   those same propagated points for Q estimation. Therefore the M-step does
+   not evaluate $f$ a second time inside `shrink`. `core.py` continues to
+   call `approx.transition_stat(zs, weights)` polymorphically and only
+   stacks/returns its result; `MVN.transition_stat` retains the
+   MVN-specific weighted mean/covariance reduction.
+
+5. **Resolve Q scheduling ownership explicitly.** Since `noise_free` is
+   always M-step-owned, always exclude it from SGD. A `noise_schedule` that
+   modifies `noise_free` cannot coexist silently with automatic Q M-steps:
+   reject that combination (or remove the Q-specific scheduling path)
+   rather than letting epoch M-steps overwrite scheduled values.
+
+6. **Apply the breaking config migration everywhere.** Update test
+   fixtures, examples, benchmarks, README/config snippets, `AGENTS.md`,
+   `docs/training.md`, and design documentation from
+
+   ```yaml
+   dyn_conf:
+     state_noise: 1.0
+   noise_prior: ...
+   noise_prior_dof: ...
+   ```
+
+   to
+
+   ```yaml
+   q_scale: 1.0
+   ```
+
+   Do not preserve old config or checkpoint compatibility.
+
+7. **Update the discriminative tests.** Verify that `q_scale=s` initializes
+   $Q=sI_d$; the direct Q M-step reference uses center $sI_d$ and
+   pseudocount $d+1$; `noise_free` is always optimizer-frozen; default
+   training makes one full-dataset joint M-step per epoch; and the existing
+   epoch/final-update deduplication behavior remains correct. Retain a test
+   that the epoch path produces and consumes `transition_stat` rather than
+   repeating transition propagation. Replace obsolete opt-in/
+   `noise_prior=None` cases.
+
+8. **Validate in order.** During implementation, run the scoped
+   distribution, smoother, trainer, and configuration-bearing tests; before
+   committing, run the full CPU suite. Then measure whether epoch cadence is
+   stable enough relative to the validated 8--20-epoch round cadence before
+   considering a separate `mstep_every_n_epochs` control. This cadence
+   question remains an empirical follow-up, not a reason to retain the
+   minibatch default.
+
 ## Dependencies
 
 - `transition_points.md`: **done** — shipped and `MVN` now defaults to
   `use_sigma_points=True`, closing Problem 1 by default. This plan's own
-  M-step statistic is explicitly *not* built on top of it (see Design).
-- The tracked `dyn_conf.state_noise` config-relocation fix: real, but
-  explicitly deferred.
+  M-step statistic is explicitly built on its point-propagation mechanism
+  through `transition_stat`, while keeping `core.py` family-agnostic.
+- The former `dyn_conf.state_noise` config-ownership leak is resolved by
+  the planned top-level `q_scale` migration above.
 - Deriving the exact lag-one/cross-covariance term (if a future ablation
   shows the v1 approximation insufficient) is new, XFADS-specific
   machinery, not a dependency on anything already planned elsewhere.
