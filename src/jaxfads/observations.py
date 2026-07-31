@@ -17,9 +17,9 @@ from jax import numpy as jnp
 from jax import random as jrnd
 from jax.scipy.linalg import cho_solve
 
-from .base import Observation
+from .base import Approx, Observation
 from .constraints import _EPS, _MIN_VARIANCE, constrain_positive, unconstrain_positive
-from .base import Approx
+from .distributions.mvn import MVN
 from .nn import StationaryLinear, VariantBiasLinear
 
 _MAX_LOGRATE = 7.0
@@ -370,7 +370,8 @@ class GLM(Observation):
                 "GLM requires `obs_conf._approx_name` to be injected by XFADS for "
                 "fail-fast Approx validation."
             )
-        if str(approx_name) != "MVN":
+        approx_cls = Approx.get_subclass(str(approx_name))
+        if not issubclass(approx_cls, MVN):
             raise NotImplementedError(
                 "GLM analytic eloglik currently supports only MVN approximations "
                 "(requires approx.unpack(moment) -> (mean, cov))."

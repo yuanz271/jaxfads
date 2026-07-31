@@ -1,12 +1,14 @@
+import equinox as eqx
 import jax
 import jax.numpy as jnp
+import optax
 import pytest
+from conftest import MockDynamics  # noqa: F401 - class registration side-effect
 from omegaconf import OmegaConf
 
-from jaxfads.smoother import XFADS
-from jaxfads.trainer import noise_schedule, train
 import jaxfads.observations  # noqa: F401 — register GLM subclass
-from conftest import MockDynamics  # noqa: F401 - class registration side-effect
+from jaxfads.smoother import XFADS
+from jaxfads.trainer import train
 
 
 @pytest.fixture
@@ -43,13 +45,14 @@ def model_conf():
             "fb_penalty": 0,
             "noise_penalty": 0.0,
             "dropout": 0.0,
+            "q_scale": 1.0,
+            "q_mstep": False,
             "dyn_conf": OmegaConf.create(
                 {
                     "width": 8,
                     "depth": 1,
                     "input_dim": 1,
                     "context_dim": 0,
-                    "state_noise": 1.0,
                 }
             ),
             "enc_conf": OmegaConf.create(
@@ -72,28 +75,6 @@ def model_conf():
     )
 
 
-def test_noise_schedule_sets_noise_free_to_scheduled_scale(model_conf, sample_data):
-    """``noise_schedule`` produces a callable that replaces ``noise_free``
-    with the free-form encoding of the scheduled scale, independent of the
-    model's current value."""
-    model = XFADS(model_conf, jax.random.key(0)).initialize(*sample_data)
-    approx = model.approx
-
-    schedule = noise_schedule(approx, q_hi=2.0, q_lo=0.005, transition_steps=100)
-
-    updated_0 = schedule(model, jnp.array(0, dtype=jnp.int32))
-    expected_0 = approx.free_from_kw(scale=2.0)
-    assert jnp.allclose(updated_0.noise_free, expected_0)
-
-    updated_end = schedule(model, jnp.array(100, dtype=jnp.int32))
-    expected_end = approx.free_from_kw(scale=0.005)
-    assert jnp.allclose(updated_end.noise_free, expected_end)
-
-    # Holds at q_lo beyond transition_steps (end_value clamping).
-    updated_past_end = schedule(model, jnp.array(500, dtype=jnp.int32))
-    assert jnp.allclose(updated_past_end.noise_free, expected_end)
-
-
 def test_train_with_param_schedule_anneals_noise_free(model_conf, sample_data):
     """``train(..., param_schedule=...)`` drives noise_free through the
     schedule during training; the final model reflects the scheduled Q, and
@@ -106,9 +87,14 @@ def test_train_with_param_schedule_anneals_noise_free(model_conf, sample_data):
     n_batches_per_epoch = sample_data[0].shape[0] // batch_size
     total_steps = max_epoch * n_batches_per_epoch
 
-    schedule = noise_schedule(
-        approx, q_hi=2.0, q_lo=0.01, transition_steps=total_steps - 1
+    decay = optax.exponential_decay(
+        2.0, total_steps - 1, 0.01 / 2.0, end_value=0.01
     )
+
+    def schedule(m, step):
+        return eqx.tree_at(
+            lambda x: x.noise_free, m, approx.free_from_kw(scale=decay(step))
+        )
     conf = OmegaConf.create(
         {
             "max_epoch": max_epoch,
@@ -141,7 +127,9 @@ def test_param_schedule_without_freeze_paths_gets_fought_by_optimizer(
     conf = OmegaConf.create(
         {"max_epoch": 3, "batch_size": 5, "seed": 0, "freeze_paths": []}
     )
-    schedule = noise_schedule(approx, q_hi=1.0, q_lo=1.0, transition_steps=1)
+    def schedule(m, step):
+        del step
+        return eqx.tree_at(lambda x: x.noise_free, m, approx.free_from_kw(scale=1.0))
 
     trained = train(model, sample_data, conf=conf, param_schedule=schedule)
     expected = approx.free_from_kw(scale=1.0)

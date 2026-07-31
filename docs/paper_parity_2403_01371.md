@@ -51,9 +51,9 @@ paper's method.
   (`src/jaxfads/base.py`, `src/jaxfads/distributions/mvn.py`,
   `src/jaxfads/smoother.py`,
   [docs/mstep_dynamics_noise.md](mstep_dynamics_noise.md)) provide an
-  alternative to the paper's joint-gradient-descent treatment of `R`/`Q`,
-  used opt-in (via `conf.freeze_paths` for `R`, `conf.noise_prior`/
-  `conf.noise_prior_dof` for `Q`) rather than by default. This is
+  alternative to the paper's joint-gradient-descent treatment of `R`/`Q`.
+  `R` is always M-step updated; `Q` is controlled by top-level
+  `conf.q_mstep` (default `true`) and initialized by `conf.q_scale`. This is
   narrower than the classical vEM the paper considers and rejects: only
   `R`/`Q` are ever updated this way, never `θ`/`ψ`/`φ` as a whole, and
   gradient descent on the remaining parameters continues throughout

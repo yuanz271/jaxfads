@@ -1,16 +1,24 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-import jax
-from jax import Array, random as jr
-from jax import numpy as jnp
-from omegaconf import OmegaConf, DictConfig
 import chex
 import equinox as eqx
 import pytest
-from jaxfads.base import Encoder
-from jaxfads.smoother import XFADS
 from conftest import MockDynamics  # noqa: F401 - class registration side-effect
+from jax import Array
+from jax import numpy as jnp
+from jax import random as jr
+from omegaconf import DictConfig, OmegaConf
+
+from jaxfads.base import Approx, Encoder
+from jaxfads.distributions.mvn import MVN
+from jaxfads.smoother import XFADS
+
+
+class UnsupportedShrinkMVN(MVN):
+    """Forward-capable Approx whose Q M-step is deliberately unsupported."""
+
+    shrink = Approx.shrink
 
 
 class IdentityEncoder(Encoder):
@@ -30,7 +38,7 @@ def test_constructor():
     y_size = 10
     z_size = 2
     u_size = 1
-    state_noise = 1.0
+    q_scale = 1.0
     mc_size = 10
     seed = 0
     likelihood = "Poisson"
@@ -55,6 +63,7 @@ def test_constructor():
             fb_penalty=0,
             noise_penalty=0,
             dropout=dropout,
+            q_scale=q_scale,
             dyn_conf=OmegaConf.create(
                 dict(
                     width=width,
@@ -63,7 +72,6 @@ def test_constructor():
                     dropout=dropout,
                     input_dim=u_size,
                     context_dim=0,
-                    state_noise=state_noise,
                         )
             ),
             enc_conf=OmegaConf.create(
@@ -120,13 +128,8 @@ def test_constructor_accepts_dynamics_and_integrator_keys():
             fb_penalty=0,
             noise_penalty=0,
             dropout=0.0,
-            dyn_conf=OmegaConf.create(
-                dict(
-                    input_dim=0,
-                    context_dim=0,
-                    state_noise=1.0,
-                        )
-            ),
+            q_scale=1.0,
+            dyn_conf=OmegaConf.create(dict(input_dim=0, context_dim=0)),
             enc_conf=OmegaConf.create(dict(width=8, depth=1, dropout=0.0)),
             obs_conf=OmegaConf.create(
                 dict(
@@ -171,13 +174,13 @@ def test_top_level_dims_override_subconfig_dims():
             fb_penalty=0,
             noise_penalty=0,
             dropout=0.0,
+            q_scale=1.0,
             dyn_conf=OmegaConf.create(
                 dict(
                     state_dim=999,
                     observation_dim=999,
                     input_dim=u_size,
                     context_dim=0,
-                    state_noise=1.0,
                         )
             ),
             enc_conf=OmegaConf.create(
@@ -259,13 +262,8 @@ def test_mode_smoke_forward_pass(mode, approx_kwargs):
             fb_penalty=0,
             noise_penalty=0,
             dropout=0.0,
-            dyn_conf=OmegaConf.create(
-                dict(
-                    input_dim=0,
-                    context_dim=0,
-                    state_noise=1.0,
-                        )
-            ),
+            q_scale=1.0,
+            dyn_conf=OmegaConf.create(dict(input_dim=0, context_dim=0)),
             enc_conf=OmegaConf.create(
                 dict(
                     width=8,
@@ -320,13 +318,8 @@ def test_invalid_mode_error_lists_filter_smooth_causal():
             fb_penalty=0,
             noise_penalty=0,
             dropout=0.0,
-            dyn_conf=OmegaConf.create(
-                dict(
-                    input_dim=0,
-                    context_dim=0,
-                    state_noise=1.0,
-                        )
-            ),
+            q_scale=1.0,
+            dyn_conf=OmegaConf.create(dict(input_dim=0, context_dim=0)),
             enc_conf=OmegaConf.create(dict(width=8, depth=1, dropout=0.0)),
             obs_conf=OmegaConf.create(
                 dict(
@@ -372,13 +365,8 @@ def test_filter_mode_skips_beta_encoder():
             fb_penalty=0,
             noise_penalty=0,
             dropout=0.0,
-            dyn_conf=OmegaConf.create(
-                dict(
-                    input_dim=0,
-                    context_dim=0,
-                    state_noise=1.0,
-                        )
-            ),
+            q_scale=1.0,
+            dyn_conf=OmegaConf.create(dict(input_dim=0, context_dim=0)),
             enc_conf=OmegaConf.create(dict(width=8, depth=1, dropout=0.0)),
             obs_conf=OmegaConf.create(
                 dict(
@@ -434,13 +422,8 @@ def test_xfads_nofilt_mode():
             noise_penalty=0,
             dropout=0.0,
             nofilt_eps=1e-6,
-            dyn_conf=OmegaConf.create(
-                dict(
-                    input_dim=0,
-                    context_dim=0,
-                    state_noise=1.0,
-                        )
-            ),
+            q_scale=1.0,
+            dyn_conf=OmegaConf.create(dict(input_dim=0, context_dim=0)),
             enc_conf=OmegaConf.create(
                 dict(alpha_encoder="IdentityEncoder", width=8, depth=1, dropout=0.0)
             ),
@@ -473,51 +456,61 @@ def test_xfads_nofilt_mode():
     assert jnp.isfinite(prior_mom).all()
 
 
-def _gaussian_model(T, y_size, z_size, *, noise_prior=None, noise_prior_dof=None):
-    conf_dict = dict(
-        mode="smooth",
-        observation_dim=y_size,
-        state_dim=z_size,
-        dynamics="MockDynamics",
-        integrator="Identity",
-        approx="MVN",
-        approx_kwargs={},
-        mc_size=2,
-        seed=0,
-        n_steps=T,
-        fb_penalty=0,
-        noise_penalty=0,
-        dropout=0.0,
-        dyn_conf=OmegaConf.create(dict(input_dim=0, context_dim=0, state_noise=1.0)),
-        enc_conf=OmegaConf.create(dict(width=8, depth=1, dropout=0.0)),
-        obs_conf=OmegaConf.create(
-            dict(
+def _gaussian_model(
+    T, y_size, z_size, *, q_scale=1.0, q_mstep=True, approx="MVN"
+):
+    model_conf = OmegaConf.create(
+        dict(
+            mode="smooth",
+            observation_dim=y_size,
+            state_dim=z_size,
+            dynamics="MockDynamics",
+            integrator="Identity",
+            approx=approx,
+            approx_kwargs={},
+            mc_size=2,
+            seed=0,
+            n_steps=T,
+            fb_penalty=0,
+            noise_penalty=0,
+            dropout=0.0,
+            q_scale=q_scale,
+            q_mstep=q_mstep,
+            dyn_conf=dict(input_dim=0, context_dim=0),
+            enc_conf=dict(width=8, depth=1, dropout=0.0),
+            obs_conf=dict(
                 model="GLM",
                 likelihood="Gaussian",
                 cov=[1e-3] * y_size,
                 norm_readout=False,
                 readout_init="fa",
                 readout_init_conf=dict(obs_noise_var=0.0),
-            )
-        ),
+            ),
+        )
     )
-    if noise_prior is not None:
-        conf_dict["noise_prior"] = noise_prior
-    if noise_prior_dof is not None:
-        conf_dict["noise_prior_dof"] = noise_prior_dof
-    model_conf = OmegaConf.create(conf_dict)
     return XFADS(model_conf, jr.key(0))
 
 
-def test_mstep_no_noise_prior_updates_observation_only():
-    """XFADS.mstep updates observation only when conf.noise_prior/
-    conf.noise_prior_dof are unset (the default) -- noise_free stays
-    untouched -- matching observations.mstep_observation_cov's own
-    behavior. XFADS.mstep's call signature takes no prior argument at all
-    -- this is entirely a conf-driven decision."""
-    T, y_size, z_size = 5, 4, 3
-    model = _gaussian_model(T, y_size, z_size)
+def test_q_scale_initializes_isotropic_q():
+    """q_scale initializes Q to q_scale times identity."""
+    model = _gaussian_model(5, 4, 3, q_scale=0.25)
+    _mean, q = model.approx.unpack(
+        model.approx.canon_to_moment(model.approx.free_to_canon(model.noise_free))
+    )
+    chex.assert_trees_all_close(q, 0.25 * jnp.eye(3), atol=1e-5)
 
+
+@pytest.mark.parametrize("q_scale", [0.0, -1.0, float("nan"), float("inf")])
+def test_q_scale_must_be_positive_and_finite(q_scale):
+    """q_scale is a scalar process variance, not an arbitrary scale."""
+    with pytest.raises(ValueError, match="positive finite variance"):
+        _gaussian_model(5, 4, 3, q_scale=q_scale)
+
+
+def test_q_mstep_false_updates_observation_only():
+    """q_mstep=false leaves Q untouched while still updating R."""
+    T, y_size, z_size = 5, 4, 3
+    model = _gaussian_model(T, y_size, z_size, q_mstep=False)
     times = jnp.broadcast_to(jnp.arange(T), (2, T))
     y = jr.normal(jr.key(1), (2, T, y_size))
     u = jnp.zeros((2, T, 0))
@@ -533,55 +526,40 @@ def test_mstep_no_noise_prior_updates_observation_only():
     chex.assert_trees_all_close(new_model.noise_free, model.noise_free)
 
 
-def test_mstep_noise_prior_configured_updates_both_observation_and_noise():
-    """XFADS.mstep updates both observation (via Observation.mstep) and
-    noise_free (via approx.shrink) when conf.noise_prior/
-    conf.noise_prior_dof are set, returning a finite, valid covariance for
-    noise_free."""
+def test_q_mstep_false_does_not_require_shrink_support():
+    """Unsupported Approx raises only when q_mstep is enabled."""
     T, y_size, z_size = 5, 4, 3
-    model = _gaussian_model(T, y_size, z_size, noise_prior=1.0, noise_prior_dof=0.1)
+    times = jnp.broadcast_to(jnp.arange(T), (2, T))
+    y = jr.normal(jr.key(1), (2, T, y_size))
+    u = jnp.zeros((2, T, 0))
+    c = jnp.zeros((2, T, 0))
 
+    disabled = _gaussian_model(
+        T, y_size, z_size, q_mstep=False, approx="UnsupportedShrinkMVN"
+    ).initialize(times, y, u, c)
+    disabled.mstep(times, y, u, c, key=jr.key(2))
+
+    enabled = _gaussian_model(
+        T, y_size, z_size, q_mstep=True, approx="UnsupportedShrinkMVN"
+    ).initialize(times, y, u, c)
+    with pytest.raises(NotImplementedError):
+        enabled.mstep(times, y, u, c, key=jr.key(2))
+
+
+def test_q_mstep_uses_q_scale_center_and_state_dim_plus_one():
+    """q_mstep passes shrink the fixed prior (q_scale, state_dim + 1)."""
+    T, y_size, z_size = 5, 4, 3
+    model = _gaussian_model(T, y_size, z_size, q_scale=0.7)
     times = jnp.broadcast_to(jnp.arange(T), (2, T))
     y = jr.normal(jr.key(1), (2, T, y_size))
     u = jnp.zeros((2, T, 0))
     c = jnp.zeros((2, T, 0))
     model = model.initialize(times, y, u, c)
 
+    _natural, moment, _predicted, transition_stat = model(times, y, u, c, key=jr.key(2))
+    expected_noise_free = model.approx.shrink(
+        moment, transition_stat, (0.7, z_size + 1)
+    )
     new_model = model.mstep(times, y, u, c, key=jr.key(2))
 
-    assert not jnp.allclose(
-        new_model.observation.likelihood.unconstrained_cov,
-        model.observation.likelihood.unconstrained_cov,
-    )
-    assert not jnp.allclose(new_model.noise_free, model.noise_free)
-
-    approx = model.approx
-    canon = approx.free_to_canon(new_model.noise_free)
-    cov = canon.chol @ canon.chol.T
-    assert jnp.all(jnp.isfinite(cov))
-    chex.assert_trees_all_close(cov, cov.T, atol=1e-5)
-
-
-def test_noise_prior_is_not_trainable():
-    """noise_prior must never be picked up as a trainable leaf by
-    train()'s own eqx.filter(model, eqx.is_inexact_array) -- it's a fixed
-    hyperparameter, not something to differentiate through. Marked
-    eqx.field(static=True), so it's structurally excluded (part of the
-    pytree's aux data/treedef, not a leaf) rather than relying on
-    freeze_paths to protect it."""
-    T, y_size, z_size = 5, 4, 3
-    model = _gaussian_model(T, y_size, z_size, noise_prior=1.0, noise_prior_dof=0.1)
-
-    assert model.noise_prior == (1.0, 0.1)
-    assert isinstance(model.noise_prior[0], float)
-
-    params = eqx.filter(model, eqx.is_inexact_array)
-    assert params.noise_prior == (1.0, 0.1)  # untouched: not a leaf at all
-
-    # Two independently constructed models with the same noise_prior
-    # config must produce equal treedefs (confirms hashability -- a
-    # prerequisite for JIT caching over a static field).
-    other = _gaussian_model(T, y_size, z_size, noise_prior=1.0, noise_prior_dof=0.1)
-    _, treedef1 = jax.tree_util.tree_flatten(model)
-    _, treedef2 = jax.tree_util.tree_flatten(other)
-    assert treedef1 == treedef2
+    chex.assert_trees_all_close(new_model.noise_free, expected_noise_free)

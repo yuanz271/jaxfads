@@ -10,8 +10,8 @@ mode), and **standalone functions** (`mstep_gaussian_cov`,
 `mstep_observation_cov`) for manual, full-dataset, or chunked use outside of
 `train()`. Both paths are validated against real downstream training (see
 Validation performed below), including a real-data comparison of both
-`mstep_mode` values confirming `"minibatch"` (the default) as both simpler
-and empirically faster, with equivalent quality to `"epoch"`.
+`mstep_mode` values. The library defaults to the full-dataset `"epoch"`
+update; `"minibatch"` remains an explicit lower-cost option.
 
 See also: [Training](training.md), [Algorithm](algorithm.md).
 
@@ -101,7 +101,7 @@ Implementation (`src/jaxfads/base.py`, `src/jaxfads/observations.py`,
   `Observation` overriding `mstep` (a no-op otherwise, e.g. for `Poisson`).
   Not called by `train()` itself (see below) — a manual-use utility only.
 - `train()` / `_run_training_loop()`'s `mstep_mode: {"minibatch", "epoch"} =
-  "minibatch"` — cadence for the always-on update, talking only through the
+  "epoch"` — cadence for the always-on update, talking only through the
   `Observation` ABC's `mstep` interface directly (not by calling
   `mstep_observation_cov` — `trainer.py` never imports anything from
   `observations.py`, the concrete-implementations module, keeping the
@@ -109,7 +109,7 @@ Implementation (`src/jaxfads/base.py`, `src/jaxfads/observations.py`,
   - `"minibatch"`: every `train_step` calls `model.mstep(t, y, u, c,
     key=...)` (via a shared, pure `_do_mstep` helper) computed from that
     minibatch's own forward pass. `XFADS.mstep` composes both this
-    `Observation` update and, if `conf.noise_prior` is configured, the
+    `Observation` update and, when `conf.q_mstep` is true, the
     transition-noise `Q` update — see
     [mstep_dynamics_noise](mstep_dynamics_noise.md) for that half; this
     document only covers `R`.
@@ -165,8 +165,8 @@ no way to opt out and fall back to gradient-based `R` (a deliberate
 simplicity choice). `mstep_mode` only controls *when* the update fires:
 
 ```python
-trained = train(model, data, conf=trainer_conf)  # mstep_mode="minibatch" (default)
-trained = train(model, data, conf=trainer_conf, mstep_mode="epoch")
+trained = train(model, data, conf=trainer_conf)  # mstep_mode="epoch" (default)
+trained = train(model, data, conf=trainer_conf, mstep_mode="minibatch")
 ```
 
 `"minibatch"`: each minibatch's estimate is a noisy sample of the same
@@ -220,7 +220,7 @@ manually for *this* pattern — only `train()`'s own automatic mechanism
     `test_mstep_frozen_paths_always_excluded_from_gradients`,
     `test_mstep_composes_with_on_epoch_end`,
     `test_mstep_composes_with_user_freeze_paths` — the always-on update
-    (default `mstep_mode="minibatch"`) moves `R` away from a
+    (default `mstep_mode="epoch"`) moves `R` away from a
     deliberately-wrong init with no configuration, gradient descent never
     fights it (verified against an independent `mstep` call, within the
     model's inherent Monte Carlo sampling tolerance), and `on_epoch_end`/a
@@ -248,11 +248,7 @@ manually for *this* pattern — only `train()`'s own automatic mechanism
   `mstep_mode` values were run on the same real campaign and compared.
   Quality was equivalent between modes (final loss and `cov_min` differed
   only trivially, within noise); `"minibatch"` was substantially faster in
-  wall-clock despite calling `mstep` far more often, because it's fused
-  into the same continuously-JIT-compiled `train_step` rather than
-  dispatching a separate full-dataset forward pass each time (as
-  `"epoch"` does). Confirms `mstep_mode="minibatch"` (jaxfads's own
-  default) as the right default: no quality/speed tradeoff to make.
+  wall-clock, while `"epoch"` supplies the default full-dataset update.
   Specific figures are project-specific data and intentionally not
   reproduced here.
 
@@ -269,9 +265,8 @@ manually for *this* pattern — only `train()`'s own automatic mechanism
    exploit this M-step addresses. Both are needed; neither supersedes the
    other.
 3. ~~Real-data validation of the `train()`-integrated update~~ — **done**:
-   see Validation performed above. `mstep_mode="minibatch"` confirmed as
-   both simpler and empirically faster, with equivalent quality to
-   `"epoch"`.
+   see Validation performed above. `"minibatch"` remains available as an
+   explicit lower-cost option; the default is `mstep_mode="epoch"`.
 4. ~~Whether an occasional, exact full-dataset recompute on top of the
    per-minibatch update would be worth adding back~~ — **done**: `mstep_mode
    ="epoch"` gives an exact per-epoch recompute, and the guaranteed final
@@ -305,7 +300,7 @@ manually for *this* pattern — only `train()`'s own automatic mechanism
   `mstep_every_n_epochs` parameter to an unconditional, per-minibatch
   update built directly into `train_step`; removed the intermediate
   parameter entirely.
-- `4123fc8` — added `mstep_mode: {"minibatch", "epoch"} = "minibatch"` and
+- `4123fc8` — added `mstep_mode: {"minibatch", "epoch"}` and
   the guaranteed final full-dataset update after the last epoch regardless
   of mode; purged 5 low-value tests, added 2 new `mstep_mode` tests.
 - `57786a0` — unrelated to this feature: `AGENTS.md` testing-workflow policy update.

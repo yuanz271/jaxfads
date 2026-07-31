@@ -1,16 +1,21 @@
 # Plan: M-step for transition/process noise (`mstep` on the noise-owning component)
 
-Status: **empirically validated on synthetic data (known-z and latent-z
-Lorenz), not yet implemented in the library.** Two independent experiments
+Status: **implemented and empirically validated on synthetic data
+(known-z and latent-z Lorenz).** Two independent experiments
 (`benchmarks/mstep_known_z_baseline.py`, `benchmarks/mstep_lorenz_latent.py`)
-both support the same mechanism: keep `Q` inside the training loss (never
-fully decoupled), update it periodically via a **MAP-shrunk M-step toward a
-genuinely informative prior** rather than either free gradient descent or
-a numerical-safety-only floor. This reverses an earlier draft of this plan
-(see Design) that concluded the prior should be non-informative. Remaining
-work before implementation: multi-seed replication (only single-seed runs
-so far), broader system coverage (only Lorenz tested; VDP/oscillator-bank
-not yet run), and the actual `train()` integration.
+support the same mechanism: keep `Q` inside the training loss (never fully
+decoupled), update it periodically via a **MAP-shrunk M-step toward a
+genuinely informative prior** rather than either free gradient descent or a
+numerical-safety-only floor. This reverses an earlier draft of this plan
+(see Design) that concluded the prior should be non-informative.
+
+The current public configuration is top-level `q_scale` (positive Q
+variance) and `q_mstep` (default `true`). `q_scale` initializes Q and, when
+`q_mstep=true`, centers its M-step prior; the prior pseudocount is derived as
+`state_dim + 1`. `q_mstep=false` leaves Q SGD-managed. The default joint R/Q
+M-step cadence is full-dataset `mstep_mode="epoch"`; explicit
+`mstep_mode="minibatch"` remains experimental. The old configuration names
+appearing below are retained only as historical design record.
 
 See also: [mstep_gaussian_cov](mstep_gaussian_cov.md), [transition_points](transition_points.md).
 
@@ -900,9 +905,10 @@ full suite (133 tests), and `train()` integration has already landed.
   backstop) is still needed given how well the alternating-EM mechanism
   performed without it in these experiments, or can be dropped.
 
-## Approved next implementation plan: canonical Q scale and epoch-level joint M-step
+## Implemented configuration migration: canonical Q scale and epoch-level joint M-step
 
-This is the agreed next change. It makes the Q-prior scale canonical while
+**Implemented.** The following records the agreed migration and its final
+semantics. It makes the Q-prior scale canonical while
 retaining an explicit switch for whether Q is currently MAP-updated or
 SGD-updated. It is a breaking configuration/checkpoint migration: old
 `dyn_conf.state_noise`, `noise_prior`, and `noise_prior_dof` settings are

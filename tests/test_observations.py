@@ -4,6 +4,7 @@ import chex
 import equinox as eqx
 import jax
 import pytest
+from conftest import MockDynamics  # noqa: F401 - class registration side-effect
 from jax import numpy as jnp
 from jax import random as jrnd
 from omegaconf import OmegaConf
@@ -12,7 +13,6 @@ from jaxfads.constraints import unconstrain_positive
 from jaxfads.distributions import MVN
 from jaxfads.observations import GLM, mstep_gaussian_cov
 from jaxfads.smoother import XFADS
-from conftest import MockDynamics  # noqa: F401 - class registration side-effect
 
 
 def _poisson_conf(state_dim: int, observation_dim: int, *, n_steps: int = 0):
@@ -155,7 +155,8 @@ def _xfads_gaussian_model(*, state_dim, observation_dim, T, seed=0):
             fb_penalty=0,
             noise_penalty=0,
             dropout=0.0,
-            dyn_conf=OmegaConf.create(dict(input_dim=0, context_dim=0, state_noise=1.0)),
+            q_scale=1.0,
+            dyn_conf=OmegaConf.create(dict(input_dim=0, context_dim=0)),
             enc_conf=OmegaConf.create(dict(width=8, depth=1, dropout=0.0)),
             obs_conf=OmegaConf.create(
                 dict(

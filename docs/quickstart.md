@@ -28,10 +28,11 @@ conf = OmegaConf.create(
         "approx_kwargs": {},  # rank defaults to state_dim (full); use {"rank": r} for low-rank
         "dynamics": "OU",
         "integrator": "Euler",
+        "q_scale": 1.0,  # positive initial process-noise variance
+        "q_mstep": True,  # MAP Q update after each epoch (the default)
         "dyn_conf": {
             "theta": 2.0,
             "dt": 0.05,
-            "state_noise": 1.0,
             "input_dim": 0,
             "context_dim": 0,
         },

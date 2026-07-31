@@ -1,14 +1,14 @@
+import chex
+import equinox as eqx
 import jax
 import jax.numpy as jnp
-import chex
 import pytest
-import equinox as eqx
+from conftest import MockDynamics  # noqa: F401 - class registration side-effect
 from omegaconf import OmegaConf
 
+import jaxfads.observations  # noqa: F401 — register GLM subclass
 from jaxfads.smoother import XFADS
 from jaxfads.trainer import batch_loss, train
-import jaxfads.observations  # noqa: F401 — register GLM subclass
-from conftest import MockDynamics  # noqa: F401 - class registration side-effect
 
 
 @pytest.fixture
@@ -45,13 +45,14 @@ def model_conf():
             "fb_penalty": 0,
             "noise_penalty": 0.0,
             "dropout": 0.0,
+            "q_scale": 1.0,
+            "q_mstep": False,
             "dyn_conf": OmegaConf.create(
                 {
                     "width": 8,
                     "depth": 1,
                     "input_dim": 1,
                     "context_dim": 0,
-                    "state_noise": 1.0,
                                 }
             ),
             "enc_conf": OmegaConf.create(

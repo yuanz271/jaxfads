@@ -16,11 +16,11 @@ import jax
 import jax.numpy as jnp
 import jax.random as jr
 import numpy as np
-from omegaconf import OmegaConf
 import tensorflow_probability.substrates.jax.distributions as tfp
+from omegaconf import OmegaConf
 
 from jaxfads import XFADS
-from jaxfads.base import Encoder, Observation, Approx, Dynamics
+from jaxfads.base import Approx, Dynamics, Encoder, Observation
 from jaxfads.distributions import MVN
 from jaxfads.trainer import EpochHandler, train, train_test_split
 
@@ -195,8 +195,8 @@ def nofilt_training_comparison():
             "integrator": "Identity",
             "dropout": 0.0,
             "nofilt_eps": 1e-6,
+            "q_scale": 0.1,
             "dyn_conf": {
-                            "state_noise": 0.1,
                 "input_dim": 0,
                 "context_dim": 0,
             },

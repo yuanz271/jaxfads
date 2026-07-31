@@ -120,7 +120,7 @@ def main() -> None:
     p.add_argument("--max-epoch", type=int, default=40)
     p.add_argument("--batch-size", type=int, default=32)
     p.add_argument("--out-dir", type=str, default="benchmarks/results/highd_oscillator")
-    p.add_argument("--freeze-state-noise", action="store_true")
+    p.add_argument("--q-mstep", action="store_true")
     args = p.parse_args()
 
     configure_logging("INFO")
@@ -226,13 +226,14 @@ def main() -> None:
                             if mc_size_override is not None
                             else dim + 1
                         ),
+                        "q_scale": 0.1,
+                        "q_mstep": bool(args.q_mstep),
                         "dyn_conf": {
                             "input_dim": 0,
                             "context_dim": 0,
                             "fn_path": "benchmark_highd_oscillator:oscillator_bank_dynamics",
                             "fn_kwargs": {},
                             "dt": args.dt,
-                                            "state_noise": 0.1,
                         },
                         "enc_conf": {
                             "width": 64,
@@ -256,7 +257,6 @@ def main() -> None:
                         "learning_rate": 1e-3,
                         "max_epoch": args.max_epoch,
                         "batch_size": args.batch_size,
-                        "freeze_state_noise": bool(args.freeze_state_noise),
                     }
                 )
 

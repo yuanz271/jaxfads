@@ -29,7 +29,6 @@ from jaxfads.nn import make_mlp
 from jaxfads.observations import GLM  # noqa: F401 — registers GLM
 from jaxfads.trainer import EpochHandler, train, train_test_split
 
-
 # ---------------------------------------------------------------------------
 # Van der Pol dynamics
 # ---------------------------------------------------------------------------
@@ -99,7 +98,7 @@ class MLPDynamics(Dynamics):
 
     The MLP learns the continuous-time derivative ``f(z)``,
     and ``eval`` returns that derivative ``f(z)``.
-    Noise is auto-initialised by XFADS via ``state_noise`` in dyn_conf.
+    Process noise is initialized by XFADS from top-level ``q_scale``.
     """
 
     net: enn.Sequential
@@ -511,6 +510,7 @@ def main() -> None:
         fb_penalty=0.0,
         noise_penalty=0.01,
         dropout=0.0,
+        q_scale=1.0,
         enc_conf=enc_conf,
         obs_conf=obs_conf,
     )
@@ -558,7 +558,6 @@ def main() -> None:
             "dyn_conf": dict(
                 input_dim=0,
                 context_dim=0,
-                state_noise=1.0,
                 width=32,
                 depth=1,
                 dt=dt,
@@ -625,7 +624,6 @@ def main() -> None:
                 context_dim=0,
                 theta=2.0,
                 dt=dt,
-                        state_noise=1.0,
             ),
         }
     )
@@ -692,7 +690,6 @@ def main() -> None:
                 fn_path="__main__:vdp_dynamics",
                 fn_kwargs={"mu": mu},
                 dt=dt,
-                        state_noise=1.0,
             ),
         }
     )

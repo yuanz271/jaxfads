@@ -223,16 +223,15 @@ class Approx(SubclassRegistryMixin, ABC):
         family need define this meaningfully (e.g. a hypothetical
         discrete-state family might have no shrinkable dispersion concept
         at all). ``prior`` is a call argument (not construction-time
-        ``Approx`` config): it's owned by ``XFADS``'s own configuration
-        (``XFADS.noise_prior``, read via ``XFADS.mstep``), not by
+        ``Approx`` config): it's owned by ``XFADS``'s top-level configuration
+        (``q_scale`` and ``q_mstep``, read via ``XFADS.mstep``), not by
         ``Approx``, since ``Approx`` (``XFADS.approx``) is a stateless
         property freshly reconstructed on every access -- not a natural
         home for a specific model's chosen hyperparameter value.
 
         Default: not supported -- raises ``NotImplementedError``. Callers
-        (``XFADS.mstep``) only reach this when a prior has been
-        explicitly configured (opt-in via ``XFADS.noise_prior``), so a
-        loud failure here is preferable to silently returning something
+        (``XFADS.mstep``) only reach this when ``q_mstep`` is enabled, so
+        a loud failure here is preferable to silently returning something
         the wrong shape.
 
         Parameters

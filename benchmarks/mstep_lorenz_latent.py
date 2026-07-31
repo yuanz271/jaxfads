@@ -36,7 +36,6 @@ from jaxfads.nn import make_mlp
 from jaxfads.observations import GLM  # noqa: F401 -- registers GLM
 from jaxfads.trainer import EpochHandler, train, train_test_split
 
-
 # ---------------------------------------------------------------------------
 # Lorenz simulation with known process noise, plus a linear-Gaussian
 # observation model
@@ -230,8 +229,10 @@ def main():
         "fb_penalty": 0.0,
         "noise_penalty": 0.0,
         "dropout": 0.0,
+        "q_scale": 1.0,
+        "q_mstep": False,
         "dyn_conf": {"width": 64, "depth": 2, "input_dim": 0, "context_dim": 0,
-                     "state_noise": 1.0, "dt": DT},
+                     "dt": DT},
         "enc_conf": {"width": 64, "depth": 2, "dropout": None},
         "obs_conf": {"model": "GLM", "likelihood": "Gaussian",
                      "cov": [float(args.sigma_obs**2)] * args.obs_dim,
@@ -359,16 +360,11 @@ def main():
         shipped implementation reproduces Approach C's already-validated
         results, not just the prototype math.
 
-        conf.noise_prior/conf.noise_prior_dof are set once at construction
-        (XFADS.noise_prior is a static field, read once in __init__ -- see
-        docs/mstep_dynamics_noise.md) and never touched again; the round
-        loop only ever calls model.mstep(...), which reads self.noise_prior
-        internally."""
-        n_pairs = train_data[0].shape[0] * (train_data[0].shape[1] - 1)
-        prior_dof = prior_dof_frac * n_pairs
-        conf_with_prior = OmegaConf.merge(
-            conf, {"noise_prior": prior, "noise_prior_dof": prior_dof}
-        )
+        q_scale and q_mstep are set at construction. The library's fixed
+        M-step prior is (q_scale, state_dim + 1), so this benchmark's older
+        user-selected prior_dof argument is retained only for its label."""
+        del prior_dof_frac
+        conf_with_prior = OmegaConf.merge(conf, {"q_scale": prior, "q_mstep": True})
         model = XFADS(conf_with_prior, key_model).initialize(*train_data)
         approx = model.approx
         q_trace = []
@@ -408,24 +404,9 @@ def main():
         return dict(name=name, q_final=q_trace[-1], flow_rmse=rmse, post_rmse=post_rmse)
 
     def run_train_integrated(name, *, prior, prior_dof_frac, mstep_mode):
-        """Fully automatic path: a SINGLE train() call, conf.noise_prior/
-        conf.noise_prior_dof set at construction, mstep_mode controlling
-        the cadence -- no manual round loop, no manual freeze_paths, no
-        manual model.mstep(...) calls at all. Exercises the just-landed
-        train()-integration (train_step/apply_mstep now call model.mstep
-        instead of model.observation.mstep alone; noise_free is
-        auto-frozen from gradient descent whenever noise_prior is set).
-
-        This is the untested-cadence case flagged in
-        docs/mstep_dynamics_noise.md: mstep_mode='minibatch' (or 'epoch')
-        is far more frequent than the round-based cadence (every 8-20
-        epochs) actually validated by C/D above.
-        """
-        n_pairs = train_data[0].shape[0] * (train_data[0].shape[1] - 1)
-        prior_dof = prior_dof_frac * n_pairs
-        conf_with_prior = OmegaConf.merge(
-            conf, {"noise_prior": prior, "noise_prior_dof": prior_dof}
-        )
+        """Fully automatic path using top-level q_scale/q_mstep."""
+        del prior_dof_frac
+        conf_with_prior = OmegaConf.merge(conf, {"q_scale": prior, "q_mstep": True})
         model = XFADS(conf_with_prior, key_model).initialize(*train_data)
         approx = model.approx
 

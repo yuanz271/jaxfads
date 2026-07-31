@@ -1,15 +1,16 @@
-import pytest
-import jax
-import optax
-import numpy as np
-from jax import numpy as jnp, random as jrnd
 import chex
+import jax
+import numpy as np
+import optax
+import pytest
+from conftest import MockDynamics  # noqa: F401 - class registration side-effect
+from jax import numpy as jnp
+from jax import random as jrnd
 from omegaconf import OmegaConf
 
-from jaxfads.trainer import train
-from jaxfads.smoother import XFADS
 import jaxfads.observations  # noqa: F401 — register GLM subclass
-from conftest import MockDynamics  # noqa: F401 - class registration side-effect
+from jaxfads.smoother import XFADS
+from jaxfads.trainer import train
 
 
 @pytest.mark.parametrize("kl_warmup_steps", [0, 1, 4, 10])
@@ -84,13 +85,14 @@ def model_conf():
             "fb_penalty": 0,
             "noise_penalty": 0.01,
             "dropout": 0.0,
+            "q_scale": 1.0,
+            "q_mstep": False,
             "dyn_conf": OmegaConf.create(
                 {
                     "width": 8,
                     "depth": 1,
                     "input_dim": 1,
                     "context_dim": 0,
-                    "state_noise": 1.0,
                                 }
             ),
             "enc_conf": OmegaConf.create(
@@ -218,13 +220,13 @@ def test_train_lora_rank1_end_to_end(trainer_config, sample_data):
             "fb_penalty": 0,
             "noise_penalty": 0.01,
             "dropout": 0.0,
+            "q_scale": 0.1,
             "dyn_conf": OmegaConf.create(
                 {
                     "width": 8,
                     "depth": 1,
                     "input_dim": 1,
                     "context_dim": 0,
-                    "state_noise": 0.1,
                                 }
             ),
             "enc_conf": OmegaConf.create(
@@ -266,7 +268,7 @@ def test_train_lora_rank1_end_to_end(trainer_config, sample_data):
     assert jnp.isfinite(prior_mom).all()
 
 
-def test_train_freeze_paths_keeps_state_noise_fixed(
+def test_train_freeze_paths_keeps_noise_free_fixed(
     model_conf, trainer_config, sample_data
 ):
     """freeze_paths can freeze model.noise_free updates."""
@@ -312,7 +314,7 @@ def test_train_freeze_paths_invalid_path_raises(
 @pytest.fixture
 def gaussian_model_conf():
     """Minimal Gaussian-likelihood model configuration, for testing the
-    always-on per-minibatch mstep update (Poisson has no free covariance to
+    always-on M-step update (Poisson has no free covariance to
     estimate this way, so mstep is a no-op for it)."""
     return OmegaConf.create(
         {
@@ -329,13 +331,14 @@ def gaussian_model_conf():
             "fb_penalty": 0,
             "noise_penalty": 0.01,
             "dropout": 0.0,
+            "q_scale": 1.0,
+            "q_mstep": False,
             "dyn_conf": OmegaConf.create(
                 {
                     "width": 8,
                     "depth": 1,
                     "input_dim": 1,
                     "context_dim": 0,
-                    "state_noise": 1.0,
                 }
             ),
             "enc_conf": OmegaConf.create(
@@ -371,8 +374,8 @@ def gaussian_sample_data():
 
 
 def test_mstep_updates_r_unconditionally(gaussian_model_conf, trainer_config, gaussian_sample_data):
-    """Every minibatch, model.observation.mstep(...) must be applied
-    unconditionally (no flag) -- R must move substantially away from a
+    """The default epoch M-step updates R unconditionally -- R must move
+    substantially away from a
     deliberately-wrong initial value after training, with no special
     configuration required."""
     model = XFADS(gaussian_model_conf, jrnd.key(0))
@@ -424,7 +427,7 @@ def test_mstep_composes_with_on_epoch_end(
     gaussian_model_conf, trainer_config, gaussian_sample_data
 ):
     """A user-supplied on_epoch_end must keep working unmodified, independent
-    of the always-on per-minibatch mstep update -- no composition required
+    of the always-on M-step update -- no composition required
     from the caller."""
     model = XFADS(gaussian_model_conf, jrnd.key(0))
     trainer_config.max_epoch = 3
@@ -468,16 +471,11 @@ def test_mstep_composes_with_user_freeze_paths(
     )
 
 
-def test_mstep_updates_q_when_noise_prior_configured(
+def test_q_mstep_updates_q_and_freezes_noise_free(
     gaussian_model_conf, trainer_config, gaussian_sample_data
 ):
-    """When conf.noise_prior/conf.noise_prior_dof are set, train()'s
-    always-on model.mstep(...) must also update noise_free (via
-    Approx.shrink), unconditionally, with no separate flag -- mirroring
-    test_mstep_updates_r_unconditionally for R."""
-    conf = OmegaConf.merge(
-        gaussian_model_conf, {"noise_prior": 1.0, "noise_prior_dof": 5.0}
-    )
+    """q_mstep=true updates Q through shrink and auto-freezes noise_free."""
+    conf = OmegaConf.merge(gaussian_model_conf, {"q_scale": 1.0, "q_mstep": True})
     model = XFADS(conf, jrnd.key(0))
     noise0 = jax.device_get(model.noise_free)
 
@@ -489,19 +487,11 @@ def test_mstep_updates_q_when_noise_prior_configured(
     chex.assert_tree_all_finite(trained_model.noise_free)
 
 
-def test_noise_prior_configured_freezes_noise_free_from_gradient(
+def test_q_mstep_noise_free_matches_independent_mstep(
     gaussian_model_conf, trainer_config, gaussian_sample_data
 ):
-    """When conf.noise_prior is set, noise_free must be auto-excluded from
-    gradient descent -- no conf.freeze_paths entry required -- mirroring
-    test_mstep_frozen_paths_always_excluded_from_gradients for R. Verified
-    the same indirect way: noise_free after training must match what an
-    independent model.mstep call on the same data gives (up to mc_size=1
-    sampling noise from a different PRNG key), not perturbed by an
-    additional gradient-descent contribution on top."""
-    conf = OmegaConf.merge(
-        gaussian_model_conf, {"noise_prior": 1.0, "noise_prior_dof": 5.0}
-    )
+    """q_mstep=true excludes noise_free from SGD, leaving the M-step value."""
+    conf = OmegaConf.merge(gaussian_model_conf, {"q_scale": 1.0, "q_mstep": True})
     model = XFADS(conf, jrnd.key(0))
 
     trainer_config.max_epoch = 1
@@ -517,16 +507,13 @@ def test_noise_prior_configured_freezes_noise_free_from_gradient(
     )
 
 
-def test_no_noise_prior_leaves_noise_free_gradient_trained(
+def test_q_mstep_false_leaves_noise_free_gradient_trained(
     gaussian_model_conf, trainer_config, gaussian_sample_data
 ):
-    """Default behavior (conf.noise_prior unset) must be unaffected: without
-    a configured prior, noise_free is not frozen and continues to move via
-    ordinary gradient descent, exactly as before this integration -- a
-    regression guard for existing default behavior."""
-    model = XFADS(gaussian_model_conf, jrnd.key(0))
+    """q_mstep=false skips shrink and leaves noise_free SGD-managed."""
+    conf = OmegaConf.merge(gaussian_model_conf, {"q_scale": 1.0, "q_mstep": False})
+    model = XFADS(conf, jrnd.key(0))
     noise0 = jax.device_get(model.noise_free)
-    assert model.noise_prior is None
 
     trainer_config.max_epoch = 2
     trainer_config.batch_size = 16
@@ -535,7 +522,7 @@ def test_no_noise_prior_leaves_noise_free_gradient_trained(
     assert not jnp.allclose(jax.device_get(trained_model.noise_free), noise0, atol=1e-3)
 
 
-def test_mstep_epoch_mode_no_redundant_final_call(
+def test_default_mstep_mode_is_epoch_no_redundant_final_call(
     monkeypatch, gaussian_model_conf, trainer_config, gaussian_sample_data
 ):
     """mstep_mode="epoch" must call model.mstep(...) exactly once per
@@ -558,7 +545,7 @@ def test_mstep_epoch_mode_no_redundant_final_call(
     trainer_config.max_epoch = 3
     trainer_config.batch_size = 32  # single batch per epoch
 
-    train(model, gaussian_sample_data, conf=trainer_config, mstep_mode="epoch")
+    train(model, gaussian_sample_data, conf=trainer_config)
 
     assert call_count == 3, (
         f"expected exactly 3 model.mstep(...) calls (one per epoch, no "
@@ -613,7 +600,7 @@ def test_mstep_mode_epoch_updates_only_at_epoch_boundaries(
     # always adds _MIN_VARIANCE on top of the constrained config value).
     # device_get: train()'s donate="all" invalidates model's input buffers,
     # so materialize this value on host first (same convention as
-    # test_train_freeze_paths_keeps_state_noise_fixed's noise0 capture).
+    # test_train_freeze_paths_keeps_noise_free_fixed's noise0 capture).
     wrong_cov = jax.device_get(model.observation.likelihood.cov())
 
     seen = []

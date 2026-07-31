@@ -44,10 +44,10 @@ conf = OmegaConf.create(
         "dynamics": "OU",       # or any dynamics model
         "integrator": "Euler",
         "dropout": 0.0,
+        "q_scale": 1.0,
         "dyn_conf": {
             "theta": 2.0,
             "dt": 0.05,
-            "state_noise": 1.0,
             "input_dim": 0,
             "context_dim": 0,
         },
@@ -250,8 +250,8 @@ integrator for discrete-time dynamics:
 ```python
 "dynamics": "Identity",
 "integrator": "Identity",
+"q_scale": 1.0,
 "dyn_conf": {
-    "state_noise": 1.0,
     "input_dim": 0,
     "context_dim": 0,
 },

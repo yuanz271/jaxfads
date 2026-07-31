@@ -12,7 +12,7 @@ class Identity(Dynamics):
 
     This dynamics contributes the deterministic identity mean map
     ``f(z_t) = z_t``; process noise remains configured on `XFADS` via
-    ``dyn_conf.state_noise``.
+    top-level ``q_scale``.
 
     Notes
     -----

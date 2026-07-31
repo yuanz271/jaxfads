@@ -7,22 +7,22 @@ tracking, and validation-based early stopping. The training is based on
 maximizing the Evidence Lower Bound (ELBO) objective.
 """
 
-from collections.abc import Callable
-from functools import partial
 import json
 import math
-from pathlib import Path
 import time
+from collections.abc import Callable
+from functools import partial
+from pathlib import Path
 
+import equinox as eqx
 import jax
 import optax
-import equinox as eqx
+from gearax.modules import save_model
 from jax import Array, lax
 from jax import numpy as jnp
 from jax import random as jr
 from jax import sharding as jshd
 from omegaconf import DictConfig, OmegaConf
-from gearax.modules import save_model
 from rich.progress import (
     MofNCompleteColumn,
     Progress,
@@ -34,7 +34,6 @@ from rich.progress import (
 
 from . import vi
 from .logging import get_logger
-
 
 logger = get_logger(__name__)
 
@@ -108,71 +107,6 @@ def train_test_split(arrays, *, rng, test_ratio=None, test_size=None, train_size
     return tuple(
         array[perm[test_size : train_size + test_size]] for array in arrays
     ), tuple(array[perm[:test_size]] for array in arrays)
-
-
-def noise_schedule(approx, *, q_hi, q_lo, transition_steps):
-    """Build a ``param_schedule`` that anneals process noise (Q) geometrically.
-
-    Returns a ``Callable[[model, step], model]`` suitable for
-    :func:`train`'s ``param_schedule`` argument, replacing ``model.noise_free``
-    at every step with the free-form encoding of scale
-    ``optax.exponential_decay(q_hi, transition_steps, q_lo / q_hi, end_value=q_lo)``
-    evaluated at that step. After ``transition_steps``, the schedule holds at
-    ``q_lo`` (``end_value`` clamping), so "anneal then hold" needs no separate
-    logic -- just train for more epochs than ``transition_steps`` covers.
-
-    Design note: the decay is computed in Q's **constrained (variance)**
-    units -- ``q_hi``/``q_lo`` are literal process-noise variances -- and only
-    converted to the free-form (unconstrained) parameterization as the final
-    step, via ``approx.free_from_kw(scale=q)``. This is deliberate: the
-    free-form encoding is a nonlinear reparameterization (e.g. a sqrt/inverse-
-    softplus-style transform), so geometrically interpolating the free-form
-    values directly would trace a different, distorted path through variance
-    space than the intended geometric decay in Q. When writing an analogous
-    schedule for a different constrained model attribute, anneal in the
-    attribute's natural (constrained) space and convert to free-form only at
-    the end, as done here.
-
-    Parameters
-    ----------
-    approx : Approx
-        The model's ``Approx`` instance (``model.approx``), used to encode the
-        scheduled scale into ``noise_free``'s free-form parameterization via
-        ``approx.free_from_kw(scale=...)``.
-    q_hi, q_lo : float
-        Initial and final process-noise scale.
-    transition_steps : int
-        Number of steps over which Q decays geometrically from ``q_hi`` to
-        ``q_lo``.
-
-    Returns
-    -------
-    Callable[[XFADS, Array], XFADS]
-        A function ``(model, step) -> model`` that sets ``model.noise_free``
-        to the scheduled value, leaving all other attributes unchanged.
-
-    Notes
-    -----
-    Pass the same ``noise_free`` path in ``conf.freeze_paths`` so the
-    optimizer's own gradient-based update does not fight the schedule::
-
-        schedule = noise_schedule(model.approx, q_hi=2.0, q_lo=0.005,
-                                   transition_steps=2400)
-        conf.freeze_paths = ["noise_free"]
-        model = train(model, train_data, conf=conf, param_schedule=schedule)
-    """
-    decay = optax.exponential_decay(
-        init_value=q_hi,
-        transition_steps=transition_steps,
-        decay_rate=q_lo / q_hi,
-        end_value=q_lo,
-    )
-
-    def schedule(model, step):
-        q = decay(step)
-        return eqx.tree_at(lambda m: m.noise_free, model, approx.free_from_kw(scale=q))
-
-    return schedule
 
 
 def batch_elbo(
@@ -540,7 +474,7 @@ def _run_training_loop(
     model_sharding,
     on_epoch_end=None,
     param_schedule=None,
-    mstep_mode="minibatch",
+    mstep_mode="epoch",
 ):
     """
     Run sharded training for a fixed number of epochs.
@@ -584,10 +518,10 @@ def _run_training_loop(
         gradient-based update does not fight the schedule.
     mstep_mode : {"minibatch", "epoch"}
         Cadence for ``model.mstep(...)``, which updates both
-        ``model.observation`` (unconditionally) and, if ``model.
-        noise_prior`` is set, ``noise_free`` (via ``Approx.shrink``).
-        ``"minibatch"`` (default): every ``train_step``, from that
-        minibatch's own forward pass. ``"epoch"``: once per completed
+        ``model.observation`` (unconditionally) and, when ``model.conf.
+        q_mstep`` is true, ``noise_free`` (via ``Approx.shrink``).
+        ``"minibatch"``: every ``train_step``, from that minibatch's own
+        forward pass. ``"epoch"`` (default): once per completed
         epoch, from a forward pass over the whole ``train_set``. Either
         way, mstep is also always applied once more, from a
         full-``train_set`` forward pass, immediately after the final
@@ -598,8 +532,8 @@ def _run_training_loop(
     -----
     The ``model.observation`` update is a no-op for ``Observation``/
     ``Likelihood`` implementations that don't override ``mstep`` (e.g.
-    ``Poisson``); the ``noise_free`` update is a no-op whenever ``model.
-    noise_prior`` is ``None`` (the default -- see ``XFADS.mstep``).
+    ``Poisson``); the ``noise_free`` update is a no-op whenever
+    ``model.conf.q_mstep`` is false (see ``XFADS.mstep``).
 
     Returns
     -------
@@ -648,13 +582,13 @@ def _run_training_loop(
         if mstep_mode == "minibatch":
             # model.mstep(...) computed from this minibatch alone: updates
             # model.observation (a no-op for Observations that don't
-            # override mstep, e.g. Poisson) and, if model.noise_prior is
-            # set, noise_free via Approx.shrink -- one call, one cadence,
+            # override mstep, e.g. Poisson) and, when model.conf.q_mstep
+            # is true, noise_free via Approx.shrink -- one call, one cadence,
             # for both. Runs outside the differentiated
             # eqx.filter_value_and_grad call above, so it never carries
             # gradients. Gradient descent never fights either update:
             # both observation.mstep's own touched paths and noise_free
-            # (when noise_prior is set) are excluded from the optimizer's
+            # (when q_mstep is true) are excluded from the optimizer's
             # trainable params below, mirroring the same freeze-path
             # pattern for both.
             key, mstep_key = jr.split(key)
@@ -698,7 +632,7 @@ def _run_training_loop(
         """Full-``train_set`` mstep update: ``model.mstep(...)`` from a
         forward pass over the whole dataset -- updates ``model.
         observation`` (a no-op for Observations that don't override
-        ``mstep``, e.g. Poisson) and, if ``model.noise_prior`` is set,
+        ``mstep``, e.g. Poisson) and, when ``model.conf.q_mstep`` is true,
         ``noise_free`` via ``Approx.shrink``.
         """
         nonlocal model, mstep_stale
@@ -781,7 +715,7 @@ def train(
     regularizer=None,
     optimizer=None,
     param_schedule=None,
-    mstep_mode="minibatch",
+    mstep_mode="epoch",
 ):
     """
     Training routine for XFADS models with multi-device support.
@@ -796,17 +730,13 @@ def train(
     ``mstep_mode`` below for the cadence), which updates ``model.
     observation`` (a no-op for ``Observation``/``Likelihood``
     implementations that don't override ``mstep``, e.g. ``Poisson``) and,
-    if ``model.noise_prior`` is set, ``noise_free`` (a no-op otherwise --
-    the default). For a Gaussian-likelihood model this means the
-    observation noise covariance ``R`` is always estimated via the
-    closed-form EM M-step, never by gradient descent --
-    ``model.observation.mstep_frozen_paths()`` is always excluded from the
-    optimizer automatically, with no ``conf.freeze_paths`` entry or opt-in
-    flag required. See [mstep_gaussian_cov](../docs/mstep_gaussian_cov.md)
-    for the rationale (this closed-form estimate is immune to a
-    Heywood-case degeneracy that gradient-based estimation of a Gaussian
-    observation covariance is prone to). When ``model.noise_prior`` is
-    set, the same auto-exclusion applies to ``noise_free`` -- see
+    when ``model.conf.q_mstep`` is true, ``noise_free``. For a
+    Gaussian-likelihood model this means the observation noise covariance
+    ``R`` is always estimated via the closed-form EM M-step, never by
+    gradient descent -- ``model.observation.mstep_frozen_paths()`` is always
+    excluded from the optimizer automatically, with no ``conf.freeze_paths``
+    entry or opt-in flag required. When ``q_mstep`` is true, the same
+    auto-exclusion applies to ``noise_free`` -- see
     [mstep_dynamics_noise](../docs/mstep_dynamics_noise.md).
 
     Parameters
@@ -847,8 +777,8 @@ def train(
         Optional ``param_schedule(model, step) -> model`` applied at the start
         of every step (before the loss/gradient computation), for driving a
         model attribute through a step-indexed schedule -- e.g. annealing the
-        process-noise scale via :func:`noise_schedule`. This is a general
-        mechanism, not specific to any one attribute: the trainer only calls
+        process-noise scale. This is a general mechanism, not specific to any
+        one attribute: the trainer only calls
         the function and does not interpret what it changes. The
         corresponding path(s) should also be listed in ``conf.freeze_paths``,
         otherwise the optimizer's own gradient-based update will fight the
@@ -856,26 +786,15 @@ def train(
         the raw gradient is itself zero).
     mstep_mode : {"minibatch", "epoch"}, optional
         Cadence for the always-on ``model.mstep(...)`` update described
-        above (both ``model.observation`` and, when configured,
-        ``noise_free``). ``"minibatch"`` (default): every ``train_step``,
-        from that minibatch's own forward pass. ``"epoch"``: once per
+        above (both ``model.observation`` and, when ``q_mstep`` is true,
+        ``noise_free``). ``"minibatch"``: every ``train_step``, from that
+        minibatch's own forward pass. ``"epoch"`` (default): once per
         completed epoch, from a forward pass over the whole ``train_data``.
         Either way, mstep is also always applied once more, from a full-
         ``train_data`` forward pass, immediately after the final epoch's
         gradient steps complete, right before returning (covers early stop
         via ``on_epoch_end`` and ``KeyboardInterrupt`` too, not just normal
         completion).
-
-        Note: the validated cadence for ``noise_free``'s MAP-shrinkage
-        (see [mstep_dynamics_noise](../docs/mstep_dynamics_noise.md)) was
-        round-based (every 8-20 epochs), coarser than either option here;
-        "minibatch"/"epoch" cadence for ``Q`` is not yet independently
-        validated at this frequency -- flagged as an open question, not a
-        blocker (the LL and KL terms are independent given a fixed
-        posterior, so the mechanism itself is well-defined at any cadence;
-        what's untested is whether frequent re-shrinkage from small
-        per-call statistics behaves the same as infrequent shrinkage from
-        large ones).
 
     Returns
     -------
@@ -939,11 +858,11 @@ def train(
     freeze_mask = jax.tree.map(lambda _: False, params)
     # Always exclude whatever model.observation.mstep touches from gradient
     # updates -- no conf.freeze_paths entry, no flag, required from the
-    # caller. mstep is applied to model.observation unconditionally, every
-    # minibatch (see train_step below), so gradient descent must never
+    # caller. mstep is applied to model.observation unconditionally at its
+    # configured cadence, so gradient descent must never
     # fight it, for any model (a no-op path list for Observations that
     # don't override mstep, e.g. Poisson). Same reasoning for noise_free
-    # whenever model.noise_prior is set: model.mstep's Q-shrinkage update
+    # whenever model.conf.q_mstep is true: model.mstep's Q-shrinkage update
     # would otherwise immediately overwrite whatever gradient descent just
     # computed for noise_free -- not a numerical-stability issue (the LL
     # and KL terms are independent given a fixed posterior, so computing
@@ -953,7 +872,7 @@ def train(
     freeze_paths = [str(p) for p in conf.freeze_paths] + [
         "observation." + p for p in model.observation.mstep_frozen_paths()
     ]
-    if model.noise_prior is not None:
+    if model.conf.get("q_mstep", True):
         freeze_paths = freeze_paths + ["noise_free"]
     for path in freeze_paths:
         parts = tuple(path.split("."))

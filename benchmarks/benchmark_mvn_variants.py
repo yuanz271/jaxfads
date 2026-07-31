@@ -87,7 +87,7 @@ def main() -> None:
     parser.add_argument("--seeds", type=str, default="0,1")
     parser.add_argument("--lora-ranks", type=str, default="1")
     parser.add_argument("--out-dir", type=str, default="benchmarks/results/vdp_smoke")
-    parser.add_argument("--freeze-state-noise", action="store_true")
+    parser.add_argument("--q-mstep", action="store_true")
     args = parser.parse_args()
 
     configure_logging("INFO")
@@ -121,13 +121,14 @@ def main() -> None:
         noise_penalty=0.01,
         dropout=0.0,
         mc_size=4,
+        q_scale=0.1,
+        q_mstep=bool(args.q_mstep),
         dyn_conf=dict(
             input_dim=0,
             context_dim=0,
             fn_path="vdp_example:vdp_dynamics",
             fn_kwargs={"mu": args.mu},
             dt=args.dt,
-                state_noise=0.1,
         ),
         enc_conf=dict(width=32, depth=2, dropout=None),
         obs_conf=dict(
@@ -145,7 +146,6 @@ def main() -> None:
         learning_rate=1e-3,
         max_epoch=args.max_epoch,
         batch_size=args.batch_size,
-        freeze_state_noise=bool(args.freeze_state_noise),
     )
 
     train_data, valid_data = train_test_split(

@@ -17,25 +17,17 @@
   covariance reaching the numerical floor while its true residual
   variance was ~10^6x larger). Always-on for Gaussian-likelihood models,
   no opt-in needed -- `train(..., mstep_mode="minibatch" | "epoch")`
-  (default `"minibatch"`) controls the update cadence, and a final update
+  (default `"epoch"`) controls the update cadence, and a final update
   is always applied once more after the last epoch. Standalone
   `mstep_gaussian_cov`/`mstep_observation_cov` are available for one-off
   recomputation outside `train()`. See `docs/mstep_gaussian_cov.md`.
-* Added an optional closed-form M-step for the transition/process-noise
-  covariance `Q`. Set `conf.noise_prior`/`conf.noise_prior_dof` (both
-  `None` by default -- `Q` stays fully gradient-trained unless
-  configured, no behavior change for existing models) to MAP-shrink `Q`
-  toward that prior instead of gradient descent. `XFADS.mstep(t, y, u, c,
-  key=...)` composes both the `R` and `Q` updates in one call;
-  `train()` calls it automatically at the same cadence as `R`
-  (`mstep_mode`), with `noise_free` auto-excluded from gradient descent
-  whenever a prior is configured (mirroring `R`'s own auto-exclusion, no
-  `conf.freeze_paths` entry needed). See `docs/mstep_dynamics_noise.md`
-  for the design, validation, and known open questions (this reuses `R`'s
-  minibatch/epoch cadence, which is more frequent than the round-based
-  cadence -- every 8-20 epochs -- actually validated in the accompanying
-  benchmarks; not yet shown to be safe at this frequency, though a
-  real-data check did not find it alarming).
+* **Breaking:** transition/process noise now uses required top-level
+  positive `q_scale` and `q_mstep` (default `true`). `q_scale` initializes
+  `Q`; with `q_mstep=true`, `XFADS.mstep` MAP-shrinks Q using
+  `(q_scale, state_dim + 1)` and `train()` auto-freezes `noise_free`.
+  `q_mstep=false` skips `Approx.shrink` and leaves Q SGD-managed.
+  `dyn_conf.state_noise`, `noise_prior`, and `noise_prior_dof` were removed.
+  See `docs/mstep_dynamics_noise.md`.
 * Added `cuda12`/`cuda13` optional-dependency extras
   (`pip install jaxfads[cuda12]` or `jaxfads[cuda13]`) for one-step GPU
   installs; the base `jax` dependency stays CPU-only. The two extras are
@@ -68,10 +60,11 @@
   0.7.0) and requesting explicit `Auto` mesh axes in `trainer.py`'s device
   mesh to keep `eqx.filter_shard` working under jax's newer
   "sharding-in-types" default (jax >=0.9.0).
-* Documented that `noise_schedule` (and any custom `param_schedule`)
-  anneals constrained (e.g. variance) values and converts to free-form
-  parameters only as the final step, since interpolating in free-form space
-  directly would distort the intended path.
+* Documented that custom `param_schedule` functions should anneal
+  constrained (e.g. variance) values and convert to free-form parameters
+  only as the final step, since interpolating in free-form space directly
+  would distort the intended path. The dedicated `noise_schedule` helper
+  was removed.
 
 ## 0.9.0
 
@@ -90,12 +83,9 @@
   crash in the jitted loop.
 * `train` now accepts `param_schedule=` (a `Callable[[model, step], model]`)
   applied at the start of every training step, for driving an arbitrary model
-  attribute through a step-indexed `optax` schedule. A new helper,
-  `noise_schedule(approx, q_hi, q_lo, transition_steps)`, builds the common
-  case: annealing the process-noise scale (Q) geometrically via
-  `optax.exponential_decay`. `freeze_paths` should list the scheduled
-  attribute so the optimizer's own gradient-based update does not fight the
-  schedule.
+  attribute through a step-indexed `optax` schedule. `freeze_paths` should
+  list the scheduled attribute so the optimizer's own gradient-based update
+  does not fight the schedule.
 * KL warm-up is now driven by an `optax` schedule built from
   `conf.kl_warmup_steps`, evaluated on the training step and passed as the
   `beta` KL weight. `beta` stays an objective coefficient (never routed through
@@ -165,7 +155,7 @@
 ## 0.3.0
 
 * Added `filter`, `smooth`, and `causal` inference modes.
-* Added declarative parameter freezing via `freeze_paths` and `freeze_state_noise`.
+* Added declarative parameter freezing via `freeze_paths`.
 * Stabilized the low-rank MVN / LoRa path with additional smoke coverage.
 
 ## 0.2.0

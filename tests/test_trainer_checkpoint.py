@@ -1,12 +1,13 @@
 import json
 
 import numpy as np
-from jax import numpy as jnp, random as jrnd
+from conftest import MockDynamics  # noqa: F401 - class registration side-effect
+from jax import numpy as jnp
+from jax import random as jrnd
 from omegaconf import OmegaConf
 
-from jaxfads.trainer import train, train_test_split, EpochHandler
 import jaxfads.observations  # noqa: F401 — register GLM subclass
-from conftest import MockDynamics  # noqa: F401 - class registration side-effect
+from jaxfads.trainer import EpochHandler, train, train_test_split
 
 
 def _sample_data():
@@ -40,9 +41,8 @@ def _model_conf(obs_dim=6, state_dim=2):
             "fb_penalty": 0,
             "noise_penalty": 0.0,
             "dropout": 0.0,
-            "dyn_conf": OmegaConf.create(
-                {"input_dim": 0, "context_dim": 0, "state_noise": 1.0}
-            ),
+            "q_scale": 1.0,
+            "dyn_conf": OmegaConf.create({"input_dim": 0, "context_dim": 0}),
             "enc_conf": OmegaConf.create({"width": 8, "depth": 1, "dropout": 0.0}),
             "obs_conf": OmegaConf.create(
                 {

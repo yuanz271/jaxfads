@@ -174,7 +174,7 @@ Quick reference (public API):
 
 ```python
 # Construction — stored as free-form flat arrays on the module
-self.noise_free = self.approx.free_from_kw(scale=conf.state_noise)
+self.noise_free = self.approx.free_from_kw(scale=conf.q_scale)
 self.unconstrained_prior_natural = self.approx.free_from_kw(scale=1.0)
 
 # Inference — derive natural/moment on the fly

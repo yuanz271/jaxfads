@@ -151,35 +151,20 @@ optimizer example above).
 
 `on_epoch_end`, `regularizer`, and `optimizer` cover per-epoch policy,
 additive loss terms, and the update rule. A fourth extension point,
-`param_schedule`, drives an arbitrary model attribute through a step-indexed
-`optax` schedule — for example, annealing the process-noise scale (Q) over
-training, which shifts the filter's implicit balance between trusting the
-encoder (data-driven correction) and trusting the dynamics (free-running
-prediction).
-
-```python
-from jaxfads.trainer import noise_schedule, train
-
-trainer_conf = {
-    "max_epoch": 300,
-    "batch_size": 64,
-    "freeze_paths": ["noise_free"],  # required -- see note below
-}
-
-schedule = noise_schedule(
-    model.approx, q_hi=2.0, q_lo=0.005, transition_steps=2400
-)
-trained = train(model, data, conf=trainer_conf, param_schedule=schedule)
-```
+`param_schedule`, drives an arbitrary **SGD-managed** model attribute through
+a step-indexed schedule.
 
 `param_schedule(model, step) -> model` is called at the **start of every
 step**, before the loss/gradient computation, so the scheduled value is what
 the loss is evaluated on and what persists in the returned model. It is a
 general mechanism — the trainer only calls the function and does not
-interpret what it changes; `noise_schedule` is a small built-in helper for
-the common Q-annealing case, built on `optax.exponential_decay` (its
-`end_value` clamping means "anneal then hold" needs no separate logic — just
-train for more epochs than `transition_steps` covers).
+interpret what it changes.
+
+Do **not** schedule `noise_free`. When `q_mstep=true` (the default), the
+joint epoch M-step owns Q and would overwrite a scheduled value. When
+`q_mstep=false`, Q is SGD-managed but the dedicated Q scheduling helper has
+been intentionally removed until a future explicit `q_update_mode="sgd" |
+"map"` API defines unambiguous ownership semantics.
 
 **`freeze_paths` is required, not optional, when using `param_schedule`.**
 Without it, the optimizer's own gradient-based update (plus gradient noise
@@ -199,15 +184,12 @@ def my_schedule(model, step):
     return eqx.tree_at(lambda m: m.some_attribute, model, value)
 ```
 
-**If the attribute is stored in a constrained/free-form (unconstrained)
-parameterization** (as `noise_free` is), **anneal in the constrained space,
-not the free-form space**, and convert to free-form only as the last step —
-exactly what `noise_schedule` does: `optax.exponential_decay` interpolates
-the literal variance `q`, and `approx.free_from_kw(scale=q)` converts to
-free-form afterward. The free-form encoding is typically a nonlinear
-reparameterization (e.g. sqrt / inverse-softplus-style), so interpolating
-free-form values directly traces a different, distorted path through the
-constrained space than the intended schedule.
+**If the scheduled attribute is stored in a constrained/free-form
+(unconstrained) parameterization**, anneal in its constrained space, not
+its free-form space, and convert only as the last step. The free-form
+encoding is typically nonlinear (e.g. a sqrt or inverse-softplus transform),
+so interpolating free-form values directly traces a different, distorted path
+through the intended constrained space.
 
 ## Automated Observation-Noise and Transition-Noise Updates (`mstep`)
 
@@ -220,24 +202,22 @@ Gaussian-likelihood model, `R` is always estimated this way, never by
 gradient descent; `mstep_mode` (below) only controls *when* the update is
 applied, not whether.
 
-The transition/process noise covariance `Q` (`model.noise_free`) can
-*optionally* be driven the same way: set `conf.noise_prior`/`conf.
-noise_prior_dof` (both `None` by default -- unset means `Q` stays
-gradient-trained exactly as before, no behavior change) to MAP-shrink `Q`
-toward that prior at the same cadence as `R`'s update, instead of by
-gradient descent (see [`mstep_dynamics_noise`](mstep_dynamics_noise.md)
-for the design and rationale). Unlike `R`, this is genuinely opt-in, not
-always-on -- `Q` remains a normal trainable parameter unless configured.
+The transition/process-noise covariance `Q` (`model.noise_free`) is
+initialized from positive top-level `conf.q_scale`. By default,
+`conf.q_mstep=True` applies its MAP M-step with prior
+`(q_scale, state_dim + 1)` at the same cadence as `R`; `noise_free` is then
+automatically frozen from SGD. Set `q_mstep=False` to skip `Approx.shrink`
+and train `noise_free` with SGD instead.
 
-`train(..., mstep_mode="minibatch" | "epoch")` (default `"minibatch"`)
-controls the update cadence for both `R` and (when configured) `Q` --
+`train(..., mstep_mode="minibatch" | "epoch")` (default `"epoch"`)
+controls the update cadence for both `R` and, when `q_mstep=True`, `Q` --
 both go through the single `model.mstep(...)` call:
 
 - `"minibatch"`: every `train_step`, `model.mstep(t, y, u, c, key=...)` is
   called from that minibatch's own forward pass -- updating
   `model.observation` (a no-op for `Observation`/`Likelihood`
   implementations that don't override `mstep`, e.g. `Poisson`) and, when
-  `conf.noise_prior` is set, `model.noise_free`. Each minibatch's estimate
+  `conf.q_mstep` is true, `model.noise_free`. Each minibatch's estimate
   is a noisy sample of the same quantity a full-dataset pass computes
   exactly (like SGD vs. full-batch gradient descent).
 - `"epoch"`: instead of every minibatch, the update is applied once per
@@ -245,16 +225,12 @@ both go through the single `model.mstep(...)` call:
   an exact (not minibatch-noisy) estimate, at the cost of only refreshing
   once per epoch rather than continuously.
 
-**Caveat specific to `Q`**: this minibatch/epoch cadence is *more
-frequent* than what was validated in `docs/mstep_dynamics_noise.md`'s own
-benchmarks, which used a coarser, round-based cadence (every 8-20
-epochs). The mechanism is mathematically well-defined at any cadence (the
-ELBO's log-likelihood and KL terms are independent given a fixed
-posterior, so `R`'s and `Q`'s M-step updates are each well-defined
-regardless of how often they're recomputed), but whether *frequent*
-re-shrinkage behaves the same as the validated *infrequent* shrinkage is
-not yet tested -- see that doc's Open Questions. Opt-in only; does not
-affect users who leave `conf.noise_prior` unset.
+The default epoch cadence is deliberately more conservative for Q than the
+former minibatch default, but it is still more frequent than the 8--20 epoch
+round cadence used in the current Q benchmarks. Treat `"minibatch"` as an
+explicit experimental override; whether a dedicated coarser
+`mstep_every_n_epochs` control improves dynamics recovery remains an open
+empirical question.
 
 Regardless of `mstep_mode`, `mstep` is applied once more, from a
 full-dataset forward pass, immediately after the final epoch's gradient
@@ -272,7 +248,7 @@ training happened since the last per-epoch update.
 optimizer automatically (folded into `train()`'s internal freeze mask),
 regardless of `mstep_mode`, so gradient descent never fights this update --
 no `conf.freeze_paths` entry is needed, unlike `param_schedule` above.
-When `conf.noise_prior` is set, `noise_free` is excluded the same way,
+When `conf.q_mstep` is true, `noise_free` is excluded the same way,
 automatically, with no `conf.freeze_paths` entry needed either.
 
 For a one-off, standalone recompute outside of `train()` entirely -- e.g.
