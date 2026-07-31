@@ -1215,16 +1215,17 @@ second full pass each epoch.
    ```
 
    Move Q storage and all Q-M-step behavior out of Approx into one generic,
-   unconfigured `Noise(approx, free)` component. Noise owns the free Q array
-   and delegates every distribution operation to its composed concrete Approx;
-   it does not duplicate MVN packing, constraints, Cholesky, moment
-   conversion, or point-propagation functionality. `XFADS.noise.free`
-   replaces the special top-level `noise_free`, while `XFADS.approx` returns
-   the single concrete Approx composed by `noise`. Thus core/posterior code
-   retains one canonical Approx object and no duplicate reconstruction. Do
-   not add a `noise:` config field yet: there is only one generic Noise
-   representation; a configurable Noise class is premature until a genuinely
-   different noise representation exists.
+   unconfigured `Noise(approx, free, q_scale, mstep_enabled)` component. Noise
+   owns the free Q array and static Q policy/config, and delegates every
+   distribution operation to its composed concrete Approx; it does not
+   duplicate MVN packing, constraints, Cholesky, moment conversion, or
+   point-propagation functionality. `XFADS.noise.free` replaces the special
+   top-level `noise_free`, while `XFADS.approx` returns the single concrete
+   Approx composed by `noise`. Thus core/posterior code retains one canonical
+   Approx object and no duplicate reconstruction. Do not add a `noise:` config
+   field yet: there is only one generic Noise representation; a configurable
+   Noise class is premature until a genuinely different noise representation
+   exists.
 
 2. **Use an optional exact-Approx-class Noise-M-step strategy registry.** A
    generic Noise has no intrinsic Q-M-step formula. It dispatches optional
@@ -1247,63 +1248,79 @@ second full pass each epoch.
 
    For an unregistered Approx, Noise returns no Q minibatch delta and its
    M-step is a no-op. This gives the desired policy without `isinstance`
-   branches in XFADS/trainer: `q_mstep=true` activates MAP-Q only when an
-   exact registered strategy exists; otherwise Q remains SGD-managed.
-   Noise itself owns generic additive accumulation of fixed-shape statistic
-   pytrees; a strategy only supplies `collect_minibatch_stat(...)` and
-   `mstep(...)`. Generalize to a pairwise `(Noise type, Approx type)` registry
-   only when a second noise representation exists.
+   branches in XFADS/trainer: Noise itself defines
+   `mstep_active = mstep_enabled and strategy is not None`; only an active
+   Noise contributes MAP-Q statistics or is frozen from SGD. Otherwise Q
+   remains SGD-managed. Noise owns generic additive accumulation of
+   fixed-shape statistic pytrees; a strategy only supplies `batch_stat(...)`
+   and `mstep(...)`. Generalize to a pairwise `(Noise type, Approx type)`
+   registry only when a second noise representation exists.
 
-3. **Use an explicit XFADS-owned statistic lifecycle.** The private,
-   trainer-facing methods are
+3. **Use one uniform component context and statistic lifecycle.** Define one
+   general `StatContext` passed unchanged by XFADS to both components. It is
+   not M-step-specific: it packages batch inputs plus inference-derived values
+   from which any component may derive an auxiliary statistic. Because it
+   includes the array-free concrete Approx, implement it as an Equinox module,
+   not a plain NamedTuple:
 
    ```python
-   batch_stat = model._collect_minibatch_stat(
-       t, y, posterior_moment, transition_stat
-   )
-   epoch_stat = model._accumulate_minibatch_stat(epoch_stat, batch_stat)
+   class StatContext(eqx.Module):
+       t: Array
+       y: Array
+       u: Array
+       c: Array
+       moment: Array
+       transition_stat: Any
+       approx: Approx = eqx.field(static=True)
+   ```
+
+   `Observation` and `Noise` expose the same method names and signatures:
+
+   ```python
+   component.batch_stat(context: StatContext) -> Stat | None
+   component.accumulate_stat(total, delta) -> Stat | None
+   component.mstep(epoch_stat) -> updated_component
+   ```
+
+   Each component selectively ignores irrelevant context fields: Gaussian R
+   uses `t`, `y`, `moment`, and `approx`; Noise uses `moment` and
+   `transition_stat`. Therefore XFADS does not encode component-specific
+   argument knowledge or Q activation policy:
+
+   ```python
+   batch_stat = model._collect_batch_stat(context)
+   epoch_stat = model._accumulate_batch_stat(epoch_stat, batch_stat)
    model = model._apply_mstep_stat(epoch_stat)
    ```
 
-   `_collect_minibatch_stat` returns one additive **minibatch delta**; it
-   never stores history or mutates a collection. The trainer owns exactly one
-   ephemeral `epoch_stat` accumulator and resets it at each epoch boundary.
-   `_accumulate_minibatch_stat` is model-owned even though its present
-   operation is tree addition: it defines the additive-statistic contract at
-   the model/component boundary instead of teaching the trainer which
-   component leaves exist. `_apply_mstep_stat` delegates each final update to
-   `Observation` and `Noise`; XFADS writes their returned components back
-   into its own state.
+   Use `MstepStats` for the returned additive component bundle (a
+   NamedTuple/pytree with `observation` and `noise` fields). A `MstepStats`
+   value means either one minibatch delta or its epoch reduction; the trainer
+   stores only one reduced epoch value, never a list of batch values.
+   `_collect_batch_stat` returns one additive **minibatch delta**; it never
+   stores history or mutates a collection. The trainer owns exactly one
+   ephemeral `epoch_stat` accumulator and resets it each epoch.
+   `_accumulate_batch_stat` is model-owned even though its present operation
+   is reduction: it delegates to each component's `accumulate_stat` instead
+   of teaching the trainer which leaves exist. `_apply_mstep_stat` delegates
+   each final update to component `mstep` methods; XFADS writes their returned
+   components back into its own state. A no-op component returns/retains
+   `None`.
+
+   The trainer remains Observation/Noise/Approx-family agnostic: it calls
+   only XFADS private lifecycle methods and never imports `observations.py`
+   or assumes mean/covariance layouts. Gaussian R owns masked residual sums
+   and per-feature valid counts; the built-in MVN Noise strategy owns
+   transition-scatter sums and pair counts.
 
    Rename the current public full-data convenience method to
    `XFADS.mstep_from_data(t, y, u, c, *, key)`. It explicitly performs
-   `data -> inference -> minibatch statistic -> _apply_mstep_stat` once over
-   supplied data. Do **not** overload `mstep` between data and statistic
-   inputs; their domains differ. The normal trainer never calls
-   `mstep_from_data`.
+   `data -> inference -> StatContext -> minibatch statistic ->
+   _apply_mstep_stat` once over supplied data. Do **not** overload `mstep`
+   between data and statistic inputs; their domains differ. The normal trainer
+   never calls `mstep_from_data`.
 
-4. **Use one symmetric component statistic lifecycle.** `Observation` and
-   `Noise` each provide the same methods called by XFADS:
-
-   ```python
-   component.collect_minibatch_stat(...)
-   component.accumulate_minibatch_stat(total, delta)
-   component.mstep(epoch_stat, *, prior=None)
-   ```
-
-   The first returns one fixed-shape additive delta; the second combines
-   same-component deltas; the third finalizes one epoch accumulator. The
-   common method name is intentional: both components perform an M-step from
-   their own accumulated statistic and return an updated component. `prior`
-   is ignored by observations and supplied by XFADS only to the Noise branch.
-   A no-op component returns/retains `None`. The trainer remains
-   Observation/Noise/Approx-family agnostic: it calls only XFADS private
-   lifecycle methods and never imports `observations.py` or assumes
-   mean/covariance layouts. Gaussian R owns masked residual sums and
-   per-feature valid counts; the built-in MVN noise strategy owns
-   transition-scatter sums and pair counts.
-
-5. **Reuse the existing pre-SGD loss forward pass—never run inference
+4. **Reuse the existing pre-SGD loss forward pass—never run inference
    post-SGD.** Extend the current `batch_loss` path to return the component
    statistics as auxiliary output from the exact `model(...)` call that
    already produces posterior moments, predictive moments, and
@@ -1311,12 +1328,12 @@ second full pass each epoch.
    `eqx.filter_value_and_grad(..., has_aux=True)` so autodiff differentiates
    only the scalar loss while the trainer receives those already-materialized
    statistics after the gradient calculation. Apply the SGD update normally,
-   then pass the returned pre-update delta to
-   `_accumulate_minibatch_stat`. `transition_stat` therefore avoids a second
+   then pass the returned pre-update delta to `_accumulate_batch_stat`.
+   `transition_stat` therefore avoids a second
    dynamics propagation for Q; deriving R's residual scatter from the same
    posterior is similarly only a reduction, not new inference.
 
-6. **Keep trainer state ephemeral and reset it at each epoch.** Store the
+5. **Keep trainer state ephemeral and reset it at each epoch.** Store the
    single R/Q `epoch_stat` only in `_run_training_loop`, never in `XFADS`,
    optimizer state, or checkpoints. Begin from the model-owned zero statistic
    (not from a prior). Apply Q's fixed prior `((d+1)q_scale I_d, d+1)` exactly
@@ -1325,14 +1342,14 @@ second full pass each epoch.
    `epoch_stat`, and begin the next epoch with fresh evidence but the updated
    model parameters. A partial interrupted epoch is intentionally discarded.
 
-7. **Preserve Q ownership modes.** When `q_mstep=true` and Noise has a
-   registered strategy for its Approx, `noise.free` is auto-frozen from SGD
-   and updated only by the epoch-final accumulated MAP step. With
-   `q_mstep=false`, or with no compatible registered strategy, XFADS returns
-   no Q delta, performs no Q finalization, and leaves `noise.free`
-   SGD-managed. R remains M-step-owned under all modes.
+6. **Preserve Q ownership modes.** Noise owns the activation predicate.
+   When `noise.mstep_active` is true, `noise.free` is auto-frozen from SGD and
+   updated only by the epoch-final accumulated MAP step. When false—because
+   public `q_mstep=false` was passed into `Noise` at construction or no exact
+   strategy exists—Noise returns no Q delta, performs no Q finalization, and
+   leaves `noise.free` SGD-managed. R remains M-step-owned under all modes.
 
-8. **Validation.** Unit tests cover public scalar `batch_loss`, frozen-model
+7. **Validation.** Unit tests cover public scalar `batch_loss`, frozen-model
    accumulated-statistic finalization against `mstep_from_data`, exactly one
    `_apply_mstep_stat` call per epoch with no automatic
    `mstep_from_data` call, callback visibility of finalized R, Q ownership
@@ -1346,7 +1363,7 @@ second full pass each epoch.
    SGD-Q baseline, reporting wall-clock time, R/Q trajectories, flow RMSE,
    and posterior RMSE.
 
-9. **Keep alternative cadences out of scope.** Do not retain separate R/Q
+8. **Keep alternative cadences out of scope.** Do not retain separate R/Q
    cadences, direct replacement-style minibatch M-steps, within-epoch Q
    updates, indefinite confidence accumulation, prior recentering, or
    forgetting parameters unless a later ablation establishes a need.
