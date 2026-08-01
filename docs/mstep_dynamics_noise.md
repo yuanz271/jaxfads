@@ -1237,7 +1237,10 @@ epochs.
    owns the free Q array and static Q policy/config, and delegates every
    distribution operation to its composed concrete Approx; it does not
    duplicate MVN packing, constraints, Cholesky, moment conversion, or
-   point-propagation functionality. `XFADS.noise.free` replaces the special
+   point-propagation functionality. `q_scale` and public `q_mstep` are copied
+   once into static Noise fields at construction; mutating `model.conf` later
+   must not silently change an existing component's M-step policy. Rebuild the
+   model to change that policy. `XFADS.noise.free` replaces the special
    top-level `noise_free`, while `XFADS.approx` returns the single concrete
    Approx composed by `noise`. Thus core/posterior code retains one canonical
    Approx object and no duplicate reconstruction. Do not add a `noise:` config
@@ -1263,6 +1266,10 @@ epochs.
    ```python
    Noise.register_mstep(MyApprox, MyApproxNoiseMstep())
    ```
+
+   Registration is process-level plugin state, not checkpoint data. A custom
+   Approx and its exact Noise strategy must be imported/registered before
+   constructing or loading an XFADS model that should use MAP-Q behavior.
 
    For an unregistered Approx, Noise returns no Q statistic and its M-step is
    a no-op. This gives the desired policy without `isinstance`
@@ -1356,7 +1363,11 @@ epochs.
    frozen leaves, so they are not overwritten. The next batch then sees both
    the M-step and SGD changes. `transition_stat` therefore avoids a second
    dynamics propagation for Q; deriving R's residual scatter from the same
-   posterior is similarly only a reduction, not new inference.
+   posterior is similarly only a reduction, not new inference. Q-statistic
+   non-finites intentionally propagate and fail loudly during the Noise M-step
+   rather than being silently masked: unlike R's externally observed data
+   mask, a non-finite latent/transition statistic is an inference failure that
+   must be diagnosed, not reweighted away.
 
 5. **Keep trainer state ephemeral and reset it at each epoch.** Store the
    single R/Q `epoch_stat` only in `_run_training_loop`, never in `XFADS`,
@@ -1375,8 +1386,7 @@ epochs.
    strategy exists—Noise returns no Q delta, performs no Q finalization, and
    leaves `noise.free` SGD-managed. R remains M-step-owned under all modes.
 
-7. **Validation.** Unit tests cover public scalar `batch_loss`, frozen-model
-   accumulated-statistic finalization against `mstep_from_data`, one
+7. **Validation.** Unit tests cover public scalar `batch_loss`, one
    `_apply_mstep_stat` call **per batch** with no automatic
    `mstep_from_data` call, callback visibility of the final per-batch R/Q,
    Q ownership modes, and full suite regression coverage. Add direct tests
@@ -1386,11 +1396,25 @@ epochs.
    before SGD updates while its frozen leaves remain unchanged, and the Q
    prior is absent from the accumulator but applied once per MAP
    finalization. Test epoch reset explicitly: learned R/Q persist,
-   accumulated confidence does not. A small Lorenz smoke benchmark completes the recursive accumulated
-   path without a full-data M-step. The remaining empirical work is a full
-   VDP rerun and larger benchmark comparison against delayed epoch-only,
-   direct-replacement minibatch, and SGD-Q baselines, reporting wall-clock
-   time, R/Q trajectories, flow RMSE, and posterior RMSE.
+   accumulated confidence does not.
+
+   For a frozen model with deterministic UT points (or controlled common
+   keys), partitioned-stat accumulation/finalization must exactly match one
+   full-data `mstep_from_data` result. Sampling-based strategies are not
+   expected to be bit-identical across different partitions/keys; test their
+   finite outputs and agreement within Monte Carlo error instead.
+
+   Add a parameter-aware Optax test that verifies `optimizer.update` receives
+   the pre-M-step filtered parameter pytree matching the gradient, while a
+   non-M-step leaf receives its SGD update and frozen R/active `noise.free`
+   retain their M-step values. Add plugin tests for: exact-class registration
+   activation; unregistered Approx producing no Q stat and no `noise.free`
+   freeze; and custom Approx/Noise strategy registration before
+   `XFADS.load(...)`. A small Lorenz smoke benchmark completes the recursive
+   accumulated path without a full-data M-step. The remaining empirical work
+   is a full VDP rerun and larger benchmark comparison against delayed
+   epoch-only, direct-replacement minibatch, and SGD-Q baselines, reporting
+   wall-clock time, R/Q trajectories, flow RMSE, and posterior RMSE.
 
 8. **Keep alternative cadences out of scope.** Do not retain separate R/Q
    cadences, direct replacement-style minibatch M-steps, delayed epoch-only
