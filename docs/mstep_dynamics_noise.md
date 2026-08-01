@@ -1297,9 +1297,12 @@ epochs.
    strategy is registered and enabled, `mstep_frozen_paths()` returns
    `["free"]`, so the component itself declares that its M-step owns Q.
    Noise owns generic additive accumulation of fixed-shape statistic pytrees;
-   a strategy only supplies `batch_stat(...)` and `mstep(...)`. Generalize to
-   a pairwise `(Noise type, Approx type)` registry only when a second noise
-   representation exists.
+   a strategy only supplies `batch_stat(...)` and `mstep(...)`. Any
+   `mstep_frozen_paths()` method follows hierarchical relative-path ownership:
+   Noise returns `["free"]` relative to itself, and XFADS prefixes `noise.`
+   because it owns the parent member name. Noise must never return
+   `noise.free`. Generalize to a pairwise `(Noise type, Approx type)` registry
+   only when a second noise representation exists.
 
 3. **Use one uniform component statistic lifecycle without a context class.**
    `StatContext` adds no independent behavior; it would only bundle arguments
@@ -1312,7 +1315,15 @@ epochs.
    ) -> Stat | None
    component.accumulate_stat(total, delta) -> Stat | None
    component.mstep(stat) -> updated_component
+   component.mstep_frozen_paths() -> paths relative to component
    ```
+
+   Components return freeze paths relative to their own receiver. Immediate
+   callers prefix the member name under which they store the component:
+   `Gaussian -> ["unconstrained_cov"]`, `GLM ->
+   ["likelihood.unconstrained_cov"]`, and XFADS ->
+   `["noise.free", ...]`. The trainer resolves only fully qualified
+   XFADS-root-relative paths and never knows component internals.
 
    Each component selectively ignores irrelevant arguments: Gaussian R uses
    `t`, `y`, `moment`, and `approx`; Noise uses `moment` and
