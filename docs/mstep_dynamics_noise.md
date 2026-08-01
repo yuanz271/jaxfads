@@ -1478,12 +1478,11 @@ representation requiring pairwise Noise/Approx strategy dispatch, and any
 further storage simplification once the accumulated mechanism is confirmed
 as permanent.
 
-## Approved architecture cleanup plan: direct post-SGD batch M-step
+## Historical design record: direct post-SGD batch M-step (superseded)
 
-**Status: approved next implementation step.** The current code has the
-correct direct post-SGD behavior, but retains remnants of the superseded
-recursive epoch-accumulator design. This cleanup makes the active lifecycle
-and component boundaries explicit without changing the intended algorithm.
+**Status: superseded by the hierarchical output-based plan below.** This
+section is retained to record the prior direct-batch cleanup proposal. Its
+statistic-transport lifecycle is no longer the active target.
 
 1. **Keep one active trainer lifecycle.** Normal `train()` uses direct
    post-SGD per-batch updates only:
@@ -1600,12 +1599,12 @@ and component boundaries explicit without changing the intended algorithm.
    benchmark smoke. Review the complete diff and commit at a logical
    milestone. Do not push without explicit instruction.
 
-## Approved architecture plan: hierarchical M-step dispatch
+## Active architecture plan: hierarchical output-based M-step dispatch
 
-**Status: approved next refactor.** This plan makes M-step dispatch recursive
-and component-owned while keeping `Approx` distribution-only and retaining
-the current named fourth forward output `transition_stat`. Do not introduce a
-general opaque `aux` forward bundle yet.
+**Status: approved implementation target.** This plan makes M-step dispatch
+recursive and component-owned while keeping `Approx` distribution-only and
+retaining the current named fourth forward output `transition_stat`. Do not
+introduce a general opaque `aux` forward bundle or statistic transport API.
 
 ### 1. Hierarchy and ownership
 
