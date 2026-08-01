@@ -1293,12 +1293,12 @@ epochs.
    a no-op. This gives the desired policy without `isinstance`
    branches in XFADS/trainer: Noise's actual methods are no-ops when disabled
    or unregistered. `batch_stat(...)` returns `None`, `mstep(...)` returns
-   `self`, and `mstep_frozen_paths()` returns `[]` in that case. When a
-   strategy is registered and enabled, `mstep_frozen_paths()` returns
-   `["free"]`, so the component itself declares that its M-step owns Q.
+   `self`, and `frozen_paths()` returns `[]` in that case. When a
+   strategy is registered and enabled, `frozen_paths()` returns `["free"]`,
+   so the component declares that this trainable leaf is not optimizer-owned.
    Noise owns generic additive accumulation of fixed-shape statistic pytrees;
    a strategy only supplies `batch_stat(...)` and `mstep(...)`. Any
-   `mstep_frozen_paths()` method follows hierarchical relative-path ownership:
+   `frozen_paths()` method follows hierarchical relative-path ownership:
    Noise returns `["free"]` relative to itself, and XFADS prefixes `noise.`
    because it owns the parent member name. Noise must never return
    `noise.free`. Generalize to a pairwise `(Noise type, Approx type)` registry
@@ -1315,14 +1315,14 @@ epochs.
    ) -> Stat | None
    component.accumulate_stat(total, delta) -> Stat | None
    component.mstep(stat) -> updated_component
-   component.mstep_frozen_paths() -> list[str]  # relative to component
+   component.frozen_paths() -> list[str]  # relative to component
    ```
 
-   `mstep_frozen_paths()` has a total list-valued contract: every component
-   implements it, and a component with no M-step-owned leaves returns `[]`,
-   never `None`. This includes both no-op components (for example Poisson)
-   and valid M-step components that own no trainable leaves. Components return
-   paths relative to their own receiver. Immediate callers prefix the member
+   `frozen_paths()` has a total list-valued contract: every component
+   implements it, and a component with no intrinsically frozen leaves returns
+   `[]`, never `None`. This includes both no-op components (for example
+   Poisson) and valid components that own no optimizer-excluded leaves.
+   Components return paths relative to their own receiver. Immediate callers prefix the member
    name under which they store the component: `Gaussian ->
    ["unconstrained_cov"]`, `GLM -> ["likelihood.unconstrained_cov"]`, and
    XFADS -> `["noise.free", ...]`. The trainer resolves only fully qualified
@@ -1356,8 +1356,8 @@ epochs.
 
    The trainer remains Observation/Noise/Approx-family agnostic: it calls
    only XFADS private lifecycle methods and consumes XFADS-root-relative
-   `mstep_frozen_paths()` output; it never imports `observations.py` or
-   assumes mean/covariance layouts. Gaussian R owns masked residual sums
+   `frozen_paths()` output; it never imports `observations.py` or assumes
+   mean/covariance layouts. Gaussian R owns masked residual sums
    and per-feature valid counts; the built-in MVN Noise strategy owns
    transition-scatter sums and pair counts.
 
@@ -1414,9 +1414,9 @@ epochs.
    `Noise.supports_mstep` or `Noise.mstep_active` as trainer-facing
    predicates. If `q_mstep=false` or no exact strategy exists, Noise's actual
    methods are no-ops: `batch_stat` returns `None`, `mstep` returns `self`, and
-   `mstep_frozen_paths()` returns `[]`; `noise.free` remains SGD-managed. If
-   enabled with a registered strategy, `mstep_frozen_paths()` returns
-   `["free"]`, and the trainer freezes the corresponding `noise.free` path.
+   `frozen_paths()` returns `[]`; `noise.free` remains SGD-managed. If
+   enabled with a registered strategy, `frozen_paths()` returns `["free"]`,
+   and the trainer freezes the corresponding `noise.free` path.
    R remains M-step-owned under all modes.
 
 7. **Validation.** Unit tests cover public scalar `batch_loss`, one
