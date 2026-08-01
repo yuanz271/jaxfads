@@ -1319,7 +1319,7 @@ epochs.
 
    ```python
    batch_stat = model._batch_stat(t, y, u, c, key=key)
-   model = model._apply_mstep_stat(batch_stat)
+   model = model.mstep(batch_stat)
    ```
 
    Use `MstepStats` for the returned additive component bundle (a
@@ -1333,10 +1333,10 @@ epochs.
    history or mutates a collection. The trainer owns no active epoch evidence
    accumulator in that experiment. `_accumulate_batch_stat` remains the
    component-owned reduction operation for the separate recursive experiment,
-   but is not called by the direct-batch schedule. `_apply_mstep_stat` delegates
-   each update to component `mstep` methods and writes their returned
-   components back into its own state. A no-op component returns/retains
-   `None`.
+   but is not called by the direct-batch schedule. `model.mstep(stat)`
+   delegates each update to component `mstep` methods and writes their
+   returned components back into its own state. A no-op component
+   returns/retains `None`.
 
    The trainer remains Observation/Noise/Approx-family agnostic: it calls
    only XFADS private lifecycle methods and never imports `observations.py`
@@ -1348,19 +1348,17 @@ epochs.
 
    ```python
    _batch_stat(t, y, u, c, *, key)
-   _accumulate_batch_stat(total, delta)
-   _apply_mstep_stat(stat)
+   model.mstep(stat)
    ```
 
-   `_batch_stat` directly runs inference, constructs `StatContext` locally,
-   and returns `MstepStats`; do **not** introduce a separate `_stat_context`
-   helper, since it would have one caller and only construct one object.
-
-   Rename the current public full-data convenience method to
+   `_batch_stat` directly runs inference and returns `MstepStats`; do **not**
+   introduce a separate `_stat_context` helper, since it would have one
+   caller and only construct one object. `model.mstep(stat)` applies the
+   update. Rename the current public full-data convenience method to
    `XFADS.mstep_from_data(t, y, u, c, *, key)`. It explicitly performs
-   `data -> _batch_stat -> _apply_mstep_stat` once over supplied data. Do
-   **not** overload `mstep` between data and statistic inputs; their domains
-   differ. The normal trainer never calls `mstep_from_data`.
+   `data -> _batch_stat -> model.mstep` once over supplied data. Do **not**
+   overload `mstep` between data and statistic inputs; their domains differ.
+   The normal trainer never calls `mstep_from_data`.
 
 4. **Use a fresh post-SGD batch statistic for the direct-batch experiment.**
    Compute the loss and gradients from the current pre-SGD model, apply the
@@ -1372,7 +1370,7 @@ epochs.
    loss, grads = value_and_grad(loss_fn)(model, batch)
    updates, opt_state = optimizer.update(grads, opt_state, params_from(model))
    model = eqx.apply_updates(model, updates)
-   model = model._apply_mstep_stat(model._batch_stat(*batch, key=stat_key))
+   model = model.mstep(model._batch_stat(*batch, key=stat_key))
    ```
 
    This costs one additional inference pass per batch but faithfully matches
@@ -1543,7 +1541,7 @@ and component boundaries explicit without changing the intended algorithm.
 6. **Preserve the direct post-SGD timing.** Compute gradients under the
    pre-SGD model and pass the matching pre-M-step filtered parameter tree to
    Optax. Apply those updates, then run `_batch_stat` on the updated model and
-   apply `_apply_mstep_stat`. This is intentionally one extra inference pass
+   call `model.mstep(stat)`. This is intentionally one extra inference pass
    per batch: it matches the historical direct-minibatch timing. R and active
    `noise.free` are frozen leaves, so the M-step values survive the update.
 
