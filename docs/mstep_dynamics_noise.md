@@ -1176,7 +1176,7 @@ $$
 Apply the accumulated estimate immediately **after every minibatch**, not
 only at epoch end. If $S_{e,b},n_{e,b}$ are the current epoch's evidence
 through batch $b$, then following batch $b$'s pre-SGD inference/statistic
-collection and SGD update:
+and gradient collection:
 
 $$
 R_{e,b}\leftarrow\operatorname{finalize}_R(S_{R,e,b},n_{R,e,b}),
@@ -1190,9 +1190,23 @@ Q_{e,b}\leftarrow
 {n_{Q,e,b}+d+1}.
 $$
 
-The updated R/Q are used by inference on batch $b+1$. This is neither direct
-replacement from the latest batch—which would discard earlier current-epoch
-evidence—nor a delayed epoch-only update. At the next epoch boundary,
+The order within one batch is therefore:
+
+```python
+(loss, batch_stat), grads = pre_sgd_forward_with_aux(model, batch)
+epoch_stat = model._accumulate_batch_stat(epoch_stat, batch_stat)
+model_mstep = model._apply_mstep_stat(epoch_stat)
+updates, opt_state = optimizer.update(grads, opt_state, params_from(model))
+model = eqx.apply_updates(model_mstep, updates)
+```
+
+`params_from(model)` must be the same pre-M-step filtered parameter pytree
+from which `grads` were computed; parameter-aware Optax transformations must
+not receive `model_mstep` instead. R and active `noise.free` are frozen leaves,
+so applying the precomputed SGD updates to `model_mstep` preserves their
+M-step values. The resulting updated R/Q are used by inference on batch
+$b+1$. This is neither direct replacement from the latest batch—which would
+discard earlier current-epoch evidence—nor a delayed epoch-only update. At the next epoch boundary,
 discard both accumulators, retain the learned R/Q parameters, and start a
 fresh current-epoch evidence reduction from the fixed prior. Do **not**
 recenter the prior at the previous Q, carry confidence indefinitely, or
@@ -1334,12 +1348,15 @@ epochs.
    `transition_stat` for ELBO evaluation. Use
    `eqx.filter_value_and_grad(..., has_aux=True)` so autodiff differentiates
    only the scalar loss while the trainer receives those already-materialized
-   statistics after the gradient calculation. Apply the SGD update, pass the
-   returned pre-update delta to `_accumulate_batch_stat`, then immediately
-   call `_apply_mstep_stat` on the accumulated current-epoch statistic so the
-   next batch sees the updated components. `transition_stat` therefore avoids
-   a second dynamics propagation for Q; deriving R's residual scatter from
-   the same posterior is similarly only a reduction, not new inference.
+   statistics after the gradient calculation. Accumulate the returned
+   pre-update delta and immediately call `_apply_mstep_stat` **before**
+   applying the precomputed SGD updates. Apply those updates to the
+   M-step-updated model while passing Optax the original pre-M-step filtered
+   parameters that correspond to the gradients. R and active `noise.free` are
+   frozen leaves, so they are not overwritten. The next batch then sees both
+   the M-step and SGD changes. `transition_stat` therefore avoids a second
+   dynamics propagation for Q; deriving R's residual scatter from the same
+   posterior is similarly only a reduction, not new inference.
 
 5. **Keep trainer state ephemeral and reset it at each epoch.** Store the
    single R/Q `epoch_stat` only in `_run_training_loop`, never in `XFADS`,
@@ -1365,10 +1382,11 @@ epochs.
    Q ownership modes, and full suite regression coverage. Add direct tests
    that one batch statistic is returned by `_collect_batch_stat`, accumulation
    stores one reduced epoch statistic rather than a list, each update uses the
-   accumulated rather than only latest-batch statistic, and the Q prior is
-   absent from the accumulator but applied once per MAP finalization. Test
-   epoch reset explicitly: learned R/Q persist, accumulated confidence does
-   not. A small Lorenz smoke benchmark completes the recursive accumulated
+   accumulated rather than only latest-batch statistic, the M-step applies
+   before SGD updates while its frozen leaves remain unchanged, and the Q
+   prior is absent from the accumulator but applied once per MAP
+   finalization. Test epoch reset explicitly: learned R/Q persist,
+   accumulated confidence does not. A small Lorenz smoke benchmark completes the recursive accumulated
    path without a full-data M-step. The remaining empirical work is a full
    VDP rerun and larger benchmark comparison against delayed epoch-only,
    direct-replacement minibatch, and SGD-Q baselines, reporting wall-clock
