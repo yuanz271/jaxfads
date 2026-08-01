@@ -1173,35 +1173,39 @@ n_Q \leftarrow n_Q + n_Q^{(b)},
 S_Q \leftarrow S_Q + S_Q^{(b)}.
 $$
 
-At epoch end, update both components once:
+Apply the accumulated estimate immediately **after every minibatch**, not
+only at epoch end. If $S_{e,b},n_{e,b}$ are the current epoch's evidence
+through batch $b$, then following batch $b$'s pre-SGD inference/statistic
+collection and SGD update:
 
 $$
-R \leftarrow \operatorname{finalize}_R(S_R,n_R),
+R_{e,b}\leftarrow\operatorname{finalize}_R(S_{R,e,b},n_{R,e,b}),
 $$
 
-and, when `q_mstep=true`,
+and, when Noise has an active strategy,
 
 $$
-Q \leftarrow
-\frac{S_Q+(d+1)q_{\mathrm{scale}}I_d}
-{n_Q+d+1}.
+Q_{e,b}\leftarrow
+\frac{S_{Q,e,b}+(d+1)q_{\mathrm{scale}}I_d}
+{n_{Q,e,b}+d+1}.
 $$
 
-Then discard both accumulators. The Q prior stays fixed at
-$q_{\mathrm{scale}}I_d$ with pseudocount $d+1$; do **not** recenter it at the
-previous Q, carry confidence indefinitely, or introduce forgetting. The
-previous Q is retained only as the model parameter used during the next
-epoch's inference.
+The updated R/Q are used by inference on batch $b+1$. This is neither direct
+replacement from the latest batch—which would discard earlier current-epoch
+evidence—nor a delayed epoch-only update. At the next epoch boundary,
+discard both accumulators, retain the learned R/Q parameters, and start a
+fresh current-epoch evidence reduction from the fixed prior. Do **not**
+recenter the prior at the previous Q, carry confidence indefinitely, or
+introduce forgetting.
 
-This is an epoch-local stochastic/generalized MAP-EM approximation, not an
-exact final-model batch M-step: each minibatch statistic is evaluated under
-that minibatch's **pre-SGD** model parameters, and those parameters drift
-through the epoch. That convention is deliberate: it lets the trainer reuse
-the exact forward inference already required to evaluate the ELBO, rather
-than perform any post-SGD or epoch-end inference pass. The approximation
-applies symmetrically to R and Q and is preferable to either repeatedly
-replacing parameters with independent minibatch estimates or paying for a
-second full pass each epoch.
+This is an epoch-local recursive/generalized MAP-EM approximation, not exact
+Bayes for a fixed model: each batch statistic is evaluated under that batch's
+**pre-SGD** model parameters, while later batches see the immediately updated
+R/Q. That convention is deliberate: it reuses the exact forward inference
+already required to evaluate the ELBO, without post-SGD or epoch-end inference
+passes. It preserves within-epoch Bayesian-like sufficient-statistic feedback
+while avoiding repeated-data and stale-model confidence accumulation across
+epochs.
 
 ### Implementation plan
 
@@ -1304,8 +1308,9 @@ second full pass each epoch.
    ephemeral `epoch_stat` accumulator and resets it each epoch.
    `_accumulate_batch_stat` is model-owned even though its present operation
    is reduction: it delegates to each component's `accumulate_stat` instead
-   of teaching the trainer which leaves exist. `_apply_mstep_stat` delegates
-   each final update to component `mstep` methods; XFADS writes their returned
+   of teaching the trainer which leaves exist. After every accumulation, the
+   trainer immediately calls `_apply_mstep_stat(epoch_stat)`; XFADS delegates
+   each update to component `mstep` methods and writes their returned
    components back into its own state. A no-op component returns/retains
    `None`.
 
@@ -1329,44 +1334,48 @@ second full pass each epoch.
    `transition_stat` for ELBO evaluation. Use
    `eqx.filter_value_and_grad(..., has_aux=True)` so autodiff differentiates
    only the scalar loss while the trainer receives those already-materialized
-   statistics after the gradient calculation. Apply the SGD update normally,
-   then pass the returned pre-update delta to `_accumulate_batch_stat`.
-   `transition_stat` therefore avoids a second
-   dynamics propagation for Q; deriving R's residual scatter from the same
-   posterior is similarly only a reduction, not new inference.
+   statistics after the gradient calculation. Apply the SGD update, pass the
+   returned pre-update delta to `_accumulate_batch_stat`, then immediately
+   call `_apply_mstep_stat` on the accumulated current-epoch statistic so the
+   next batch sees the updated components. `transition_stat` therefore avoids
+   a second dynamics propagation for Q; deriving R's residual scatter from
+   the same posterior is similarly only a reduction, not new inference.
 
 5. **Keep trainer state ephemeral and reset it at each epoch.** Store the
    single R/Q `epoch_stat` only in `_run_training_loop`, never in `XFADS`,
    optimizer state, or checkpoints. Begin from the model-owned zero statistic
-   (not from a prior). Apply Q's fixed prior `((d+1)q_scale I_d, d+1)` exactly
-   once inside its component finalization, after all minibatch evidence has
-   been accumulated. At the epoch boundary call `_apply_mstep_stat`, discard
-   `epoch_stat`, and begin the next epoch with fresh evidence but the updated
-   model parameters. A partial interrupted epoch is intentionally discarded.
+   (not from a prior). Apply Q's fixed prior `((d+1)q_scale I_d, d+1)` once
+   per Q-MAP finalization against the accumulated current-epoch evidence. At the epoch boundary discard `epoch_stat` without
+   another update, and begin the next epoch with fresh evidence but the latest
+   learned model parameters. A partial interrupted epoch's accumulated
+   confidence is intentionally discarded, while its most recently applied
+   R/Q parameters remain model state.
 
 6. **Preserve Q ownership modes.** Noise owns the activation predicate.
    When `noise.mstep_active` is true, `noise.free` is auto-frozen from SGD and
-   updated only by the epoch-final accumulated MAP step. When false—because
+   updated after each batch from the accumulated current-epoch MAP statistic. When false—because
    public `q_mstep=false` was passed into `Noise` at construction or no exact
    strategy exists—Noise returns no Q delta, performs no Q finalization, and
    leaves `noise.free` SGD-managed. R remains M-step-owned under all modes.
 
 7. **Validation.** Unit tests cover public scalar `batch_loss`, frozen-model
-   accumulated-statistic finalization against `mstep_from_data`, exactly one
-   `_apply_mstep_stat` call per epoch with no automatic
-   `mstep_from_data` call, callback visibility of finalized R, Q ownership
-   modes, and full suite regression coverage. Add direct tests that one
-   batch statistic is returned by `_collect_batch_stat`, accumulation stores
-   one reduced epoch statistic rather than a list, and the Q prior is absent
-   from the accumulator but applied exactly once at finalization. A
-   small Lorenz smoke benchmark completes the accumulated path without a
-   full-data M-step. The remaining empirical work is a full VDP rerun and
-   larger benchmark comparison against the former full-data epoch path and
-   SGD-Q baseline, reporting wall-clock time, R/Q trajectories, flow RMSE,
-   and posterior RMSE.
+   accumulated-statistic finalization against `mstep_from_data`, one
+   `_apply_mstep_stat` call **per batch** with no automatic
+   `mstep_from_data` call, callback visibility of the final per-batch R/Q,
+   Q ownership modes, and full suite regression coverage. Add direct tests
+   that one batch statistic is returned by `_collect_batch_stat`, accumulation
+   stores one reduced epoch statistic rather than a list, each update uses the
+   accumulated rather than only latest-batch statistic, and the Q prior is
+   absent from the accumulator but applied once per MAP finalization. Test
+   epoch reset explicitly: learned R/Q persist, accumulated confidence does
+   not. A small Lorenz smoke benchmark completes the recursive accumulated
+   path without a full-data M-step. The remaining empirical work is a full
+   VDP rerun and larger benchmark comparison against delayed epoch-only,
+   direct-replacement minibatch, and SGD-Q baselines, reporting wall-clock
+   time, R/Q trajectories, flow RMSE, and posterior RMSE.
 
 8. **Keep alternative cadences out of scope.** Do not retain separate R/Q
-   cadences, direct replacement-style minibatch M-steps, within-epoch Q
+   cadences, direct replacement-style minibatch M-steps, delayed epoch-only
    updates, indefinite confidence accumulation, prior recentering, or
    forgetting parameters unless a later ablation establishes a need.
 

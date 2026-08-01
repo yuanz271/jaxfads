@@ -9,7 +9,7 @@ from jax import random as jrnd
 from omegaconf import OmegaConf
 
 import jaxfads.observations  # noqa: F401 — register GLM subclass
-from jaxfads.smoother import XFADS
+from jaxfads.smoother import StatContext, XFADS
 from jaxfads.trainer import batch_loss, train
 
 
@@ -502,6 +502,46 @@ def test_accumulated_stats_match_manual_mstep_for_frozen_model(
         atol=1e-5,
     )
     chex.assert_trees_all_close(trained.noise.free, expected.noise.free, atol=1e-5)
+
+
+def test_multibatch_stats_match_full_data_mstep_for_frozen_model(
+    gaussian_model_conf, gaussian_sample_data
+):
+    """Additive R/Q statistics are invariant to partitioning a frozen batch."""
+    model = XFADS(gaussian_model_conf, jrnd.key(0))
+    reference_model = XFADS(gaussian_model_conf, jrnd.key(0))
+    stats = None
+
+    for start in range(0, gaussian_sample_data[0].shape[0], 16):
+        batch = tuple(x[start : start + 16] for x in gaussian_sample_data)
+        t, y, u, c = batch
+        _natural, moment, _predicted, transition_stat = model(
+            t, y, u, c, key=jrnd.key(start)
+        )
+        context = StatContext(
+            t=t,
+            y=y,
+            u=u,
+            c=c,
+            moment=moment,
+            transition_stat=transition_stat,
+            approx=model.approx,
+        )
+        batch_stats = model._collect_batch_stat(context)
+        stats = (
+            batch_stats
+            if stats is None
+            else model._accumulate_batch_stat(stats, batch_stats)
+        )
+
+    accumulated = model._apply_mstep_stat(stats)
+    full = reference_model.mstep_from_data(*gaussian_sample_data, key=jrnd.key(999))
+    chex.assert_trees_all_close(
+        accumulated.observation.likelihood.cov(),
+        full.observation.likelihood.cov(),
+        atol=1e-5,
+    )
+    chex.assert_trees_all_close(accumulated.noise.free, full.noise.free, atol=1e-5)
 
 
 def test_q_mstep_updates_q_and_freezes_noise_free(
