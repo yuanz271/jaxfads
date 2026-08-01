@@ -1018,6 +1018,12 @@ removed rather than translated.
    question remains an empirical follow-up, not a reason to retain the
    minibatch default.
 
+## Historical design record: epoch-local accumulated Q MAP (superseded)
+
+The sections below through the prior implementation records are retained for
+provenance only. They are not current trainer behavior; the active cleanup
+plan is the direct post-SGD batch M-step in the final section.
+
 ## Superseded proposal: epoch-local accumulated Q MAP without a second full-data pass
 
 **Status: superseded before implementation.** This proposal correctly
@@ -1242,14 +1248,17 @@ epochs.
    ```
 
    Move Q storage and all Q-M-step behavior out of Approx into one generic,
-   unconfigured `Noise(approx, free, q_scale, mstep_enabled)` component. Noise
-   owns the free Q array and static Q policy/config, and delegates every
-   distribution operation to its composed concrete Approx; it does not
-   duplicate MVN packing, constraints, Cholesky, moment conversion, or
-   point-propagation functionality. `q_scale` and public `q_mstep` are copied
-   once into static Noise fields at construction; mutating `model.conf` later
-   must not silently change an existing component's M-step policy. Rebuild the
-   model to change that policy. `XFADS.noise.free` replaces the special
+   unconfigured `Noise(approx, free, q_scale, q_prior_fraction,
+   mstep_enabled)` component. Noise owns the free Q array and static Q
+   policy/config, and delegates every distribution operation to its composed
+   concrete Approx; it does not duplicate MVN packing, constraints, Cholesky,
+   moment conversion, or point-propagation functionality. `q_scale`,
+   `q_prior_fraction`, and public `q_mstep` are copied once into static Noise
+   fields at construction; mutating `model.conf` later must not silently
+   change an existing component's M-step policy. Rebuild the model to change
+   that policy. Do not store `state_dim` redundantly in Noise: each exact
+   registered strategy derives dimensions from its composed concrete Approx.
+   `XFADS.noise.free` replaces the special
    top-level `noise_free`, while `XFADS.approx` returns the single concrete
    Approx composed by `noise`. Thus core/posterior code retains one canonical
    Approx object and no duplicate reconstruction. Do not add a `noise:` config
@@ -1290,41 +1299,27 @@ epochs.
    and `mstep(...)`. Generalize to a pairwise `(Noise type, Approx type)`
    registry only when a second noise representation exists.
 
-3. **Use one uniform component context and statistic lifecycle.** Define one
-   general `StatContext` passed unchanged by XFADS to both components. It is
-   not M-step-specific: it packages batch inputs plus inference-derived values
-   from which any component may derive an auxiliary statistic. Because it
-   includes the array-free concrete Approx, implement it as an Equinox module,
-   not a plain NamedTuple:
+3. **Use one uniform component statistic lifecycle without a context class.**
+   `StatContext` adds no independent behavior; it would only bundle arguments
+   that both components can already receive directly. Keep the interface
+   minimal and give both components the same signature:
 
    ```python
-   class StatContext(eqx.Module):
-       t: Array
-       y: Array
-       u: Array
-       c: Array
-       moment: Array
-       transition_stat: Any
-       approx: Approx = eqx.field(static=True)
-   ```
-
-   `Observation` and `Noise` expose the same method names and signatures:
-
-   ```python
-   component.batch_stat(context: StatContext) -> Stat | None
+   component.batch_stat(
+       t, y, u, c, moment, transition_stat, approx
+   ) -> Stat | None
    component.accumulate_stat(total, delta) -> Stat | None
-   component.mstep(epoch_stat) -> updated_component
+   component.mstep(stat) -> updated_component
    ```
 
-   Each component selectively ignores irrelevant context fields: Gaussian R
-   uses `t`, `y`, `moment`, and `approx`; Noise uses `moment` and
+   Each component selectively ignores irrelevant arguments: Gaussian R uses
+   `t`, `y`, `moment`, and `approx`; Noise uses `moment` and
    `transition_stat`. Therefore XFADS does not encode component-specific
    argument knowledge or Q activation policy:
 
    ```python
-   batch_stat = model._collect_batch_stat(context)
-   epoch_stat = model._accumulate_batch_stat(epoch_stat, batch_stat)
-   model = model._apply_mstep_stat(epoch_stat)
+   batch_stat = model._batch_stat(t, y, u, c, key=key)
+   model = model._apply_mstep_stat(batch_stat)
    ```
 
    Use `MstepStats` for the returned additive component bundle (a
@@ -1465,3 +1460,125 @@ round-based cadence control beyond the fixed epoch boundary, a second noise
 representation requiring pairwise Noise/Approx strategy dispatch, and any
 further storage simplification once the accumulated mechanism is confirmed
 as permanent.
+
+## Approved architecture cleanup plan: direct post-SGD batch M-step
+
+**Status: approved next implementation step.** The current code has the
+correct direct post-SGD behavior, but retains remnants of the superseded
+recursive epoch-accumulator design. This cleanup makes the active lifecycle
+and component boundaries explicit without changing the intended algorithm.
+
+1. **Keep one active trainer lifecycle.** Normal `train()` uses direct
+   post-SGD per-batch updates only:
+
+   ```python
+   loss, grads = pre_sgd_loss_and_grad(model, batch)
+   model = apply_sgd(model, grads)
+   stat = model._batch_stat(*batch, key=stat_key)
+   model = model._apply_mstep_stat(stat)
+   ```
+
+   Remove the live epoch accumulator, epoch reset logic, and any normal
+   training call to `accumulate_stat`. If recursive accumulation remains of
+   research interest, quarantine it as a clearly separate future experiment;
+   do not leave two implicit trainer lifecycles active at once.
+
+2. **Keep Noise generic and remove redundant state.** `Noise` remains one
+   generic component composed with one static, array-free `Approx`:
+
+   ```python
+   class Noise(eqx.Module):
+       approx: Approx = eqx.field(static=True)
+       q_scale: float = eqx.field(static=True)
+       q_prior_fraction: float = eqx.field(static=True)
+       mstep_enabled: bool = eqx.field(static=True)
+       free: Array
+   ```
+
+   Remove redundant `state_dim`; the composed Approx/model configuration
+   already determines dimensionality. Noise delegates distribution operations
+   to Approx and owns Q storage, activation policy, and optional M-step
+   strategy dispatch.
+
+3. **Use exact concrete Approx strategy registration.** Preserve:
+
+   ```python
+   Noise.register_mstep(MVN, MVNNoiseMstep())
+   ```
+
+   Use exact-class lookup only—no MRO fallback. An unregistered Approx still
+   supports prediction and SGD-Q, emits no Q statistic, and does not freeze
+   `noise.free`. Custom strategies must be registered before model
+   construction or checkpoint loading; registration is process-level plugin
+   state and is not serialized.
+
+4. **Use one neutral component API without a context class.** Both
+   `Observation` and `Noise` expose the same direct signature:
+
+   ```python
+   component.batch_stat(
+       t, y, u, c, moment, transition_stat, approx
+   ) -> Stat | None
+   component.accumulate_stat(total, delta) -> Stat | None
+   component.mstep(stat) -> updated_component
+   ```
+
+   The direct trainer path uses only `batch_stat` and `mstep`; accumulation
+   remains out of the active loop. XFADS passes the common arguments without
+   introducing a one-caller context wrapper, and writes returned component
+   states into `observation` and `noise`.
+
+5. **Keep XFADS's private surface minimal.** Retain only:
+
+   ```python
+   _batch_stat(t, y, u, c, *, key)
+   _apply_mstep_stat(stat)
+   ```
+
+   `_batch_stat` runs one inference pass, constructs `StatContext` locally,
+   and returns `MstepStats`. Do not add a one-caller `_stat_context` helper.
+   Keep `mstep_from_data(...)` as the explicit manual full-data convenience
+   path; do not overload `mstep` with either data or statistics.
+
+6. **Preserve the direct post-SGD timing.** Compute gradients under the
+   pre-SGD model and pass the matching pre-M-step filtered parameter tree to
+   Optax. Apply those updates, then run `_batch_stat` on the updated model and
+   apply `_apply_mstep_stat`. This is intentionally one extra inference pass
+   per batch: it matches the historical direct-minibatch timing. R and active
+   `noise.free` are frozen leaves, so the M-step values survive the update.
+
+7. **Keep fractional Q shrinkage.** Retain:
+
+   ```yaml
+   q_scale: 1.0
+   q_prior_fraction: 0.1
+   q_mstep: true
+   ```
+
+   For each direct batch,
+
+   $$
+   Q_{\mathrm{new}}
+   =
+   \frac{\widehat Q+\alpha q_{\mathrm{scale}}I}
+   {1+\alpha},
+   \qquad
+   \alpha=\texttt{q\_prior\_fraction}.
+   $$
+
+   Remove active references to `state_dim + 1`, `prior_dof`, and
+   `noise_prior_dof`. Validate `q_prior_fraction` as finite and nonnegative.
+
+8. **Update tests and docs.** Add/retain tests for one post-SGD `_batch_stat`
+   call per batch, no epoch accumulator, no automatic `mstep_from_data` call,
+   correct Optax parameter-tree ordering, active MVN strategy freezing,
+   inactive/unregistered strategy SGD ownership, exact-class registration,
+   static Approx/Noise checkpoint roundtrip, and the fraction formula.
+   Update `AGENTS.md`, `CHANGELOG.md`, `docs/training.md`, `docs/design.md`,
+   and this document so the direct post-SGD lifecycle is active and the
+   recursive accumulator is explicitly historical/experimental.
+
+9. **Validate and commit.** Run focused Noise/trainer/smoother/distribution
+   tests, then the full CPU suite, followed by the VDP example and a small
+   benchmark smoke. Review the complete diff and commit at a logical
+   milestone. Do not push without explicit instruction.
