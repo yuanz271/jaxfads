@@ -12,7 +12,7 @@ from omegaconf import OmegaConf
 from jaxfads.constraints import unconstrain_positive
 from jaxfads.distributions import MVN
 from jaxfads.observations import GLM, mstep_gaussian_cov
-from jaxfads.smoother import XFADS, StatContext
+from jaxfads.smoother import XFADS
 
 
 def _poisson_conf(state_dim: int, observation_dim: int, *, n_steps: int = 0):
@@ -244,17 +244,10 @@ def test_glm_mstep_matches_mstep_gaussian_cov():
     via_driver = mstep_gaussian_cov(model, (times, y, u, c), key=mstep_key)
 
     _natural, moment, _pred, transition_stat = model(times, y, u, c, key=mstep_key)
-    context = StatContext(
-        t=times,
-        y=y,
-        u=u,
-        c=c,
-        moment=moment,
-        transition_stat=transition_stat,
-        approx=model.approx,
-    )
     new_observation = model.observation.mstep(
-        model.observation.batch_stat(context)
+        model.observation.batch_stat(
+            times, y, u, c, moment, transition_stat, model.approx
+        )
     )
 
     chex.assert_trees_all_close(
@@ -279,29 +272,30 @@ def test_glm_mstep_is_noop_for_poisson():
     single = approx.pack(jnp.zeros(state_dim), jnp.eye(state_dim))
     moment = jnp.broadcast_to(single, (batch, T) + single.shape)
 
-    context = StatContext(
-        t=times,
-        y=y,
-        u=jnp.zeros((batch, T, 0)),
-        c=jnp.zeros((batch, T, 0)),
-        moment=moment,
-        transition_stat=None,
-        approx=approx,
+    updated = observation.mstep(
+        observation.batch_stat(
+            times,
+            y,
+            jnp.zeros((batch, T, 0)),
+            jnp.zeros((batch, T, 0)),
+            moment,
+            None,
+            approx,
+        )
     )
-    updated = observation.mstep(observation.batch_stat(context))
     assert updated is observation
 
 
-def test_glm_mstep_frozen_paths():
-    """GLM.mstep_frozen_paths must report the Gaussian likelihood's frozen
+def test_glm_frozen_paths():
+    """GLM.frozen_paths must report the Gaussian likelihood's frozen
     path with the correct GLM-relative nesting prefix ("likelihood."), and
     must be empty ([]) for a Poisson-backed GLM."""
     state_dim, observation_dim, T = 2, 3, 4
 
     gaussian_conf = _gaussian_conf(state_dim, observation_dim, n_steps=T)
     gaussian_observation = GLM(gaussian_conf, jrnd.key(0))
-    assert gaussian_observation.mstep_frozen_paths() == ["likelihood.unconstrained_cov"]
+    assert gaussian_observation.frozen_paths() == ["likelihood.unconstrained_cov"]
 
     poisson_conf = _poisson_conf(state_dim, observation_dim, n_steps=T)
     poisson_observation = GLM(poisson_conf, jrnd.key(0))
-    assert poisson_observation.mstep_frozen_paths() == []
+    assert poisson_observation.frozen_paths() == []

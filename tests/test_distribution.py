@@ -453,18 +453,15 @@ def test_mvn_noise_mstep_matches_independent_reference(dim, rank):
         keys, moment_tm1, u_zeros, c_zeros
     )
 
-    from jaxfads.smoother import StatContext
-
-    context = StatContext(
-        t=jnp.zeros((n_batch, n_time)),
-        y=jnp.zeros((n_batch, n_time, 0)),
-        u=u_zeros,
-        c=c_zeros,
-        moment=moment,
-        transition_stat=transition_stat,
-        approx=approx,
+    stat = noise.batch_stat(
+        jnp.zeros((n_batch, n_time)),
+        jnp.zeros((n_batch, n_time, 0)),
+        u_zeros,
+        c_zeros,
+        moment,
+        transition_stat,
+        approx,
     )
-    stat = noise.batch_stat(context)
     updated_noise = noise.mstep(stat)
     canon = approx.free_to_canon(updated_noise.free)
     got_cov = canon.chol @ canon.chol.T

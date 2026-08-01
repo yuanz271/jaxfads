@@ -306,7 +306,7 @@ class Likelihood(Protocol):
         """
         ...
 
-    def mstep_frozen_paths(self) -> list[str]:
+    def frozen_paths(self) -> list[str]:
         """
         Attribute paths (relative to this Likelihood) that must be excluded
         from gradient updates whenever :meth:`mstep`-driven updates are
@@ -428,23 +428,25 @@ class GLM(Observation):
         )
         return eqx.tree_at(lambda m: m.likelihood, self, new_likelihood)
 
-    def mstep_frozen_paths(self) -> list[str]:
-        """See :meth:`Observation.mstep_frozen_paths`.
+    def frozen_paths(self) -> list[str]:
+        """See :meth:`Observation.frozen_paths`.
 
-        Dispatches to ``self.likelihood.mstep_frozen_paths`` via ``hasattr``
+        Dispatches to ``self.likelihood.frozen_paths`` via ``hasattr``
         (same reasoning as :meth:`mstep`), prepending ``"likelihood."`` to
         each returned path since ``self.likelihood`` is nested one level
         inside ``GLM``. Falls back to ``[]`` for likelihoods that don't
         implement it.
         """
-        if not hasattr(self.likelihood, "mstep_frozen_paths"):
+        if not hasattr(self.likelihood, "frozen_paths"):
             return []
-        return ["likelihood." + p for p in self.likelihood.mstep_frozen_paths()]
+        return ["likelihood." + p for p in self.likelihood.frozen_paths()]
 
-    def batch_stat(self, context):
+    def batch_stat(self, t, y, u, c, moment, transition_stat, approx):
         """Return this observation's additive R statistic, if supported."""
         if isinstance(self.likelihood, Gaussian):
-            return self.likelihood.batch_stat(context, self.readout)
+            return self.likelihood.batch_stat(
+                t, y, u, c, moment, transition_stat, approx, self.readout
+            )
         return None
 
     def mstep(self, stats):
@@ -902,13 +904,12 @@ class Gaussian(eqx.Module, strict=True):
         propagated_var = jnp.einsum("dj,jk,dk->d", C, cov_z, C)  # (d,) = diag(C cov_z C^T)
         return residual_sq + propagated_var
 
-    def batch_stat(self, context, readout):
+    def batch_stat(self, t, y, u, c, moment, transition_stat, approx, readout):
+        del u, c, transition_stat
         stat = jax.vmap(
-            jax.vmap(
-                partial(self.mstep_stat, approx=context.approx, readout=readout)
-            )
-        )(context.t, context.moment, context.y)
-        valid = jnp.isfinite(context.y)
+            jax.vmap(partial(self.mstep_stat, approx=approx, readout=readout))
+        )(t, moment, y)
+        valid = jnp.isfinite(y)
         return (
             jnp.sum(jnp.where(valid, stat, 0), axis=(0, 1)),
             jnp.sum(valid, axis=(0, 1)),
@@ -948,8 +949,8 @@ class Gaussian(eqx.Module, strict=True):
         )
         return eqx.tree_at(lambda m: m.unconstrained_cov, self, new_unconstrained_cov)
 
-    def mstep_frozen_paths(self) -> list[str]:
-        """See :meth:`Observation.mstep_frozen_paths`. Relative to
+    def frozen_paths(self) -> list[str]:
+        """See :meth:`Observation.frozen_paths`. Relative to
         ``self`` (i.e. relative to ``self.likelihood`` from ``GLM``'s
         perspective).
         """

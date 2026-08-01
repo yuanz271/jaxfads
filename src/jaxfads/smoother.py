@@ -38,18 +38,6 @@ from .util import vmap_with_key
 logger = get_logger(__name__)
 
 
-class StatContext(eqx.Module):
-    """Batch inputs and inference outputs available to component statistics."""
-
-    t: Array
-    y: Array
-    u: Array
-    c: Array
-    moment: Array
-    transition_stat: Any
-    approx: Approx = eqx.field(static=True)
-
-
 class MstepStats(NamedTuple):
     """Additive observation/noise statistic bundle for any data batch."""
 
@@ -322,33 +310,23 @@ class XFADS(ConfModule):
     def _batch_stat(self, t, y, u, c, *, key) -> MstepStats:
         """Infer one data batch and return its additive component statistic."""
         _natural, moment, _predicted, transition_stat = self(t, y, u, c, key=key)
-        context = StatContext(
-            t=t,
-            y=y,
-            u=u,
-            c=c,
-            moment=moment,
-            transition_stat=transition_stat,
-            approx=self.approx,
-        )
         return MstepStats(
-            observation=self.observation.batch_stat(context),
-            noise=self.noise.batch_stat(context),
-        )
-
-    def _accumulate_batch_stat(
-        self, total: MstepStats, delta: MstepStats
-    ) -> MstepStats:
-        """Accumulate component-owned statistics for one epoch."""
-        return MstepStats(
-            observation=self.observation.accumulate_stat(
-                total.observation, delta.observation
+            observation=self.observation.batch_stat(
+                t, y, u, c, moment, transition_stat, self.approx
             ),
-            noise=self.noise.accumulate_stat(total.noise, delta.noise),
+            noise=self.noise.batch_stat(
+                t, y, u, c, moment, transition_stat, self.approx
+            ),
         )
 
-    def _apply_mstep_stat(self, stats: MstepStats):
-        """Apply accumulated component statistics at an epoch boundary."""
+    def frozen_paths(self) -> list[str]:
+        return [
+            "observation." + path
+            for path in self.observation.frozen_paths()
+        ] + ["noise." + path for path in self.noise.frozen_paths()]
+
+    def mstep(self, stats: MstepStats):
+        """Apply component M-steps from one statistic bundle."""
         model = eqx.tree_at(
             lambda m: m.observation,
             self,
@@ -357,6 +335,7 @@ class XFADS(ConfModule):
         return eqx.tree_at(lambda m: m.noise, model, model.noise.mstep(stats.noise))
 
     def mstep_from_data(self, t, y, u, c, *, key) -> "XFADS":
+
         """Apply one explicit full-data R/Q recomputation.
 
         This convenience method performs one inference pass over supplied
@@ -370,7 +349,7 @@ class XFADS(ConfModule):
         Noise component remains unchanged and its ``free`` leaf is
         SGD-managed.
         """
-        return self._apply_mstep_stat(self._batch_stat(t, y, u, c, key=key))
+        return self.mstep(self._batch_stat(t, y, u, c, key=key))
 
     @classmethod
     def load(cls, path: str | Path):

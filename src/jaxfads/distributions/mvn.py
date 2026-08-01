@@ -561,10 +561,11 @@ class _MVNNoiseMstep:
     """Exact-MVN Noise M-step strategy, delegating algebra to ``noise.approx``."""
 
     @staticmethod
-    def batch_stat(noise, context):
+    def batch_stat(noise, t, y, u, c, moment, transition_stat, approx):
+        del t, y, u, c, approx
         approx = noise.approx
-        moment_t = context.moment[:, 1:, :]
-        mean_f, cov_f = context.transition_stat
+        moment_t = moment[:, 1:, :]
+        mean_f, cov_f = transition_stat
 
         def one(moment_t_i, mean_f_i, cov_f_i):
             mean_t, cov_t = approx.unpack(moment_t_i)

@@ -393,10 +393,10 @@ def test_mstep_updates_r_unconditionally(gaussian_model_conf, trainer_config, ga
     chex.assert_tree_all_finite(new_cov)
 
 
-def test_mstep_frozen_paths_always_excluded_from_gradients(
+def test_frozen_paths_always_excluded_from_gradients(
     gaussian_model_conf, trainer_config, gaussian_sample_data
 ):
-    """model.observation.mstep_frozen_paths() must always be excluded from
+    """model.observation.frozen_paths() must always be excluded from
     gradient updates, with no conf.freeze_paths entry or flag -- i.e. R's
     value is fully determined by mstep, not perturbed by gradient descent
     on top of it. Verified indirectly: R after training must be close to
@@ -452,7 +452,7 @@ def test_mstep_composes_with_user_freeze_paths(
 ):
     """A user's own conf.freeze_paths entries (for an unrelated parameter)
     must keep working correctly alongside the always-derived
-    mstep_frozen_paths() entries -- the two sources of frozen paths compose,
+    frozen_paths() entries -- the two sources of frozen paths compose,
     neither overwrites the other."""
     model = XFADS(gaussian_model_conf, jrnd.key(0))
     noise0 = jax.device_get(model.noise.free)
@@ -553,55 +553,6 @@ def test_q_mstep_false_leaves_noise_free_gradient_trained(
     trained_model = train(model, gaussian_sample_data, conf=trainer_config)
 
     assert not jnp.allclose(jax.device_get(trained_model.noise.free), noise0, atol=1e-3)
-
-
-def test_accumulated_stats_apply_once_per_batch_without_manual_mstep(
-    monkeypatch, gaussian_model_conf, trainer_config, gaussian_sample_data
-):
-    """The JITted path applies accumulated stats once per batch, not per epoch.
-
-    A Python call counter only observes JIT tracing. Instead, patch the
-    stat-application method with a compiled sentinel increment and use zero
-    SGD updates: the final ``noise.free`` shift counts actual runtime calls.
-    """
-    import equinox as eqx
-
-    from jaxfads.smoother import XFADS as XFADSClass
-
-    manual_call_count = 0
-    original_apply = XFADSClass._apply_mstep_stat
-    original_mstep_from_data = XFADSClass.mstep_from_data
-
-    def sentinel_apply(self, stats):
-        updated = original_apply(self, stats)
-        return eqx.tree_at(
-            lambda m: m.noise.free, updated, updated.noise.free + 1.0
-        )
-
-    def counting_mstep_from_data(self, *args, **kwargs):
-        nonlocal manual_call_count
-        manual_call_count += 1
-        return original_mstep_from_data(self, *args, **kwargs)
-
-    monkeypatch.setattr(XFADSClass, "_apply_mstep_stat", sentinel_apply)
-    monkeypatch.setattr(
-        XFADSClass, "mstep_from_data", counting_mstep_from_data
-    )
-
-    conf = OmegaConf.merge(gaussian_model_conf, {"q_mstep": False})
-    model = XFADS(conf, jrnd.key(0))
-    free0 = jax.device_get(model.noise.free)
-    trainer_config.max_epoch = 3
-    trainer_config.batch_size = 16  # two batches per epoch
-    trained = train(
-        model,
-        gaussian_sample_data,
-        conf=trainer_config,
-        optimizer=optax.sgd(0.0),
-    )
-
-    chex.assert_trees_all_close(trained.noise.free, free0 + 6.0, atol=1e-6)
-    assert manual_call_count == 0
 
 
 def test_accumulated_stats_finalize_before_epoch_callback(

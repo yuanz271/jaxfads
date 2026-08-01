@@ -562,7 +562,7 @@ class Observation(SubclassRegistryMixin, ConfModule):
         """
         return self
 
-    def mstep_frozen_paths(self) -> list[str]:
+    def frozen_paths(self) -> list[str]:
         """Attribute paths (relative to this Observation) that must be
         excluded from gradient updates whenever :meth:`mstep`-driven
         updates are active.

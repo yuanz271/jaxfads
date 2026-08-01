@@ -505,7 +505,7 @@ def _run_training_loop(
         model = eqx.apply_updates(model, updates)
         key, stat_key = jr.split(key)
         t, y, u, c = batch
-        model = model._apply_mstep_stat(model._batch_stat(t, y, u, c, key=stat_key))
+        model = model.mstep(model._batch_stat(t, y, u, c, key=stat_key))
         return model, opt_state, step + 1, loss
 
     opt_state = optimizer.init(_copy_pytree(eqx.filter(model, eqx.is_inexact_array)))
@@ -591,7 +591,7 @@ statistics. The trainer accumulates them over the epoch and finalizes R and
 enabled Q once at the epoch boundary before callbacks/checkpoints, without an
 additional inference pass. For a Gaussian-likelihood model R is therefore
 M-step-owned and excluded from SGD via
-``model.observation.mstep_frozen_paths()``. When ``q_mstep`` is true,
+``model.frozen_paths()``. When ``q_mstep`` is true and Noise owns Q,
 ``noise.free`` is excluded the same way; when false, it remains
 SGD-managed. See [mstep_dynamics_noise](../docs/mstep_dynamics_noise.md).
 
@@ -713,11 +713,7 @@ SGD-managed. See [mstep_dynamics_noise](../docs/mstep_dynamics_noise.md).
     # each update from that same posterior is well-defined regardless),
     # just wasted, silently-discarded gradient computation unless excluded
     # here, mirroring observation.mstep's own auto-exclusion exactly.
-    freeze_paths = [str(p) for p in conf.freeze_paths] + [
-        "observation." + p for p in model.observation.mstep_frozen_paths()
-    ]
-    if model.q_mstep_active:
-        freeze_paths = freeze_paths + ["noise.free"]
+    freeze_paths = [str(p) for p in conf.freeze_paths] + model.frozen_paths()
     for path in freeze_paths:
         parts = tuple(path.split("."))
         _ = _resolve_attr_path(model, parts)  # fail fast if path is invalid
