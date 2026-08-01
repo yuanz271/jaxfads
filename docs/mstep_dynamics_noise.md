@@ -1291,13 +1291,15 @@ epochs.
 
    For an unregistered Approx, Noise returns no Q statistic and its M-step is
    a no-op. This gives the desired policy without `isinstance`
-   branches in XFADS/trainer: Noise itself defines
-   `mstep_active = mstep_enabled and strategy is not None`; only an active
-   Noise contributes MAP-Q statistics or is frozen from SGD. Otherwise Q
-   remains SGD-managed. Noise owns generic additive accumulation of
-   fixed-shape statistic pytrees; a strategy only supplies `batch_stat(...)`
-   and `mstep(...)`. Generalize to a pairwise `(Noise type, Approx type)`
-   registry only when a second noise representation exists.
+   branches in XFADS/trainer: Noise's actual methods are no-ops when disabled
+   or unregistered. `batch_stat(...)` returns `None`, `mstep(...)` returns
+   `self`, and `mstep_frozen_paths()` returns `[]` in that case. When a
+   strategy is registered and enabled, `mstep_frozen_paths()` returns
+   `["free"]`, so the component itself declares that its M-step owns Q.
+   Noise owns generic additive accumulation of fixed-shape statistic pytrees;
+   a strategy only supplies `batch_stat(...)` and `mstep(...)`. Generalize to
+   a pairwise `(Noise type, Approx type)` registry only when a second noise
+   representation exists.
 
 3. **Use one uniform component statistic lifecycle without a context class.**
    `StatContext` adds no independent behavior; it would only bundle arguments
@@ -1393,12 +1395,14 @@ epochs.
    confidence is intentionally discarded, while its most recently applied
    R/Q parameters remain model state.
 
-6. **Preserve Q ownership modes.** Noise owns the activation predicate.
-   When `noise.mstep_active` is true, `noise.free` is auto-frozen from SGD and
-   updated after each batch from the accumulated current-epoch MAP statistic. When false—because
-   public `q_mstep=false` was passed into `Noise` at construction or no exact
-   strategy exists—Noise returns no Q delta, performs no Q finalization, and
-   leaves `noise.free` SGD-managed. R remains M-step-owned under all modes.
+6. **Preserve Q ownership through component no-ops.** Do not expose
+   `Noise.supports_mstep` or `Noise.mstep_active` as trainer-facing
+   predicates. If `q_mstep=false` or no exact strategy exists, Noise's actual
+   methods are no-ops: `batch_stat` returns `None`, `mstep` returns `self`, and
+   `mstep_frozen_paths()` returns `[]`; `noise.free` remains SGD-managed. If
+   enabled with a registered strategy, `mstep_frozen_paths()` returns
+   `["free"]`, and the trainer freezes the corresponding `noise.free` path.
+   R remains M-step-owned under all modes.
 
 7. **Validation.** Unit tests cover public scalar `batch_loss`, one
    `_apply_mstep_stat` call **per batch** with no automatic
