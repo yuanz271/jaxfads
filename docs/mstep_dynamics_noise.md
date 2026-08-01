@@ -1676,7 +1676,11 @@ def mstep(
 ```
 
 XFADS only passes shared outputs and replaces `observation` and `noise`; it
-does not implement Gaussian residuals, MVN scatter, or strategy mathematics.
+ does not implement Gaussian residuals, MVN scatter, or strategy mathematics.
+Each parent structurally replaces its updated child and each leaf structurally
+updates its own local fields (for example `Noise` replaces `free`). M-step
+updates never use global paths or require a component to know its parent member
+name.
 
 ### 4. Observation delegation
 
@@ -1744,7 +1748,11 @@ GLM -> ["likelihood." + path for path in likelihood.frozen_paths()]
 XFADS -> ["observation." + path, "noise." + path]
 ```
 
-The trainer consumes only fully qualified XFADS-root-relative paths.
+The trainer consumes only fully qualified XFADS-root-relative paths. These
+paths are used only to construct optimizer freeze masks; they are not used for
+M-step updates. M-step updates return updated component objects and parents
+replace child objects structurally, so components need only know their local
+fields.
 
 ### 7. Trainer ordering
 
