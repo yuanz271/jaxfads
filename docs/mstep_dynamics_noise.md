@@ -1324,13 +1324,12 @@ epochs.
    minibatch, a full dataset, or any other supplied batch. The trainer's epoch
    reduction is simply repeated `accumulate_stat` application over training
    minibatches; a manual full-data M-step is the one-element reduction of the
-   same type. `_collect_batch_stat` returns one additive batch statistic; it
-   never stores history or mutates a collection. The trainer owns exactly one
-   ephemeral `epoch_stat` accumulator and resets it each epoch.
-   `_accumulate_batch_stat` is model-owned even though its present operation
-   is reduction: it delegates to each component's `accumulate_stat` instead
-   of teaching the trainer which leaves exist. After every accumulation, the
-   trainer immediately calls `_apply_mstep_stat(epoch_stat)`; XFADS delegates
+   same type. In the proposed direct-batch experiment, `_batch_stat` returns
+   one additive batch statistic and it is applied immediately; it never stores
+   history or mutates a collection. The trainer owns no active epoch evidence
+   accumulator in that experiment. `_accumulate_batch_stat` remains the
+   component-owned reduction operation for the separate recursive experiment,
+   but is not called by the direct-batch schedule. `_apply_mstep_stat` delegates
    each update to component `mstep` methods and writes their returned
    components back into its own state. A no-op component returns/retains
    `None`.
@@ -1341,33 +1340,46 @@ epochs.
    and per-feature valid counts; the built-in MVN Noise strategy owns
    transition-scatter sums and pair counts.
 
+   Keep the private surface minimal:
+
+   ```python
+   _batch_stat(t, y, u, c, *, key)
+   _accumulate_batch_stat(total, delta)
+   _apply_mstep_stat(stat)
+   ```
+
+   `_batch_stat` directly runs inference, constructs `StatContext` locally,
+   and returns `MstepStats`; do **not** introduce a separate `_stat_context`
+   helper, since it would have one caller and only construct one object.
+
    Rename the current public full-data convenience method to
    `XFADS.mstep_from_data(t, y, u, c, *, key)`. It explicitly performs
-   `data -> inference -> StatContext -> MstepStats -> _apply_mstep_stat`
-   once over supplied data. Do **not** overload `mstep`
-   between data and statistic inputs; their domains differ. The normal trainer
-   never calls `mstep_from_data`.
+   `data -> _batch_stat -> _apply_mstep_stat` once over supplied data. Do
+   **not** overload `mstep` between data and statistic inputs; their domains
+   differ. The normal trainer never calls `mstep_from_data`.
 
-4. **Reuse the existing pre-SGD loss forward pass—never run inference
-   post-SGD.** Extend the current `batch_loss` path to return the component
-   statistics as auxiliary output from the exact `model(...)` call that
-   already produces posterior moments, predictive moments, and
-   `transition_stat` for ELBO evaluation. Use
-   `eqx.filter_value_and_grad(..., has_aux=True)` so autodiff differentiates
-   only the scalar loss while the trainer receives those already-materialized
-   statistics after the gradient calculation. Accumulate the returned
-   pre-update delta and immediately call `_apply_mstep_stat` **before**
-   applying the precomputed SGD updates. Apply those updates to the
-   M-step-updated model while passing Optax the original pre-M-step filtered
-   parameters that correspond to the gradients. R and active `noise.free` are
-   frozen leaves, so they are not overwritten. The next batch then sees both
-   the M-step and SGD changes. `transition_stat` therefore avoids a second
-   dynamics propagation for Q; deriving R's residual scatter from the same
-   posterior is similarly only a reduction, not new inference. Q-statistic
-   non-finites intentionally propagate and fail loudly during the Noise M-step
-   rather than being silently masked: unlike R's externally observed data
-   mask, a non-finite latent/transition statistic is an inference failure that
-   must be diagnosed, not reweighted away.
+4. **Use a fresh post-SGD batch statistic for the direct-batch experiment.**
+   Compute the loss and gradients from the current pre-SGD model, apply the
+   optimizer update using its matching pre-SGD filtered parameter pytree, then
+   call `_batch_stat(*batch, key=stat_key)` on the updated model and apply its
+   returned statistic immediately:
+
+   ```python
+   loss, grads = value_and_grad(loss_fn)(model, batch)
+   updates, opt_state = optimizer.update(grads, opt_state, params_from(model))
+   model = eqx.apply_updates(model, updates)
+   model = model._apply_mstep_stat(model._batch_stat(*batch, key=stat_key))
+   ```
+
+   This costs one additional inference pass per batch but faithfully matches
+   the historical direct-minibatch timing: gradients use the old model/R/Q,
+   while the R/Q statistic is evaluated under the post-SGD model. There is no
+   post-SGD inference in the recursive-accumulation variant; that variant is a
+   separate experiment. Q-statistic non-finites intentionally propagate and
+   fail loudly during the Noise M-step rather than being silently masked:
+   unlike R's externally observed data mask, a non-finite latent/transition
+   statistic is an inference failure that must be diagnosed, not reweighted
+   away.
 
 5. **Keep trainer state ephemeral and reset it at each epoch.** Store the
    single R/Q `epoch_stat` only in `_run_training_loop`, never in `XFADS`,
