@@ -498,17 +498,17 @@ def _run_training_loop(
     beta_schedule=None,
     regularizer=None,
 ):
-    """Run minibatch SGD with one accumulated R/Q update per epoch.
+    """Run recursive accumulated R/Q M-steps alongside minibatch SGD.
 
-    Each batch's auxiliary M-step statistics are emitted by the same pre-SGD
-    inference call used for its ELBO. They are accumulated outside the JIT and
-    finalized once at the epoch boundary before callbacks/checkpoints. The
-    accumulators are deliberately ephemeral: an interrupted partial epoch is
-    discarded rather than checkpointed or reused under a changed model.
+    Each batch's pre-SGD ELBO forward pass emits an additive statistic. The
+    JITted step accumulates that statistic, applies R/Q M-steps to the same
+    pre-SGD model, then applies the precomputed SGD updates to non-frozen
+    leaves. Epoch boundaries discard only accumulated evidence; learned R/Q
+    remain model state. Interrupted partial epoch evidence is not checkpointed.
     """
 
     @eqx.filter_jit(donate="all")
-    def train_step(model, opt_state, batch, key, step):
+    def train_step(model, opt_state, epoch_stats, batch, key, step):
         model, opt_state = eqx.filter_shard((model, opt_state), model_sharding)
         batch = eqx.filter_shard(batch, data_sharding)
         if param_schedule is not None:
@@ -519,9 +519,15 @@ def _run_training_loop(
             _batch_loss_with_stats, has_aux=True
         )(model, batch, key, beta=beta, regularizer=regularizer)
         params = eqx.filter(model, eqx.is_inexact_array)
+        epoch_stats = (
+            stats
+            if epoch_stats is None
+            else model._accumulate_batch_stat(epoch_stats, stats)
+        )
+        model = model._apply_mstep_stat(epoch_stats)
         updates, opt_state = optimizer.update(grads, opt_state, params)
         model = eqx.apply_updates(model, updates)
-        return model, opt_state, step + 1, loss, stats
+        return model, opt_state, epoch_stats, step + 1, loss
 
     opt_state = optimizer.init(_copy_pytree(eqx.filter(model, eqx.is_inexact_array)))
     model, opt_state = eqx.filter_shard((model, opt_state), model_sharding)
@@ -538,9 +544,7 @@ def _run_training_loop(
     epoch_stats = None
 
     def finalize_epoch(epoch_idx, batch_losses):
-        nonlocal model, epoch_stats
-        if epoch_stats is not None:
-            model = model._apply_mstep_stat(epoch_stats)
+        nonlocal epoch_stats
         epoch_stats = None
         train_loss = (
             float(jnp.mean(jnp.stack(batch_losses)))
@@ -570,14 +574,10 @@ def _run_training_loop(
                 current_epoch = epoch
 
             key, batch_key = jr.split(key)
-            model, opt_state, step, loss, batch_stats = train_step(
-                model, opt_state, batch, batch_key, step
+            model, opt_state, epoch_stats, step, loss = train_step(
+                model, opt_state, epoch_stats, batch, batch_key, step
             )
             epoch_batch_losses.append(loss)
-            if epoch_stats is None:
-                epoch_stats = batch_stats
-            else:
-                epoch_stats = model._accumulate_batch_stat(epoch_stats, batch_stats)
         else:
             finalize_epoch(current_epoch, epoch_batch_losses)
     except KeyboardInterrupt:

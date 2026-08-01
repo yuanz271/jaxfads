@@ -9,7 +9,7 @@ from jax import random as jrnd
 from omegaconf import OmegaConf
 
 import jaxfads.observations  # noqa: F401 — register GLM subclass
-from jaxfads.smoother import StatContext, XFADS
+from jaxfads.smoother import XFADS, StatContext
 from jaxfads.trainer import batch_loss, train
 
 
@@ -595,39 +595,53 @@ def test_q_mstep_false_leaves_noise_free_gradient_trained(
     assert not jnp.allclose(jax.device_get(trained_model.noise.free), noise0, atol=1e-3)
 
 
-def test_accumulated_stats_finalize_once_per_epoch_without_manual_mstep(
+def test_accumulated_stats_apply_once_per_batch_without_manual_mstep(
     monkeypatch, gaussian_model_conf, trainer_config, gaussian_sample_data
 ):
-    """Normal training finalizes opaque statistics once per epoch and never
-    invokes the manual full-data XFADS.mstep API."""
+    """The JITted path applies accumulated stats once per batch, not per epoch.
+
+    A Python call counter only observes JIT tracing. Instead, patch the
+    stat-application method with a compiled sentinel increment and use zero
+    SGD updates: the final ``noise.free`` shift counts actual runtime calls.
+    """
+    import equinox as eqx
+
     from jaxfads.smoother import XFADS as XFADSClass
 
-    finalize_count = 0
-    mstep_count = 0
-    original_finalize = XFADSClass._apply_mstep_stat
+    manual_call_count = 0
+    original_apply = XFADSClass._apply_mstep_stat
     original_mstep_from_data = XFADSClass.mstep_from_data
 
-    def counting_finalize(self, stats):
-        nonlocal finalize_count
-        finalize_count += 1
-        return original_finalize(self, stats)
+    def sentinel_apply(self, stats):
+        updated = original_apply(self, stats)
+        return eqx.tree_at(
+            lambda m: m.noise.free, updated, updated.noise.free + 1.0
+        )
 
     def counting_mstep_from_data(self, *args, **kwargs):
-        nonlocal mstep_count
-        mstep_count += 1
+        nonlocal manual_call_count
+        manual_call_count += 1
         return original_mstep_from_data(self, *args, **kwargs)
 
-    monkeypatch.setattr(XFADSClass, "_apply_mstep_stat", counting_finalize)
+    monkeypatch.setattr(XFADSClass, "_apply_mstep_stat", sentinel_apply)
     monkeypatch.setattr(
         XFADSClass, "mstep_from_data", counting_mstep_from_data
     )
 
+    conf = OmegaConf.merge(gaussian_model_conf, {"q_mstep": False})
+    model = XFADS(conf, jrnd.key(0))
+    free0 = jax.device_get(model.noise.free)
     trainer_config.max_epoch = 3
-    trainer_config.batch_size = 32
-    train(XFADS(gaussian_model_conf, jrnd.key(0)), gaussian_sample_data, conf=trainer_config)
+    trainer_config.batch_size = 16  # two batches per epoch
+    trained = train(
+        model,
+        gaussian_sample_data,
+        conf=trainer_config,
+        optimizer=optax.sgd(0.0),
+    )
 
-    assert finalize_count == 3
-    assert mstep_count == 0
+    chex.assert_trees_all_close(trained.noise.free, free0 + 6.0, atol=1e-6)
+    assert manual_call_count == 0
 
 
 def test_accumulated_stats_finalize_before_epoch_callback(
