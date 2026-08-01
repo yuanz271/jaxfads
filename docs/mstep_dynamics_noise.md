@@ -1599,3 +1599,216 @@ and component boundaries explicit without changing the intended algorithm.
    tests, then the full CPU suite, followed by the VDP example and a small
    benchmark smoke. Review the complete diff and commit at a logical
    milestone. Do not push without explicit instruction.
+
+## Approved architecture plan: hierarchical M-step dispatch
+
+**Status: approved next refactor.** This plan makes M-step dispatch recursive
+and component-owned while keeping `Approx` distribution-only and retaining
+the current named fourth forward output `transition_stat`. Do not introduce a
+general opaque `aux` forward bundle yet.
+
+### 1. Hierarchy and ownership
+
+```text
+XFADS
+├── Observation
+│   └── Likelihood
+└── Noise
+    └── exact Approx-class M-step strategy
+```
+
+- Trainer owns data, performs inference and SGD, then invokes model-output
+  M-step dispatch.
+- XFADS delegates to its direct `Observation` and `Noise` members and knows
+  only their storage locations.
+- Observation/Likelihood owns R logic.
+- Noise owns Q storage, Q policy, and strategy dispatch.
+- Approx owns distribution functionality only.
+- The registered Noise strategy owns Approx-family-specific Q mathematics.
+
+### 2. Common component M-step interface
+
+Every M-step hierarchy node uses the same output-based operation:
+
+```python
+component.mstep(
+    *,
+    t,
+    y,
+    moment,
+    transition_stat,
+    approx,
+) -> updated_component
+```
+
+Components ignore irrelevant arguments. The active direct post-SGD path does
+not return or accumulate statistics separately: `Observation.mstep(...)` and
+`Noise.mstep(...)` compute and apply their own updates from model outputs.
+
+### 3. XFADS delegation
+
+`XFADS.mstep` consumes model outputs, not raw data:
+
+```python
+def mstep(
+    self,
+    *,
+    t,
+    y,
+    moment,
+    transition_stat,
+    approx=None,
+) -> "XFADS":
+    observation = self.observation.mstep(
+        t=t,
+        y=y,
+        moment=moment,
+        transition_stat=transition_stat,
+        approx=self.approx,
+    )
+    noise = self.noise.mstep(
+        t=t,
+        y=y,
+        moment=moment,
+        transition_stat=transition_stat,
+        approx=self.approx,
+    )
+    ...
+```
+
+XFADS only passes shared outputs and replaces `observation` and `noise`; it
+does not implement Gaussian residuals, MVN scatter, or strategy mathematics.
+
+### 4. Observation delegation
+
+The same method name is used recursively:
+
+```python
+Observation.mstep(...)
+Likelihood.mstep(...)
+```
+
+`GLM.mstep` delegates to its likelihood and qualifies the returned state. The
+Gaussian leaf computes R; Poisson's M-step is a no-op:
+
+```python
+class Poisson:
+    def mstep(self, **kwargs):
+        return self
+```
+
+### 5. Noise composition and strategy dispatch
+
+Noise remains one generic component:
+
+```python
+class Noise(eqx.Module):
+    approx: Approx = eqx.field(static=True)
+    q_scale: float = eqx.field(static=True)
+    q_prior_fraction: float = eqx.field(static=True)
+    mstep_enabled: bool = eqx.field(static=True)
+    free: Array
+```
+
+Use exact concrete Approx-class registration, without MRO fallback:
+
+```python
+Noise.register_mstep(MVN, MVNNoiseMstep())
+```
+
+`Noise.mstep` delegates to the registered strategy. The strategy delegates
+MVN representation operations back to `noise.approx` and owns only the Q
+scatter/update formula. An unregistered Approx remains prediction-capable and
+SGD-Q managed; its Noise M-step is a no-op.
+
+### 6. Hierarchical frozen paths
+
+Every node returns paths relative to itself:
+
+```python
+component.frozen_paths() -> list[str]
+```
+
+Examples:
+
+```text
+Gaussian -> ["unconstrained_cov"]
+Poisson -> []
+Noise with active strategy -> ["free"]
+Noise without strategy -> []
+```
+
+Parents qualify child paths because only the parent knows the member name:
+
+```text
+GLM -> ["likelihood." + path for path in likelihood.frozen_paths()]
+XFADS -> ["observation." + path, "noise." + path]
+```
+
+The trainer consumes only fully qualified XFADS-root-relative paths.
+
+### 7. Trainer ordering
+
+Normal training preserves direct post-SGD timing:
+
+```python
+loss, grads = pre_sgd_loss_and_grad(model, batch)
+params = eqx.filter(model, eqx.is_inexact_array)
+updates, opt_state = optimizer.update(grads, opt_state, params)
+model = eqx.apply_updates(model, updates)
+
+natural, moment, predicted, transition_stat = model(
+    *batch,
+    key=stat_key,
+)
+model = model.mstep(
+    t=batch[0],
+    y=batch[1],
+    moment=moment,
+    transition_stat=transition_stat,
+    approx=model.approx,
+)
+```
+
+Gradients and Optax parameters correspond to the pre-SGD model; M-step
+statistics are computed from the post-SGD model. There is no statistic
+accumulator, epoch-end M-step, or full-dataset inference in normal training.
+
+### 8. Remove obsolete active interfaces
+
+Remove from active code:
+
+- `_apply_mstep_stat`;
+- `_accumulate_batch_stat`;
+- active epoch-stat state;
+- data/stat overloading of `mstep`;
+- obsolete `mstep_mode` behavior;
+- Q-M-step methods on `Approx`;
+- direct `noise_free` storage references.
+
+Keep `transition_stat` as the named fourth forward output. A manual full-data
+helper is optional; if retained, it must only compose `model(...)` followed by
+model-output `mstep`, without becoming part of the component API.
+
+### 9. Tests
+
+Add or migrate tests for:
+
+- one post-SGD inference/statistic update per training batch;
+- XFADS M-step consuming model outputs, not raw data;
+- XFADS delegating to Observation and Noise;
+- GLM delegating to Likelihood;
+- Poisson M-step no-op behavior;
+- MVN strategy Q update;
+- unregistered Approx Noise no-op and SGD ownership;
+- exact strategy registration;
+- hierarchical relative `frozen_paths`;
+- active `noise.free` freeze and inactive/unregistered Noise non-freeze;
+- fractional Q update,
+  $Q_{\mathrm{new}}=(\widehat Q+\alpha q_{\mathrm{scale}}I)/(1+\alpha)$.
+
+### 10. Validation
+
+Run the focused Noise/trainer/smoother/distribution tests, the full CPU test
+suite, the VDP example, and a small Lorenz smoke benchmark. Review the final
+diff and commit the refactor. Do not push without explicit instruction.
