@@ -297,6 +297,9 @@ def evaluate(
     # Procrustes alignment
     aff = procrustes_affine(latent_states.reshape(-1, D), means.reshape(-1, D))
     aligned = align(aff, means)
+    aligned_covs = jax.vmap(
+        jax.vmap(lambda cov: aff.A @ cov @ aff.A.T)
+    )(post_covs)
 
     # Metrics
     post_rmse = float(jnp.sqrt(jnp.mean((aligned - latent_states) ** 2)))
@@ -338,7 +341,8 @@ def evaluate(
         flow_nrmse=nrmse,
         flow_angle=angle,
         aligned_means=aligned,
-        covs=post_covs,
+        covs=aligned_covs,
+        raw_covs=post_covs,
         alignment=aff,
     )
 
