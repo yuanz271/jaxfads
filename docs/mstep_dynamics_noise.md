@@ -1315,14 +1315,17 @@ epochs.
    ) -> Stat | None
    component.accumulate_stat(total, delta) -> Stat | None
    component.mstep(stat) -> updated_component
-   component.mstep_frozen_paths() -> paths relative to component
+   component.mstep_frozen_paths() -> list[str]  # relative to component
    ```
 
-   Components return freeze paths relative to their own receiver. Immediate
-   callers prefix the member name under which they store the component:
-   `Gaussian -> ["unconstrained_cov"]`, `GLM ->
-   ["likelihood.unconstrained_cov"]`, and XFADS ->
-   `["noise.free", ...]`. The trainer resolves only fully qualified
+   `mstep_frozen_paths()` has a total list-valued contract: every component
+   implements it, and a component with no M-step-owned leaves returns `[]`,
+   never `None`. This includes both no-op components (for example Poisson)
+   and valid M-step components that own no trainable leaves. Components return
+   paths relative to their own receiver. Immediate callers prefix the member
+   name under which they store the component: `Gaussian ->
+   ["unconstrained_cov"]`, `GLM -> ["likelihood.unconstrained_cov"]`, and
+   XFADS -> `["noise.free", ...]`. The trainer resolves only fully qualified
    XFADS-root-relative paths and never knows component internals.
 
    Each component selectively ignores irrelevant arguments: Gaussian R uses
@@ -1352,8 +1355,9 @@ epochs.
    returns/retains `None`.
 
    The trainer remains Observation/Noise/Approx-family agnostic: it calls
-   only XFADS private lifecycle methods and never imports `observations.py`
-   or assumes mean/covariance layouts. Gaussian R owns masked residual sums
+   only XFADS private lifecycle methods and consumes XFADS-root-relative
+   `mstep_frozen_paths()` output; it never imports `observations.py` or
+   assumes mean/covariance layouts. Gaussian R owns masked residual sums
    and per-feature valid counts; the built-in MVN Noise strategy owns
    transition-scatter sums and pair counts.
 
