@@ -16,6 +16,7 @@ class _DummyModel:
         self.noise = Noise(
             approx=self.approx,
             q_scale=1.0,
+            q_prior_fraction=0.1,
             state_dim=state_dim,
             mstep_enabled=False,
             free=self.approx.free_from_kw(scale=1.0),

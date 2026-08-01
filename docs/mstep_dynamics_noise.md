@@ -10,9 +10,10 @@ numerical-safety-only floor. This reverses an earlier draft of this plan
 (see Design) that concluded the prior should be non-informative.
 
 The current public configuration is top-level `q_scale` (positive Q
-variance) and `q_mstep` (default `true`). `q_scale` initializes Q and, when
-`q_mstep=true`, centers its M-step prior; the prior pseudocount is derived as
-`state_dim + 1`. `q_mstep=false` leaves Q SGD-managed. The default joint R/Q
+variance), `q_prior_fraction` (default `0.1`), and `q_mstep` (default
+`true`). `q_scale` initializes and centers Q; each active direct batch MAP
+update blends its residual-covariance estimate with that center using
+`q_prior_fraction`. `q_mstep=false` leaves Q SGD-managed. The default joint R/Q
 Normal training accumulates pre-SGD minibatch R/Q statistics and finalizes
 both at each epoch boundary without an additional inference pass. The old
 configuration names and cadence discussion appearing below are retained only
@@ -918,25 +919,33 @@ removed rather than translated.
 1. **Introduce one canonical top-level Q-scale option.** Replace
    `dyn_conf.state_noise`, `conf.noise_prior`, and
    `conf.noise_prior_dof` with required top-level `conf.q_scale`, a
-   positive process **variance**. Its semantics are
+   positive process **variance**, plus `q_prior_fraction` (default `0.1`),
+   an explicit empirical shrinkage fraction. Its semantics are
 
    $$
    Q_{\mathrm{init}} = Q_0 = q_{\mathrm{scale}} I_d,
-   \qquad
-   \nu_0 = d + 1,
    $$
 
-   where $d = \texttt{state_dim}$. Thus the initialized Q and the center
-   of its MAP shrinkage prior always agree. `d + 1` is the implemented
-   update's dimension-aware pseudocount/prior weight, not a claim that the
-   code implements a literal inverse-Wishart distribution.
+   and for a direct batch residual-covariance estimate $\widehat Q$:
+
+   $$
+   Q_{\mathrm{new}}
+   =
+   \frac{\widehat Q+\alpha Q_0}{1+\alpha},
+   \qquad
+   \alpha=\texttt{q\_prior\_fraction}.
+   $$
+
+   Thus initialized Q and its shrinkage center always agree, and effective
+   data/prior weights are invariant to batch size and sequence length.
+   Discard `state_dim + 1` as a Q prior pseudocount: it is neither a proper
+   prior interpretation nor meaningful shrinkage at the observed data scale.
 
 2. **Add an explicit Q-M-step switch.** Introduce top-level
    `conf.q_mstep: bool = true`. Initialize `noise_free` from `q_scale` in
    either mode and remove the static `XFADS.noise_prior` field. When
-   `q_mstep=true`, `XFADS.mstep` constructs `(q_scale, state_dim + 1)` and
-   calls `Approx.shrink(moment, transition_stat, prior)`; `noise_free` is
-   auto-frozen from SGD. When `q_mstep=false`, `XFADS.mstep` skips Q
+   `q_mstep=true`, Noise applies its exact registered strategy using
+   `q_scale` and `q_prior_fraction`; `noise.free` is auto-frozen from SGD. When `q_mstep=false`, `XFADS.mstep` skips Q
    shrinkage entirely and `noise_free` remains SGD-managed. Consequently,
    `Approx.shrink`'s `NotImplementedError` default is reached only when a
    user enables `q_mstep` for an Approx family that has not implemented

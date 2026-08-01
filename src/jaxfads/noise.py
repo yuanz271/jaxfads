@@ -23,6 +23,7 @@ class Noise(eqx.Module):
 
     approx: Approx = eqx.field(static=True)
     q_scale: float = eqx.field(static=True)
+    q_prior_fraction: float = eqx.field(static=True)
     state_dim: int = eqx.field(static=True)
     mstep_enabled: bool = eqx.field(static=True)
     free: Array
@@ -73,6 +74,5 @@ class Noise(eqx.Module):
         """Return an updated component from accumulated Q statistics."""
         if not self.mstep_active or epoch_stat is None:
             return self
-        prior = (self.q_scale, self.state_dim + 1)
-        free = self.mstep_strategy.mstep(self, epoch_stat, prior=prior)
+        free = self.mstep_strategy.mstep(self, epoch_stat)
         return eqx.tree_at(lambda noise: noise.free, self, free)

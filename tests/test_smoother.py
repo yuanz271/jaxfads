@@ -455,7 +455,14 @@ def test_xfads_nofilt_mode():
 
 
 def _gaussian_model(
-    T, y_size, z_size, *, q_scale=1.0, q_mstep=True, approx="MVN"
+    T,
+    y_size,
+    z_size,
+    *,
+    q_scale=1.0,
+    q_prior_fraction=0.1,
+    q_mstep=True,
+    approx="MVN",
 ):
     model_conf = OmegaConf.create(
         dict(
@@ -473,6 +480,7 @@ def _gaussian_model(
             noise_penalty=0,
             dropout=0.0,
             q_scale=q_scale,
+            q_prior_fraction=q_prior_fraction,
             q_mstep=q_mstep,
             dyn_conf=dict(input_dim=0, context_dim=0),
             enc_conf=dict(width=8, depth=1, dropout=0.0),
@@ -548,10 +556,12 @@ def test_unregistered_approx_keeps_q_sgd_managed():
     )
 
 
-def test_q_mstep_uses_q_scale_center_and_state_dim_plus_one():
-    """q_mstep passes shrink the fixed prior (q_scale, state_dim + 1)."""
+def test_q_mstep_uses_q_scale_and_prior_fraction():
+    """Noise M-step uses its static q_scale and q_prior_fraction policy."""
     T, y_size, z_size = 5, 4, 3
-    model = _gaussian_model(T, y_size, z_size, q_scale=0.7)
+    model = _gaussian_model(
+        T, y_size, z_size, q_scale=0.7, q_prior_fraction=0.25
+    )
     times = jnp.broadcast_to(jnp.arange(T), (2, T))
     y = jr.normal(jr.key(1), (2, T, y_size))
     u = jnp.zeros((2, T, 0))

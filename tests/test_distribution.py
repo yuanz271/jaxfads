@@ -283,6 +283,7 @@ def test_noise_strategy_registration_is_exact_class_only():
     noise = Noise(
         approx=approx,
         q_scale=1.0,
+        q_prior_fraction=0.1,
         state_dim=2,
         mstep_enabled=True,
         free=approx.free_from_kw(scale=1.0),
@@ -337,6 +338,7 @@ def test_unregistered_noise_strategy_is_noop():
     noise = Noise(
         approx=approx,
         q_scale=1.0,
+        q_prior_fraction=0.1,
         state_dim=1,
         mstep_enabled=True,
         free=jnp.array(0.0),
@@ -400,11 +402,12 @@ def test_mvn_noise_mstep_matches_independent_reference(dim, rank):
     """The exact registered MVN Noise strategy matches an independent Q
     MAP reference for both diagonal and full MVN layouts."""
     prior_value = 1.0
-    prior_dof = float(dim + 1)
+    prior_fraction = 0.1
     approx = MVN(dim=dim, rank=rank)
     noise = Noise(
         approx=approx,
         q_scale=prior_value,
+        q_prior_fraction=prior_fraction,
         state_dim=dim,
         mstep_enabled=True,
         free=approx.free_from_kw(scale=1.0),
@@ -414,7 +417,6 @@ def test_mvn_noise_mstep_matches_independent_reference(dim, rank):
     b = jrnd.normal(jrnd.key(10), (dim,))
 
     n_batch, n_time = 2, 4
-    n_pairs = n_batch * (n_time - 1)
     key = jrnd.key(0)
     keys = jrnd.split(key, 2)
     means = jrnd.normal(keys[0], (n_batch, n_time, dim))
@@ -476,8 +478,8 @@ def test_mvn_noise_mstep_matches_independent_reference(dim, rank):
             )
     mean_stat = jnp.mean(jnp.stack(raw_stats), axis=0)
     expected_value = prior_value * jnp.eye(dim)
-    expected_cov = (n_pairs * mean_stat + prior_dof * expected_value) / (
-        n_pairs + prior_dof
+    expected_cov = (mean_stat + prior_fraction * expected_value) / (
+        1.0 + prior_fraction
     )
     if rank == 0:
         expected_cov = jnp.diag(jnp.diagonal(expected_cov))

@@ -216,6 +216,12 @@ class XFADS(ConfModule):
             raise ValueError(
                 f"q_scale must be a positive finite variance, got {q_scale!r}"
             )
+        q_prior_fraction = float(self.conf.get("q_prior_fraction", 0.1))
+        if not math.isfinite(q_prior_fraction) or q_prior_fraction < 0:
+            raise ValueError(
+                "q_prior_fraction must be finite and nonnegative, got "
+                f"{q_prior_fraction!r}"
+            )
         approx_cls = Approx.get_subclass(self.conf.approx)
         approx_kwargs = dict(self.conf.approx_kwargs)
         approx_kwargs.setdefault("rank", self.conf.state_dim)
@@ -223,6 +229,7 @@ class XFADS(ConfModule):
         self.noise = Noise(
             approx=approx,
             q_scale=q_scale,
+            q_prior_fraction=q_prior_fraction,
             state_dim=int(self.conf.state_dim),
             mstep_enabled=self.conf.get("q_mstep", True),
             free=approx.free_from_kw(scale=q_scale),
@@ -312,8 +319,18 @@ class XFADS(ConfModule):
         """Whether this concrete Noise/Approx pairing has MAP-Q support."""
         return self.noise.mstep_active
 
-    def _collect_batch_stat(self, context: StatContext) -> MstepStats:
-        """Return one additive component statistic bundle for any data batch."""
+    def _batch_stat(self, t, y, u, c, *, key) -> MstepStats:
+        """Infer one data batch and return its additive component statistic."""
+        _natural, moment, _predicted, transition_stat = self(t, y, u, c, key=key)
+        context = StatContext(
+            t=t,
+            y=y,
+            u=u,
+            c=c,
+            moment=moment,
+            transition_stat=transition_stat,
+            approx=self.approx,
+        )
         return MstepStats(
             observation=self.observation.batch_stat(context),
             noise=self.noise.batch_stat(context),
@@ -353,17 +370,7 @@ class XFADS(ConfModule):
         Noise component remains unchanged and its ``free`` leaf is
         SGD-managed.
         """
-        _natural, moment, _predicted, transition_stat = self(t, y, u, c, key=key)
-        context = StatContext(
-            t=t,
-            y=y,
-            u=u,
-            c=c,
-            moment=moment,
-            transition_stat=transition_stat,
-            approx=self.approx,
-        )
-        return self._apply_mstep_stat(self._collect_batch_stat(context))
+        return self._apply_mstep_stat(self._batch_stat(t, y, u, c, key=key))
 
     @classmethod
     def load(cls, path: str | Path):

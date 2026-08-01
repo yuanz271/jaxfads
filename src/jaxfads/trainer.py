@@ -34,7 +34,6 @@ from rich.progress import (
 
 from . import vi
 from .logging import get_logger
-from .smoother import StatContext
 
 logger = get_logger(__name__)
 
@@ -170,27 +169,6 @@ def batch_elbo(
     keys = jr.split(key, observations.shape[:2])  # observations.shape[:2] + (2,)
 
     return _elbo(keys, times, posterior_moments, predicted_moments, observations)
-
-
-def _batch_loss_with_stats(model, batch, key, *, beta=1.0, regularizer=None):
-    times, observations, controls, covariates = batch
-    key, model_key = jr.split(key)
-    _, posterior_moments, prior_moments, transition_stat = model(times, observations, controls, covariates, key=model_key)
-    key, elbo_key = jr.split(key)
-    loss = jnp.mean(-batch_elbo(model, elbo_key, times, posterior_moments, prior_moments, observations, beta=beta))
-    if regularizer is not None:
-        loss = loss + regularizer(model)
-    context = StatContext(
-        t=times,
-        y=observations,
-        u=controls,
-        c=covariates,
-        moment=posterior_moments,
-        transition_stat=transition_stat,
-        approx=model.approx,
-    )
-    stats = model._collect_batch_stat(context)
-    return loss, stats
 
 
 def batch_loss(
@@ -498,36 +476,37 @@ def _run_training_loop(
     beta_schedule=None,
     regularizer=None,
 ):
-    """Run recursive accumulated R/Q M-steps alongside minibatch SGD.
+    """Run direct post-SGD minibatch R/Q M-steps alongside minibatch SGD.
 
-    Each batch's pre-SGD ELBO forward pass emits an additive statistic. The
-    JITted step accumulates that statistic, applies R/Q M-steps to the same
-    pre-SGD model, then applies the precomputed SGD updates to non-frozen
-    leaves. Epoch boundaries discard only accumulated evidence; learned R/Q
-    remain model state. Interrupted partial epoch evidence is not checkpointed.
+    Each step computes loss and gradients, applies SGD, then performs one
+    fresh inference pass over the same batch to derive and apply its direct
+    R/Q statistic. Statistics are discarded immediately; no epoch accumulator
+    or full-data inference is used by normal training.
     """
 
     @eqx.filter_jit(donate="all")
-    def train_step(model, opt_state, epoch_stats, batch, key, step):
+    def train_step(model, opt_state, batch, key, step):
         model, opt_state = eqx.filter_shard((model, opt_state), model_sharding)
         batch = eqx.filter_shard(batch, data_sharding)
         if param_schedule is not None:
             model = param_schedule(model, step)
 
         beta = beta_schedule(step) if beta_schedule is not None else 1.0
-        (loss, stats), grads = eqx.filter_value_and_grad(
-            _batch_loss_with_stats, has_aux=True
-        )(model, batch, key, beta=beta, regularizer=regularizer)
+
+        def loss_fn(current_model):
+            loss = batch_loss(current_model, batch, key, beta=beta)
+            if regularizer is not None:
+                loss = loss + regularizer(current_model)
+            return loss
+
+        loss, grads = eqx.filter_value_and_grad(loss_fn)(model)
         params = eqx.filter(model, eqx.is_inexact_array)
-        epoch_stats = (
-            stats
-            if epoch_stats is None
-            else model._accumulate_batch_stat(epoch_stats, stats)
-        )
-        model = model._apply_mstep_stat(epoch_stats)
         updates, opt_state = optimizer.update(grads, opt_state, params)
         model = eqx.apply_updates(model, updates)
-        return model, opt_state, epoch_stats, step + 1, loss
+        key, stat_key = jr.split(key)
+        t, y, u, c = batch
+        model = model._apply_mstep_stat(model._batch_stat(t, y, u, c, key=stat_key))
+        return model, opt_state, step + 1, loss
 
     opt_state = optimizer.init(_copy_pytree(eqx.filter(model, eqx.is_inexact_array)))
     model, opt_state = eqx.filter_shard((model, opt_state), model_sharding)
@@ -541,11 +520,8 @@ def _run_training_loop(
     key, loader_key = jr.split(key)
     current_epoch = 0
     epoch_batch_losses: list = []
-    epoch_stats = None
 
     def finalize_epoch(epoch_idx, batch_losses):
-        nonlocal epoch_stats
-        epoch_stats = None
         train_loss = (
             float(jnp.mean(jnp.stack(batch_losses)))
             if batch_losses
@@ -574,8 +550,8 @@ def _run_training_loop(
                 current_epoch = epoch
 
             key, batch_key = jr.split(key)
-            model, opt_state, epoch_stats, step, loss = train_step(
-                model, opt_state, epoch_stats, batch, batch_key, step
+            model, opt_state, step, loss = train_step(
+                model, opt_state, batch, batch_key, step
             )
             epoch_batch_losses.append(loss)
         else:

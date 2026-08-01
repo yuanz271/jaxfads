@@ -577,18 +577,14 @@ class _MVNNoiseMstep:
         )
 
     @staticmethod
-    def mstep(noise, epoch_stat, *, prior):
+    def mstep(noise, epoch_stat):
         approx = noise.approx
         sums, count = epoch_stat
-        value, prior_count = prior
         d = approx._layout.dim
-        value = jnp.asarray(value, dtype=sums.dtype)
-        if value.ndim == 0:
-            value = value * jnp.eye(d, dtype=sums.dtype)
-        elif value.ndim == 1:
-            value = jnp.diag(value)
-
-        cov = (sums + prior_count * value) / (count + prior_count)
+        q_hat = sums / count
+        q_prior = noise.q_scale * jnp.eye(d, dtype=sums.dtype)
+        alpha = jnp.asarray(noise.q_prior_fraction, dtype=sums.dtype)
+        cov = (q_hat + alpha * q_prior) / (1.0 + alpha)
         cov = 0.5 * (cov + cov.T)
         if approx._layout.is_diag:
             cov = jnp.diag(jnp.diagonal(cov))

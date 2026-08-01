@@ -116,9 +116,10 @@ Invariant for callers:
     optimizer.
 - Process noise uses top-level `q_scale` (positive variance) and `q_mstep`
   (default `True`). With `q_mstep=True`, pre-SGD minibatch R/Q statistics are
-  accumulated and Q is finalized once per epoch using prior
-  `(q_scale, state_dim + 1)` when the generic Noise component has a registered
-  exact-Approx-class M-step strategy; then `noise.free` is auto-frozen. With
+  accumulated and Q is finalized from the direct batch statistic using
+  `q_scale` and `q_prior_fraction` when the generic Noise component has a
+  registered exact-Approx-class M-step strategy; then `noise.free` is
+  auto-frozen. With
   `q_mstep=False`, or no registered strategy, Q statistics are omitted and
   `noise.free` remains SGD-managed. `state_noise`, `noise_prior`, and
   `noise_prior_dof` are unsupported.

@@ -209,9 +209,9 @@ The transition/process-noise covariance `Q` (`model.noise.free`) is
 initialized from positive top-level `conf.q_scale`. When `conf.q_mstep=True`
 and the generic Noise component has an exact registered Approx-family M-step
 strategy (built in for `MVN`), it accumulates its additive MAP statistic from
-those same pre-SGD forward passes and finalizes Q once per epoch with prior
-`(q_scale, state_dim + 1)`; `noise.free` is then automatically frozen from
-SGD. Set `q_mstep=False`, or use an Approx without a registered strategy, to
+fresh post-SGD batch inference and finalizes Q from that direct batch
+statistic using `q_scale` plus `q_prior_fraction`; `noise.free` is then
+automatically frozen from SGD. Set `q_mstep=False`, or use an Approx without a registered strategy, to
 leave `noise.free` SGD-managed.
 
 This is an epoch-local generalized MAP-EM update: batch statistics are

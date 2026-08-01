@@ -22,8 +22,8 @@
   `docs/mstep_gaussian_cov.md` and `docs/mstep_dynamics_noise.md`.
 * **Breaking:** transition/process noise uses required top-level positive
   `q_scale` and `q_mstep` (default `true`). `q_scale` initializes Q; with
-  `q_mstep=true`, epoch-local MAP Q finalization uses
-  `(q_scale, state_dim + 1)` when the generic Noise component has a registered
+  `q_mstep=true`, direct batch MAP Q finalization uses `q_scale` and
+  `q_prior_fraction` when the generic Noise component has a registered
   exact-Approx-class strategy (built in for `MVN`), and `train()` auto-freezes
   `noise.free`. `q_mstep=false`, or no matching strategy, omits Q
   statistics/finalization and leaves Q SGD-managed.
