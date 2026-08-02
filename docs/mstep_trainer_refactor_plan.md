@@ -63,18 +63,15 @@ The M-step plugin receives these outputs from the trainer; it must not call
 because Q currently needs it and it cannot be reconstructed from marginal
 moments alone.
 
-Optionally introduce a neutral `ForwardOutput` NamedTuple only if passing the
-four values repeatedly becomes materially unclear:
+Keep the tuple contract for this refactor; do not add a `ForwardOutput`
+wrapper or a general `aux` dictionary unless repeated indexing proves
+materially unclear. The stable contract is:
 
 ```python
-class ForwardOutput(NamedTuple):
-    natural: Array
-    moment: Array
-    predictive_moment: Array
-    transition_stat: Any
+ForwardOutput = tuple[Array, Array, Array, Any]
 ```
 
-Do not add a general `aux` dictionary or context wrapper in this refactor.
+The fourth element remains the named `transition_stat` value.
 
 ## 2. Define the trainer-owned MStep interface
 
@@ -115,9 +112,15 @@ train(
 
 Semantics:
 
-- `mstep=None`: ordinary SGD training; no post-SGD inference pass is added;
-- `mstep=JointGaussianMAP(...)`: post-SGD R/Q transformation on every batch;
+- `mstep=None`: ordinary SGD; no post-SGD inference pass and no M-step-owned
+  freeze paths;
+- `mstep=JointGaussianMAP(...)`: post-SGD R/Q transformation on every batch,
+  with plugin-declared frozen paths;
 - future plugins can implement other policies without changing XFADS.
+
+`mstep=None` therefore means neither R nor Q is M-step-owned. This is a
+substantial but intentional policy boundary: closed-form R/Q updates are
+provided by the selected trainer plugin, not unconditionally by the model.
 
 Do not add a config-name registry until a second M-step policy exists. A direct
 plugin object is easier to inspect and avoids import-order configuration magic.
@@ -140,9 +143,9 @@ Its `__call__` should:
 1. unpack `batch` as `t, y, u, c`;
 2. unpack `forward` as `natural, moment, predictive_moment,
    transition_stat`;
-3. delegate R statistic/update mathematics to the existing Gaussian
-   observation implementation or a trainer-side R helper;
-4. compute Q transition residual covariance using `moment` and
+3. compute the Gaussian R statistic/update itself, using `t`, `y`, `moment`,
+   and the model's observation/readout state;
+4. compute Q transition residual covariance itself using `moment` and
    `transition_stat`, delegating MVN representation conversion to
    `model.noise.approx`;
 5. apply the Q fractional shrinkage:
@@ -159,9 +162,9 @@ Its `__call__` should:
 6. structurally replace `model.observation` and `model.noise.free` and return
    the updated model.
 
-The plugin may use private/documented component helpers for local math, but no
-component should own the overall R/Q policy or recursively call the other
-component.
+The plugin is the sole owner of joint R/Q policy and update mathematics. It
+may use narrowly scoped distribution/model helpers, but it must not call
+component M-step methods or recursively trigger another M-step.
 
 ## 4. Preserve exact update ordering
 
@@ -181,7 +184,9 @@ model = mstep(model, batch, forward, key=stat_key)
 
 The optimizer receives the original pre-M-step parameter tree corresponding to
 the gradients. The plugin applies the M-step after SGD, matching the historical
-direct-minibatch behavior.
+direct-minibatch behavior. Plugin-frozen leaves are not optimizer-owned, so
+applying the plugin after SGD does not create a second gradient update for
+those leaves.
 
 There is no epoch accumulator, no delayed epoch M-step, and no extra full-data
 pass in normal training.
@@ -205,8 +210,8 @@ JointGaussianMAP(
 ```
 
 `q_scale` is read from the model's Noise state/config as the shrinkage center;
-`q_prior_fraction` belongs to the selected M-step policy. Do not duplicate
-`q_scale` in the plugin configuration.
+`q_prior_fraction` and `q_enabled` belong to the selected M-step policy. Do
+not duplicate `q_scale` in the plugin configuration.
 
 A plugin with `q_enabled=False` updates R only. `JointGaussianMAP` should
 validate its required Approx/noise representation at construction or first use
@@ -241,7 +246,8 @@ Remove from `Noise`:
   not Noise state.
 
 The selected trainer plugin owns Q M-step strategy, shrinkage fraction, and
-freeze paths.
+freeze paths. Noise retains only static Approx composition, Q initialization
+state, free storage, and generic predictive decoding.
 
 ## 7. Simplify XFADS
 
@@ -274,7 +280,9 @@ This utility is not an XFADS/component method and is not used by normal
 
 ## 8. Freeze-path ownership
 
-The selected M-step plugin owns fully qualified root-relative freeze paths:
+This trainer-plugin architecture replaces component-relative freeze-path
+composition. The selected root-level M-step plugin owns fully qualified
+XFADS-root-relative freeze paths:
 
 ```python
 class JointGaussianMAP:
@@ -305,7 +313,7 @@ Retain or add focused tests for:
 2. `JointGaussianMAP` updates R and Q from one supplied forward output.
 3. `mstep=None` performs ordinary SGD without a second inference pass.
 4. Unsupported Approx construction/use fails clearly for `JointGaussianMAP`.
-4. One post-SGD M-step forward call occurs per batch when a plugin is supplied.
+5. One post-SGD M-step forward call occurs per batch when a plugin is supplied.
 5. Fractional Q formula matches an independent reference.
 6. `q_enabled=False` leaves `noise.free` SGD-managed.
 7. Parameter-aware Optax receives pre-SGD parameters while the plugin’s frozen
