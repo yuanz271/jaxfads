@@ -1,7 +1,15 @@
 # Plan: move M-step orchestration into pluggable trainer policy
 
-**Status:** proposed architecture refactor; no code behavior is changed by this
-plan file.
+**Status:** discarded. This proposal is retained only as a design record and
+is not pending work. No code behavior is changed by this plan file.
+
+**Reason for discarding:** a trainer-owned plugin that reuses only pre-SGD
+forward outputs but applies its update to a post-SGD model mixes inference
+outputs with changed observation/dynamics parameters. Correcting that mismatch
+would require either another post-SGD inference pass or expanding the forward
+output with additional M-step-specific observation statistics. Neither is
+wanted at this point, so the proposed refactor is discarded rather than adding
+that complexity.
 
 ## Goal
 
