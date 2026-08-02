@@ -11,12 +11,12 @@ Make M-step behavior a configurable trainer transformation rather than part of
 The trainer owns the update ordering and selected M-step policy:
 
 $$
-\text{model}
-\xrightarrow{\text{one forward pass}}
-(\text{loss},\text{gradients},\text{inference outputs})
-\xrightarrow{\text{M-step transformation}}
-\xrightarrow{\text{SGD update}}
-\text{next model}.
+M_k
+\xrightarrow{\text{loss + gradients}}
+\xrightarrow{\text{SGD}}
+M_k^{\mathrm{SGD}}
+\xrightarrow{\text{fresh forward + M-step}}
+M_{k+1}.
 $$
 
 The model remains responsible for representing the generative/inference model
@@ -170,27 +170,28 @@ component M-step methods or recursively trigger another M-step. Its model
 outputs are computed by the trainer's one forward pass; the plugin never calls
 `model(...)` itself.
 
-## 4. Preserve one-forward-pass pre-SGD ordering
+## 4. Preserve post-SGD M-step ordering
 
-The trainer uses one forward pass for the loss, gradients, and inference
-outputs. It computes M-step statistics outside `XFADS.__call__`, applies the
-M-step first, then applies the precomputed SGD updates:
+The trainer computes gradients under the current model, applies SGD, then
+runs one fresh forward pass on that post-SGD model and applies the plugin:
 
 ```python
-(loss, forward), grads = value_and_grad_with_aux(loss_and_forward)(
-    model, batch
-)
+(loss, _unused_forward), grads = value_and_grad(loss_fn)(model, batch)
 params = eqx.filter(model, eqx.is_inexact_array)
-model = mstep(model, batch, forward, key=stat_key)
 updates, opt_state = optimizer.update(grads, opt_state, params)
 model = eqx.apply_updates(model, updates)
+
+forward = model(*batch, key=stat_key)
+model = mstep(model, batch, forward, key=stat_key)
 ```
 
-The optimizer receives the original pre-M-step parameter tree corresponding to
-the gradients. Plugin-frozen leaves are not optimizer-owned, so the
-subsequent SGD application cannot overwrite their M-step values. There is no
-epoch accumulator, delayed epoch M-step, or extra full-data pass in normal
-training.
+The optimizer receives the parameter tree corresponding to the gradients. The
+M-step receives outputs from the updated post-SGD model, matching the
+historical direct-minibatch timing. Plugin-frozen leaves are excluded from the
+optimizer, so the subsequent M-step owns their final values. This costs one
+additional inference pass per batch; it is intentional and unavoidable for a
+post-SGD statistic. There is no epoch accumulator, delayed epoch M-step, or
+extra full-data pass in normal training.
 
 ## 5. Configuration ownership
 
@@ -329,7 +330,7 @@ Retain or add focused tests for:
 
 1. Add the trainer `MStep` protocol and `mstep=` argument.
 2. Implement `JointGaussianMAP` using existing R/Q formulas.
-3. Wire post-SGD forward output into the plugin call.
+3. Wire the fresh post-SGD forward output into the plugin call.
 4. Remove XFADS/Noise/Observation M-step orchestration and obsolete APIs.
 5. Migrate freeze paths and configuration/docs.
 6. Remove superseded tests and add plugin/ordering tests.
