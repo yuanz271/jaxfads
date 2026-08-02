@@ -76,7 +76,7 @@ trained = train(
     model,
     data,
     conf=trainer_conf,
-    msteps=(
+    post_optimizer_transforms=(
         GaussianObservationMstep(),
         MVNNoiseMstep(q_scale=1.0, q_prior_fraction=0.1),
     ),

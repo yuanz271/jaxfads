@@ -173,7 +173,7 @@ def main() -> None:
                 train_data,
                 conf=OmegaConf.create({**trainer_conf, "seed": seed}),
                 on_epoch_end=handler,
-                msteps=(
+                post_optimizer_transforms=(
                     GaussianObservationMstep(),
                     *(
                         (MVNNoiseMstep(q_scale=0.1),)

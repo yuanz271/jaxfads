@@ -34,9 +34,15 @@ from rich.progress import (
 
 from . import vi
 from .logging import get_logger
-from .msteps import GaussianObservationMstep, MStep, MVNNoiseMstep
+from .msteps import GaussianObservationMstep, MVNNoiseMstep, PostOptimizerTransform
 
-__all__ = ["GaussianObservationMstep", "MStep", "MVNNoiseMstep", "batch_loss", "train"]
+__all__ = [
+    "GaussianObservationMstep",
+    "MVNNoiseMstep",
+    "PostOptimizerTransform",
+    "batch_loss",
+    "train",
+]
 
 logger = get_logger(__name__)
 
@@ -478,7 +484,7 @@ def _run_training_loop(
     param_schedule=None,
     beta_schedule=None,
     regularizer=None,
-    msteps=(),
+    post_optimizer_transforms=(),
 ):
     """Run minibatch SGD followed by ordered trainer-owned M-step policies."""
 
@@ -508,8 +514,8 @@ def _run_training_loop(
         params = eqx.filter(model, eqx.is_inexact_array)
         updates, opt_state = optimizer.update(grads, opt_state, params)
         model = eqx.apply_updates(model, updates)
-        for mstep in msteps:
-            model = mstep(model, batch, forward, key=key)
+        for transform in post_optimizer_transforms:
+            model = transform(model, batch, forward, key=key)
         return model, opt_state, step + 1, loss
 
     opt_state = optimizer.init(_copy_pytree(eqx.filter(model, eqx.is_inexact_array)))
@@ -575,7 +581,7 @@ def train(
     regularizer=None,
     optimizer=None,
     param_schedule=None,
-    msteps=(),
+    post_optimizer_transforms=(),
 ):
     """
     Training routine for XFADS models with multi-device support.
@@ -586,10 +592,11 @@ def train(
     those are epoch-level policy supplied via ``on_epoch_end`` (see
     :class:`EpochHandler`). The caller owns the train/validation split.
 
-    Each batch performs one forward pass for loss, gradients, and plugin outputs,
-    then applies SGD and the ordered ``msteps`` transformations to the updated
-    model. ``msteps=()`` gives ordinary SGD. Plugin-owned frozen paths are merged
-    with ``conf.freeze_paths`` before optimizer construction.
+    Each batch performs one forward pass for loss, gradients, and transform
+    outputs, then applies the optimizer and ordered
+    ``post_optimizer_transforms`` to the updated model. An empty transform tuple
+    gives optimizer-only training. Transform-owned frozen paths are merged with
+    ``conf.freeze_paths`` before optimizer construction.
 
     Parameters
     ----------
@@ -625,8 +632,8 @@ def train(
         clipping, weight decay, gradient noise, or a custom schedule, build
         your own ``optax`` optimizer and pass it here; ``conf.learning_rate``
         is then ignored. ``conf.freeze_paths`` is still applied on top.
-    msteps : Sequence[MStep], optional
-        Ordered trainer-owned R/Q transformations. Defaults to ``()``.
+    post_optimizer_transforms : Sequence[PostOptimizerTransform], optional
+        Ordered trainer-owned model transformations. Defaults to ``()``.
     param_schedule : Callable or None, optional
         Optional ``param_schedule(model, step) -> model`` applied at the start
         of every step (before the loss/gradient computation), for driving a
@@ -649,8 +656,8 @@ def train(
 
     key = jr.key(conf.seed)
     key, init_key = jr.split(key)
-    for mstep in msteps:
-        model = mstep.initialize(model, key=init_key)
+    for transform in post_optimizer_transforms:
+        model = transform.initialize(model, key=init_key)
 
     # >>> Prepare sharding
     n_devices = len(jax.devices())
@@ -705,8 +712,12 @@ def train(
     # construction.
     params = eqx.filter(model, eqx.is_inexact_array)
     freeze_mask = jax.tree.map(lambda _: False, params)
-    plugin_paths = [path for mstep in msteps for path in mstep.frozen_paths(model)]
-    freeze_paths = [str(p) for p in conf.freeze_paths] + plugin_paths
+    transform_paths = [
+        path
+        for transform in post_optimizer_transforms
+        for path in transform.frozen_paths(model)
+    ]
+    freeze_paths = [str(p) for p in conf.freeze_paths] + transform_paths
     for path in freeze_paths:
         parts = tuple(path.split("."))
         _ = _resolve_attr_path(model, parts)  # fail fast if path is invalid
@@ -751,7 +762,7 @@ def train(
         param_schedule=param_schedule,
         beta_schedule=beta_schedule,
         regularizer=regularizer,
-        msteps=msteps,
+        post_optimizer_transforms=post_optimizer_transforms,
     )
 
     dt = time.perf_counter() - t0

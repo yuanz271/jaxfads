@@ -114,8 +114,10 @@ Invariant for callers:
   - `trainer_conf.freeze_paths: list[str]` (dot-separated model attribute paths,
     e.g. `["noise.free"]`); applied on top of the default or a supplied
     optimizer.
-- M-step policy is trainer-owned and explicit: pass ordered `msteps` to
-  `train()`. `msteps=()` is ordinary SGD with no M-step-owned freeze paths.
+- M-step policy is trainer-owned and explicit: pass ordered
+  `post_optimizer_transforms` to `train()`. An empty
+  `post_optimizer_transforms=()` is optimizer-only training with no
+  transform-owned freeze paths.
   `GaussianObservationMstep()` owns the Gaussian R update.
   `MVNNoiseMstep(q_scale=..., q_prior_fraction=...)` owns both the isotropic
   Q-prior initializer (`Q_init = q_scale I`) and its fractional Q update; it

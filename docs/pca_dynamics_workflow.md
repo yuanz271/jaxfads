@@ -141,7 +141,7 @@ train(
     train_data,
     conf=trainer_conf,
     on_epoch_end=handler,
-    msteps=(MVNNoiseMstep(q_scale=1.0),),
+    post_optimizer_transforms=(MVNNoiseMstep(q_scale=1.0),),
 )
 trained = handler.best_model
 

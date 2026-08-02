@@ -3,10 +3,11 @@
 Status: **historical design and experiment record.** The active architecture
 uses explicit trainer-owned plugins: `GaussianObservationMstep()` and
 `MVNNoiseMstep(q_scale=..., q_prior_fraction=...)` are passed to
-`train(msteps=...)`. The MVN plugin owns `Q_init = q_scale I`, fractional
-prior shrinkage, and freezing `noise.free`; `msteps=()` leaves Q SGD-managed.
-It uses one pre-SGD inference forward and updates the post-SGD model without
-an extra inference pass. See [training](training.md) and
+`train(post_optimizer_transforms=...)`. The MVN transform owns
+`Q_init = q_scale I`, fractional prior shrinkage, and freezing `noise.free`;
+an empty `post_optimizer_transforms=()` leaves Q optimizer-managed. It uses
+one pre-optimizer inference forward and updates the post-optimizer model
+without an extra inference pass. See [training](training.md) and
 [mstep_trainer_refactor_plan](mstep_trainer_refactor_plan.md).
 
 The configuration names, component APIs, and cadence discussion below describe

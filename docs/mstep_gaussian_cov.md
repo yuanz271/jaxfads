@@ -2,7 +2,7 @@
 
 Status: historical rationale and migration record. The active implementation
 uses the trainer-owned `GaussianObservationMstep` passed explicitly through
-`train(..., msteps=(GaussianObservationMstep(),))`. It performs a direct
+`train(..., post_optimizer_transforms=(GaussianObservationMstep(),))`. It performs a direct
 post-SGD minibatch update from the ordinary three-value forward output. The
 former component/model M-step APIs and epoch-accumulation design are removed.
 
@@ -89,7 +89,7 @@ Historical implementation references (`src/jaxfads/base.py`,
   `mstep_gaussian_cov`'s chunked accumulation) and reports
   `["unconstrained_cov"]` as the path needing exclusion from gradients.
 - The active replacement is `GaussianObservationMstep()` passed via
-  `train(..., msteps=(GaussianObservationMstep(),))`.
+  `train(..., post_optimizer_transforms=(GaussianObservationMstep(),))`.
 <!-- Historical API details retained below for context only. They describe
 superseded component/model dispatch and are not supported by the active API. -->
 - `mstep_observation_cov(model, data, *, key)` — the former family-neutral,
@@ -143,7 +143,7 @@ trained = train(
     model,
     data,
     conf=conf,
-    msteps=(GaussianObservationMstep(),),
+    post_optimizer_transforms=(GaussianObservationMstep(),),
 )
 ```
 
@@ -164,7 +164,12 @@ from jaxfads.msteps import GaussianObservationMstep
 conf.freeze_paths = ["observation.likelihood.unconstrained_cov"]
 for _ in range(n_rounds):
     model = train(model, data, conf=conf)             # gradient-based round (Adam, L-BFGS, ...)
-    model = train(model, data, conf=conf, msteps=(GaussianObservationMstep(),))
+    model = train(
+        model,
+        data,
+        conf=conf,
+        post_optimizer_transforms=(GaussianObservationMstep(),),
+    )
 ```
 
 `mstep_gaussian_cov` (Gaussian-specific, `batch_size`-chunked scanning) and

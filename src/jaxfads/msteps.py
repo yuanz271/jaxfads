@@ -14,7 +14,7 @@ from .constraints import _EPS, _MIN_VARIANCE, unconstrain_positive
 from .distributions.mvn import MVN
 
 
-class MStep(Protocol):
+class PostOptimizerTransform(Protocol):
     """One ordered, trainer-owned model transformation."""
 
     def initialize(self, model, *, key) -> Any: ...

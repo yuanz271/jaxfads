@@ -13,8 +13,9 @@
   than Monte Carlo on posterior-RMSE. See `docs/transition_points.md`.
 * **Breaking:** M-step updates are now explicit, ordered trainer plugins:
   pass `GaussianObservationMstep()` and/or
-  `MVNNoiseMstep(q_scale=..., q_prior_fraction=...)` to `train(msteps=...)`.
-  `msteps=()` is ordinary SGD. The MVN Q plugin owns both
+  `MVNNoiseMstep(q_scale=..., q_prior_fraction=...)` to
+  `train(post_optimizer_transforms=...)`. An empty
+  `post_optimizer_transforms=()` is optimizer-only training. The MVN Q plugin owns both
   `Q_init = q_scale I` and fractional Q-prior shrinkage, and initializes Q
   before optimizer state creation. Model/component M-step APIs, epoch-local
   M-step accumulation, top-level `q_scale`, `q_mstep`, and

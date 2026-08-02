@@ -363,7 +363,7 @@ def main():
             model,
             train_data,
             conf=trainer_conf,
-            msteps=(GaussianObservationMstep(), MVNNoiseMstep(q_scale=q_scale)),
+            post_optimizer_transforms=(GaussianObservationMstep(), MVNNoiseMstep(q_scale=q_scale)),
         )
 
         _, Q_final = approx.unpack(

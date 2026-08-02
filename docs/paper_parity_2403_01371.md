@@ -47,7 +47,7 @@ paper's method.
   transition/process noise (`Q`)**: the trainer-owned
   `GaussianObservationMstep` and `MVNNoiseMstep` provide an opt-in alternative
   to the paper's joint-gradient-descent treatment of `R`/`Q`. `R` and `Q` are
-  independently selected through `train(..., msteps=...)`; Q initialization
+  independently selected through `train(..., post_optimizer_transforms=...)`; Q initialization
   and prior shrinkage are owned by `MVNNoiseMstep(q_scale=...,
   q_prior_fraction=...)`. This is
   narrower than the classical vEM the paper considers and rejects: only

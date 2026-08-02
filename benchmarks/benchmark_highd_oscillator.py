@@ -271,7 +271,7 @@ def main() -> None:
                     train_data,
                     conf=trainer_conf,
                     on_epoch_end=handler,
-                    msteps=(
+                    post_optimizer_transforms=(
                         GaussianObservationMstep(),
                         *(
                             (MVNNoiseMstep(q_scale=0.1),)

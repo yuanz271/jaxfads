@@ -578,7 +578,7 @@ def main() -> None:
         train_data,
         conf=trainer_conf_mlp,
         on_epoch_end=handler1,
-        msteps=(GaussianObservationMstep(), MVNNoiseMstep(q_scale=1.0)),
+        post_optimizer_transforms=(GaussianObservationMstep(), MVNNoiseMstep(q_scale=1.0)),
     )
     trained1 = handler1.best_model
 
@@ -647,7 +647,7 @@ def main() -> None:
         train_data,
         conf=trainer_conf_ou,
         on_epoch_end=handler2,
-        msteps=(GaussianObservationMstep(), MVNNoiseMstep(q_scale=1.0)),
+        post_optimizer_transforms=(GaussianObservationMstep(), MVNNoiseMstep(q_scale=1.0)),
     )
     trained2 = handler2.best_model
 
@@ -719,7 +719,7 @@ def main() -> None:
         train_data,
         conf=trainer_conf_lora,
         on_epoch_end=handler3,
-        msteps=(GaussianObservationMstep(),),
+        post_optimizer_transforms=(GaussianObservationMstep(),),
     )
     trained3 = handler3.best_model
 

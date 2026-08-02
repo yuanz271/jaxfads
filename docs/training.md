@@ -161,7 +161,7 @@ general mechanism — the trainer only calls the function and does not
 interpret what it changes.
 
 Do **not** schedule `noise.free` while `MVNNoiseMstep` is selected. That
-plugin owns Q and would overwrite a scheduled value. With `msteps=()`, Q is
+plugin owns Q and would overwrite a scheduled value. With `post_optimizer_transforms=()`, Q is
 SGD-managed and may be scheduled explicitly if the path is also frozen from
 optimizer updates.
 
@@ -190,7 +190,7 @@ encoding is typically nonlinear (e.g. a sqrt or inverse-softplus transform),
 so interpolating free-form values directly traces a different, distorted path
 through the intended constrained space.
 
-## Trainer-owned Observation-Noise and Transition-Noise Updates (`msteps`)
+## Trainer-owned Observation-Noise and Transition-Noise Updates (`post_optimizer_transforms`)
 
 For a Gaussian-likelihood model, the observation noise covariance `R` is
 driven by a closed-form EM M-step instead of gradient descent, avoiding a
@@ -208,9 +208,10 @@ sets `Q_init = q_scale * I`, and its additive MAP statistic uses the same
 `q_scale` with `q_prior_fraction`; `noise.free` is automatically frozen from
 SGD. Omit `MVNNoiseMstep` to leave `noise.free` SGD-managed.
 
-All selected plugins consume the same immutable three-value forward output,
-then transform the post-SGD model in explicit order. `msteps=()` is ordinary
-SGD with no plugin-owned freeze paths. The accepted one-step lag means R
+All selected transforms consume the same immutable three-value forward output,
+then transform the post-optimizer model in explicit order.
+`post_optimizer_transforms=()` is optimizer-only training with no
+transform-owned freeze paths. The accepted one-step lag means R
 reconstructs deterministic readout quantities from posterior moments and the
 post-SGD readout state; no additional forward output or inference pass is
 introduced.

@@ -29,9 +29,7 @@ def test_kl_warmup_schedule_matches_legacy_formula(kl_warmup_steps):
         else optax.constant_schedule(1.0)
     )
     for step in [0, 1, 2, 3, 4, 5, 9, 10, 11, 50]:
-        legacy = (
-            min(1.0, step / kl_warmup_steps) if kl_warmup_steps > 0 else 1.0
-        )
+        legacy = min(1.0, step / kl_warmup_steps) if kl_warmup_steps > 0 else 1.0
         chex.assert_trees_all_close(
             jnp.asarray(float(schedule(step))), jnp.asarray(legacy), atol=1e-6
         )
@@ -40,14 +38,12 @@ def test_kl_warmup_schedule_matches_legacy_formula(kl_warmup_steps):
 @pytest.fixture
 def trainer_config():
     """Default training configuration."""
-    return OmegaConf.create(
-        {
-            "max_epoch": 5,
-            "learning_rate": 1e-3,
-            "batch_size": 2,
-            "seed": 42,
-        }
-    )
+    return OmegaConf.create({
+        "max_epoch": 5,
+        "learning_rate": 1e-3,
+        "batch_size": 2,
+        "seed": 42,
+    })
 
 
 @pytest.fixture
@@ -71,47 +67,39 @@ def sample_data():
 @pytest.fixture
 def model_conf():
     """Create a minimal model configuration for testing."""
-    return OmegaConf.create(
-        {
-            "mode": "smooth",
-            "observation_dim": 10,
-            "state_dim": 2,
-            "dynamics": "MockDynamics",
-            "integrator": "Identity",
-            "approx": "MVN",
-            "approx_kwargs": {},
-            "mc_size": 1,
-            "seed": 0,
-            "n_steps": 10,
-            "fb_penalty": 0,
-            "noise_penalty": 0.01,
+    return OmegaConf.create({
+        "mode": "smooth",
+        "observation_dim": 10,
+        "state_dim": 2,
+        "dynamics": "MockDynamics",
+        "integrator": "Identity",
+        "approx": "MVN",
+        "approx_kwargs": {},
+        "mc_size": 1,
+        "seed": 0,
+        "n_steps": 10,
+        "fb_penalty": 0,
+        "noise_penalty": 0.01,
+        "dropout": 0.0,
+        "dyn_conf": OmegaConf.create({
+            "width": 8,
+            "depth": 1,
+            "input_dim": 1,
+            "context_dim": 0,
+        }),
+        "enc_conf": OmegaConf.create({
+            "width": 8,
+            "depth": 1,
             "dropout": 0.0,
-            "dyn_conf": OmegaConf.create(
-                {
-                    "width": 8,
-                    "depth": 1,
-                    "input_dim": 1,
-                    "context_dim": 0,
-                                }
-            ),
-            "enc_conf": OmegaConf.create(
-                {
-                    "width": 8,
-                    "depth": 1,
-                    "dropout": 0.0,
-                }
-            ),
-            "obs_conf": OmegaConf.create(
-                {
-                    "model": "GLM",
-                    "emission_noise": 1.0,
-                    "norm_readout": False,
-                    "dropout": 0.0,
-                    "likelihood": "Poisson",
-                }
-            ),
-        }
-    )
+        }),
+        "obs_conf": OmegaConf.create({
+            "model": "GLM",
+            "emission_noise": 1.0,
+            "norm_readout": False,
+            "dropout": 0.0,
+            "likelihood": "Poisson",
+        }),
+    })
 
 
 def test_mstep_initialization_precedes_optimizer_init(
@@ -138,7 +126,7 @@ def test_mstep_initialization_precedes_optimizer_init(
         gaussian_sample_data,
         conf=trainer_config,
         optimizer=optax.GradientTransformation(init_fn, update_fn),
-        msteps=(plugin,),
+        post_optimizer_transforms=(plugin,),
     )
 
     assert len(seen) == 1
@@ -156,7 +144,10 @@ def test_train_with_independent_msteps(
         model,
         gaussian_sample_data,
         conf=trainer_config,
-        msteps=(GaussianObservationMstep(), MVNNoiseMstep(q_scale=1.0, q_prior_fraction=0.1)),
+        post_optimizer_transforms=(
+            GaussianObservationMstep(),
+            MVNNoiseMstep(q_scale=1.0, q_prior_fraction=0.1),
+        ),
     )
     assert jnp.isfinite(trained.observation.likelihood.cov()).all()
     assert jnp.isfinite(trained.noise.free).all()
@@ -243,56 +234,46 @@ def test_user_optimizer_composes_with_freeze_paths(
     model = XFADS(model_conf, jrnd.key(0))
     # Snapshot to host: train() donates the input model's buffers.
     before = np.asarray(model.noise.free)
-    trained = train(
-        model, sample_data, conf=trainer_config, optimizer=optax.sgd(1e-1)
-    )
+    trained = train(model, sample_data, conf=trainer_config, optimizer=optax.sgd(1e-1))
 
     np.testing.assert_allclose(np.asarray(trained.noise.free), before, atol=0.0)
 
 
 def test_train_lora_rank1_end_to_end(trainer_config, sample_data):
     """MVN rank-1 should train and run end-to-end without NaNs."""
-    model_conf = OmegaConf.create(
-        {
-            "mode": "smooth",
-            "observation_dim": 10,
-            "state_dim": 2,
-            "dynamics": "MockDynamics",
-            "integrator": "Identity",
-            "approx": "MVN",
-            "approx_kwargs": {"rank": 1},
-            "mc_size": 2,
-            "seed": 0,
-            "n_steps": 10,
-            "fb_penalty": 0,
-            "noise_penalty": 0.01,
+    model_conf = OmegaConf.create({
+        "mode": "smooth",
+        "observation_dim": 10,
+        "state_dim": 2,
+        "dynamics": "MockDynamics",
+        "integrator": "Identity",
+        "approx": "MVN",
+        "approx_kwargs": {"rank": 1},
+        "mc_size": 2,
+        "seed": 0,
+        "n_steps": 10,
+        "fb_penalty": 0,
+        "noise_penalty": 0.01,
+        "dropout": 0.0,
+        "dyn_conf": OmegaConf.create({
+            "width": 8,
+            "depth": 1,
+            "input_dim": 1,
+            "context_dim": 0,
+        }),
+        "enc_conf": OmegaConf.create({
+            "width": 8,
+            "depth": 1,
             "dropout": 0.0,
-            "dyn_conf": OmegaConf.create(
-                {
-                    "width": 8,
-                    "depth": 1,
-                    "input_dim": 1,
-                    "context_dim": 0,
-                                }
-            ),
-            "enc_conf": OmegaConf.create(
-                {
-                    "width": 8,
-                    "depth": 1,
-                    "dropout": 0.0,
-                }
-            ),
-            "obs_conf": OmegaConf.create(
-                {
-                    "model": "GLM",
-                    "emission_noise": 1.0,
-                    "norm_readout": False,
-                    "dropout": 0.0,
-                    "likelihood": "Poisson",
-                }
-            ),
-        }
-    )
+        }),
+        "obs_conf": OmegaConf.create({
+            "model": "GLM",
+            "emission_noise": 1.0,
+            "norm_readout": False,
+            "dropout": 0.0,
+            "likelihood": "Poisson",
+        }),
+    })
 
     model = XFADS(model_conf, jrnd.key(0))
     trainer_config.max_epoch = 5
@@ -362,47 +343,39 @@ def gaussian_model_conf():
     """Minimal Gaussian-likelihood model configuration, for testing the
     always-on M-step update (Poisson has no free covariance to
     estimate this way, so mstep is a no-op for it)."""
-    return OmegaConf.create(
-        {
-            "mode": "smooth",
-            "observation_dim": 10,
-            "state_dim": 2,
-            "dynamics": "MockDynamics",
-            "integrator": "Identity",
-            "approx": "MVN",
-            "approx_kwargs": {},
-            "mc_size": 1,
-            "seed": 0,
-            "n_steps": 10,
-            "fb_penalty": 0,
-            "noise_penalty": 0.01,
+    return OmegaConf.create({
+        "mode": "smooth",
+        "observation_dim": 10,
+        "state_dim": 2,
+        "dynamics": "MockDynamics",
+        "integrator": "Identity",
+        "approx": "MVN",
+        "approx_kwargs": {},
+        "mc_size": 1,
+        "seed": 0,
+        "n_steps": 10,
+        "fb_penalty": 0,
+        "noise_penalty": 0.01,
+        "dropout": 0.0,
+        "dyn_conf": OmegaConf.create({
+            "width": 8,
+            "depth": 1,
+            "input_dim": 1,
+            "context_dim": 0,
+        }),
+        "enc_conf": OmegaConf.create({
+            "width": 8,
+            "depth": 1,
             "dropout": 0.0,
-            "dyn_conf": OmegaConf.create(
-                {
-                    "width": 8,
-                    "depth": 1,
-                    "input_dim": 1,
-                    "context_dim": 0,
-                }
-            ),
-            "enc_conf": OmegaConf.create(
-                {
-                    "width": 8,
-                    "depth": 1,
-                    "dropout": 0.0,
-                }
-            ),
-            "obs_conf": OmegaConf.create(
-                {
-                    "model": "GLM",
-                    "norm_readout": False,
-                    "dropout": 0.0,
-                    "likelihood": "Gaussian",
-                    "cov": [1e-4] * 10,
-                }
-            ),
-        }
-    )
+        }),
+        "obs_conf": OmegaConf.create({
+            "model": "GLM",
+            "norm_readout": False,
+            "dropout": 0.0,
+            "likelihood": "Gaussian",
+            "cov": [1e-4] * 10,
+        }),
+    })
 
 
 @pytest.fixture
@@ -417,14 +390,6 @@ def gaussian_sample_data():
     return times, observations, controls, contexts
 
 
-
-
-
-
-
-
-
-
 def test_batch_loss_remains_scalar(gaussian_model_conf, gaussian_sample_data):
     """The public batch_loss API remains a pure scalar objective."""
     model = XFADS(gaussian_model_conf, jrnd.key(0))
@@ -432,18 +397,10 @@ def test_batch_loss_remains_scalar(gaussian_model_conf, gaussian_sample_data):
     assert loss.shape == ()
 
 
-
-
-
-
-
-
-
-
 def test_msteps_empty_keeps_gaussian_covariance_sgd_managed(
     gaussian_model_conf, trainer_config, gaussian_sample_data
 ):
-    """Empty msteps selects ordinary SGD without a closed-form R update."""
+    """Empty transforms select optimizer-only training without closed-form R."""
     model = XFADS(gaussian_model_conf, jrnd.key(0))
     seen = []
 
