@@ -501,11 +501,13 @@ class Observation(SubclassRegistryMixin, ConfModule):
         """
         ...
 
-    def batch_stat(self, context):
+    def batch_stat(
+        self, t, y, u, c, moment, transition_stat, approx
+    ):
         """Return one additive observation statistic, or ``None``."""
         return None
 
-    def mstep(self, stats):
+    def mstep(self, *, t, y, moment, transition_stat, approx):
         """Finalize one accumulated observation statistic into an Observation."""
         return self
 

@@ -425,6 +425,20 @@ class GLM(Observation):
         )
         return eqx.tree_at(lambda m: m.likelihood, self, new_likelihood)
 
+    def mstep(self, *, t, y, moment, transition_stat, approx):
+        """Delegate output-based M-step to the wrapped likelihood."""
+        if not hasattr(self.likelihood, "mstep"):
+            return self
+        new_likelihood = self.likelihood.mstep(
+            t=t,
+            y=y,
+            moment=moment,
+            transition_stat=transition_stat,
+            approx=approx,
+            readout=self.readout,
+        )
+        return eqx.tree_at(lambda m: m.likelihood, self, new_likelihood)
+
     def mstep_from_data(self, t: Array, moment: Array, y: Array, approx: Approx) -> "GLM":
         """See :meth:`Observation.mstep_from_data`.
 
@@ -435,7 +449,7 @@ class GLM(Observation):
         back to a no-op (``return self``) for likelihoods that don't
         implement it (e.g. ``Poisson``).
         """
-        if not hasattr(self.likelihood, "mstep"):
+        if not hasattr(self.likelihood, "mstep_from_data"):
             return self
         new_likelihood = self.likelihood.mstep_from_data(
             t, moment, y, approx, self.readout
