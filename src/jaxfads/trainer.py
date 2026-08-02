@@ -486,7 +486,7 @@ def _run_training_loop(
     regularizer=None,
     post_optimizer_transforms=(),
 ):
-    """Run minibatch SGD followed by ordered trainer-owned M-step policies."""
+    """Run minibatch optimization followed by ordered post-optimizer transforms."""
 
     @eqx.filter_jit(donate="all")
     def train_step(model, opt_state, batch, key, step):
@@ -565,7 +565,7 @@ def _run_training_loop(
         else:
             finalize_epoch(current_epoch, epoch_batch_losses)
     except KeyboardInterrupt:
-        logger.info("training interrupted; discarding partial epoch M-step statistics")
+        logger.info("training interrupted; discarding partial epoch loss metrics")
     finally:
         pbar.stop()
 

@@ -1,310 +1,77 @@
-# Trainer-owned Gaussian observation covariance M-step
+# Trainer-owned Gaussian observation covariance update
 
-Status: historical rationale and migration record. The active implementation
-uses the trainer-owned `GaussianObservationMstep` passed explicitly through
-`train(..., post_optimizer_transforms=(GaussianObservationMstep(),))`. It performs a direct
-post-SGD minibatch update from the ordinary three-value forward output. The
-former component/model M-step APIs and epoch-accumulation design are removed.
+**Status:** active design and rationale.
 
-See also: [Training](training.md), [Algorithm](algorithm.md).
+The active implementation uses the trainer-owned
+`GaussianObservationMstep` passed explicitly through
+`train(..., post_optimizer_transforms=(GaussianObservationMstep(),))`.
+It performs a direct post-optimizer minibatch update from the ordinary
+three-value forward output:
+
+```python
+natural, moment, predictive_moment = model(t, y, u, c, key=key)
+```
+
+The former component/model M-step APIs, standalone observation M-step
+utilities, and epoch-accumulation design are removed and are not supported.
 
 ## The problem
 
 `Gaussian.eloglik` computes the joint likelihood
 
-```
-log N(y; E[Cz], C Cov(z) C^T + R)
-```
-
-where `C Cov(z) C^T` is low-rank (rank ≤ state_dim) and `R` (the per-dimension
-observation noise, `Gaussian.unconstrained_cov` under `constrain_positive`) is
-diagonal. This is structurally identical to a **factor-analysis model**, with
-`R` playing the role of the factor model's "uniquenesses" — and it inherits
-factor analysis's best-known MLE pathology, the **Heywood case**: joint
-gradient-based optimization of `R` can drive one or more of its components
-toward the numerical floor while the corresponding dimension's residual stays
-large, because the low-rank correction term lets the *joint* density favor
-this even though it does not reflect a genuine improvement in fit for that
-dimension.
-
-This is not merely a theoretical concern: it has been observed directly in
-practice, with a fitted covariance reaching the float32-safety floor
-(`jaxfads.constraints._MIN_VARIANCE = 1e-6`) while the corresponding
-dimension's *actual* residual variance — measured independently as
-`mean[(y - reconstructed_mean)^2]` on the same data — was orders of
-magnitude larger. The fitted parameter had completely decoupled from
-reconstruction quality; `_MIN_VARIANCE` prevents a literal float32 underflow
-(no NaN/Inf), but not this optimization-level exploit. (Specific figures
-from the downstream campaign that surfaced this are project-specific data,
-not general library documentation, and are intentionally not reproduced
-here.)
-
-## The fix
-
-Estimate `R` via the closed-form EM M-step instead of joint gradient descent:
-
-```
-R_d = mean over (batch, time) of [ (y_d - E[Cz]_d)^2 + (C Cov(z) C^T)_dd ]
+```text
+log N(y; E[Cz], C Cov(z) C.T + R)
 ```
 
-i.e. the expected squared residual under the current posterior, including the
-propagated posterior uncertainty term. This is immune to the Heywood-case
-exploit **by construction**: the estimate *is* the expected squared residual,
-so it cannot decouple from actual reconstruction quality the way a freely
-gradient-optimized parameter can.
+where `C Cov(z) C.T` is low-rank and `R` is diagonal observation noise. This
+factor-analysis structure admits a Heywood-type degeneracy: joint
+gradient-based optimization can drive one or more components of `R` toward the
+numerical floor while the corresponding reconstruction residual remains large.
 
-Historical implementation references (`src/jaxfads/base.py`,
-`src/jaxfads/observations.py`, `src/jaxfads/trainer.py`):
+## The update
 
-- `Gaussian.mstep_stat(t, moment, y, approx, readout)` — the per-(batch,time)
-  sufficient statistic above, mirroring `eloglik`'s call signature/conventions
-  (dense `(state_dim, state_dim)` covariance from `approx.unpack`, `readout`
-  exposing `.weight`). Unchanged since first shipped.
-- Historical `mstep_gaussian_cov` references below describe the former
-  forward (the E-step) over a dataset, aggregates `mstep_stat`, and returns a
-  new model with `observation.likelihood.unconstrained_cov` replaced by the
-  M-step-optimal value. Dispatch is **duck-typed** on `hasattr(likelihood,
-  "mstep_stat")`, not `isinstance(likelihood, Gaussian)` — a future
-  Gaussian-like likelihood can participate without subclassing `Gaussian`.
-  Raises `NotImplementedError` for likelihoods without `mstep_stat` (e.g.
-  `Poisson`, which has no free variance parameter to estimate this way).
-  Unchanged since first shipped. Supports `batch_size`-chunked scanning for
-  datasets too large for a single forward pass.
-- `Observation.mstep(t, moment, y, approx)` / `Observation.mstep_frozen_paths()`
-  — concrete, no-op-default ABC methods (`base.py`): the framework-neutral
-  entry point any `Observation` implementation may opt into.
-- `Likelihood.mstep(t, moment, y, approx, readout)` /
-  `Likelihood.mstep_frozen_paths()` — documented on the `Likelihood`
-  `Protocol`'s shape, optional (no runtime default — `Protocol` provides
-  none). `GLM.mstep`/`GLM.mstep_frozen_paths` dispatch to `self.likelihood`
-  via an internal `hasattr` check, mirroring `GLM.eloglik`'s delegation;
-  `Poisson` needs no changes (nothing to inherit, nothing to implement).
-  `Likelihood` intentionally stays a `Protocol`, not a
-  `SubclassRegistryMixin`-registered plugin type: `Observation` is the
-  framework's actual plugin surface, and `Likelihood`/`readout` are `GLM`'s
-  own private internal composition — a different `Observation` subclass
-  wouldn't need that split at all.
-- `Gaussian.mstep` / `Gaussian.mstep_frozen_paths` — wraps `mstep_stat` into
-  a single-forward-pass update (`jnp.mean` over the given data, versus
-  `mstep_gaussian_cov`'s chunked accumulation) and reports
-  `["unconstrained_cov"]` as the path needing exclusion from gradients.
-- The active replacement is `GaussianObservationMstep()` passed via
-  `train(..., post_optimizer_transforms=(GaussianObservationMstep(),))`.
-<!-- Historical API details retained below for context only. They describe
-superseded component/model dispatch and are not supported by the active API. -->
-- `mstep_observation_cov(model, data, *, key)` — the former family-neutral,
-  ABC-dispatched, standalone counterpart to `mstep_gaussian_cov`: a single
-  full-dataset forward pass, no `batch_size` chunking, works for any
-  `Observation` overriding `mstep` (a no-op otherwise, e.g. for `Poisson`).
-  Not called by `train()` itself (see below) — a manual-use utility only.
-- `train()` / `_run_training_loop()` — each pre-SGD minibatch ELBO forward
-  pass emits an additive R statistic through the `Observation` ABC. The
-  trainer, which never imports `observations.py`, sums opaque fixed-shape
-  statistics over the epoch and calls model-level finalization once at the
-  epoch boundary before callbacks/checkpoints. There is no automatic
-  `model.mstep(...)` call and no second full-data inference pass in normal
-  training. `train()` folds `model.observation.mstep_frozen_paths()` into its
-  internal gradient-freeze mask, so gradient descent never fights the
-  epoch-final R update — no `conf.freeze_paths` entry or flag is needed.
+`GaussianObservationMstep` estimates each observation variance using the
+expected squared residual under the current posterior:
 
-`mstep`/`mstep_stat` are not required to be gradient-free on their own
-terms -- they are ordinary functions, not specially guarded against
-carrying gradients if called inside a differentiated context. The actual
-guarantee against interfering with SGD lives at the *call site*: all of
-the above (`train_step`, `apply_mstep`, `mstep_observation_cov`,
-`mstep_gaussian_cov`) invoke `mstep`/`shrink` only after the current
-step's gradient (if any) has already been computed and applied, using an
-already-concrete, already-updated model -- an architectural, ordering-
-based isolation, not an internal `jax.lax.stop_gradient`. An earlier
-version of this document (and the code) added `stop_gradient` calls
-inside `Gaussian.mstep`, `MVN.shrink`, `mstep_gaussian_cov`, and
-centrally inside `XFADS.mstep` -- reverted once checked against the
-actual call sites in `trainer.py`: since `_do_mstep` always runs strictly
-after `eqx.filter_value_and_grad`/`optimizer.update`/`eqx.apply_updates`
-have already produced a concrete model, none of those wraps changed any
-real, observable behavior of the current training loop -- they were
-defense-in-depth against hypothetical future misuse (e.g. differentiating
-through the whole training loop for meta-learning), not something the
-actual SGD needed. Removed for consistency: the invariant that matters
-belongs at the call site, not duplicated into every implementation.
+$$
+R_d = \operatorname{mean}_{n,t}
+\left[(y_{n,t,d}-E[Cz_{n,t}]_d)^2
++ \operatorname{diag}(C\operatorname{Cov}(z_{n,t})C^\mathsf{T})_d\right].
+$$
 
-## Usage
+This update is implemented by the trainer transform. It uses the pre-optimizer
+posterior moments and the current post-optimizer readout state, then replaces
+only the Gaussian likelihood covariance. The accepted one-step lag avoids an
+additional inference pass.
 
-The examples and API names in the historical sections below are retained only
-for provenance. The supported API is the trainer plugin shown above; there is
-no standalone manual observation M-step utility.
-
-### Active trainer usage
+## Active usage
 
 ```python
 from jaxfads.msteps import GaussianObservationMstep
+from jaxfads.trainer import train
 
 trained = train(
     model,
     data,
-    conf=conf,
+    conf=trainer_conf,
     post_optimizer_transforms=(GaussianObservationMstep(),),
 )
 ```
 
-The plugin owns the R update and its freeze path. Omit it for ordinary SGD.
-The remaining epoch-cadence discussion below is historical.
+The transform owns the R update and declares
+`observation.likelihood.unconstrained_cov` as a root-relative frozen path, so
+optimizer gradients do not fight the closed-form replacement. Omit the
+transform for ordinary optimizer-managed observation covariance.
 
-### Historical implementation notes
+`MVNNoiseMstep` is an independent transform for Q and may be selected in the
+same ordered `post_optimizer_transforms` tuple.
 
-The former exact full-dataset recomputation utilities are no longer public.
-Use an explicit trainer plugin for supported training updates; a future manual
-full-data utility would belong in trainer policy rather than in model or
-component APIs.
+## Historical record
 
-```python
-from jaxfads.trainer import train
-from jaxfads.msteps import GaussianObservationMstep
-
-conf.freeze_paths = ["observation.likelihood.unconstrained_cov"]
-for _ in range(n_rounds):
-    model = train(model, data, conf=conf)             # gradient-based round (Adam, L-BFGS, ...)
-    model = train(
-        model,
-        data,
-        conf=conf,
-        post_optimizer_transforms=(GaussianObservationMstep(),),
-    )
-```
-
-`mstep_gaussian_cov` (Gaussian-specific, `batch_size`-chunked scanning) and
-`mstep_observation_cov` (family-neutral, no chunking) compute the same
-math, just orchestrated differently. Note `conf.freeze_paths` must be set
-manually for *this* pattern — only `train()`'s own automatic mechanism
-(either `mstep_mode`) derives its freeze mask automatically.
-
-## Validation performed
-
-- **Unit tests** (`tests/test_observations.py`):
-  - `test_mstep_gaussian_cov_matches_independently_computed_residual_stat`
-    — original `mstep_gaussian_cov` validation: exact residual-statistic
-    match from a deliberately Heywood-degenerate start.
-  - `test_glm_mstep_matches_mstep_gaussian_cov`,
-    `test_glm_mstep_is_noop_for_poisson`, `test_glm_mstep_frozen_paths` —
-    `Observation.mstep`/`mstep_frozen_paths` produce identical results to
-    `mstep_gaussian_cov` and correctly no-op for `Poisson`.
-  - (Purged: `test_mstep_gaussian_cov_raises_for_poisson_likelihood`,
-    `test_mstep_gaussian_cov_dispatches_on_duck_typed_mstep_stat`,
-    `test_mstep_observation_cov_matches_mstep_gaussian_cov`,
-    `test_mstep_observation_cov_is_noop_for_poisson` — negative-path,
-    architecture-guarantee, and redundant-wrapper coverage respectively;
-    deprioritized per correctness/functionality-first testing philosophy.)
-- **Unit/integration tests** (`tests/test_trainer.py`):
-  - `test_mstep_updates_r_unconditionally`,
-    `test_mstep_frozen_paths_always_excluded_from_gradients`,
-    `test_mstep_composes_with_on_epoch_end`,
-    `test_mstep_composes_with_user_freeze_paths` — the always-on update
-    (default `mstep_mode="epoch"`) moves `R` away from a
-    deliberately-wrong init with no configuration, gradient descent never
-    fights it (verified against an independent `mstep` call, within the
-    model's inherent Monte Carlo sampling tolerance), and `on_epoch_end`/a
-    user's own unrelated `conf.freeze_paths` entries keep working
-    unmodified alongside it.
-  - `test_mstep_mode_epoch_updates_only_at_epoch_boundaries` — with
-    `mstep_mode="epoch"`, `R` stays exactly at its initial value through an
-    entire epoch's minibatch training (confirmed via `on_epoch_end`, which
-    fires before that epoch's own end-of-epoch `mstep` call), but has
-    updated by the end of training.
-  - `test_mstep_applied_after_final_epoch_regardless_of_mode`
-    (parametrized over both `mstep_mode` values) — the guaranteed final
-    update after the last epoch holds for both modes, verified as a fixed
-    point against an independent `mstep` call.
-  - Full suite: 115/115 tests pass.
-- **Real-data validation** (`mstep_gaussian_cov` only; downstream project,
-  not in this repo, not reproducible from this repo alone): confirmed to
-  recover sane covariance values (matching independently-measured residuals)
-  on previously-degenerate models, and a full re-run of the affected
-  campaign with the EM-alternation pattern above converged cleanly with no
-  recurrence of the degenerate loss. Specific figures are project-specific
-  data and intentionally not reproduced here.
-- **Real-data validation of the `train()`-integrated update** (downstream
-  project, not in this repo, not reproducible from this repo alone): both
-  `mstep_mode` values were run on the same real campaign and compared.
-  Quality was equivalent between modes (final loss and `cov_min` differed
-  only trivially, within noise); `"minibatch"` was substantially faster in
-  wall-clock, while `"epoch"` supplies the default full-dataset update.
-  Specific figures are project-specific data and intentionally not
-  reproduced here.
-
-## Open questions for refinement
-
-1. **`batch_size` chunking in `mstep_gaussian_cov` is simple sequential
-   accumulation**, not parallelized beyond a single forward pass per chunk.
-   Fine at current scale (datasets of ~50-500 trials); revisit if used on
-   much larger datasets.
-2. **`_MIN_VARIANCE` (the private float32-safety floor in `constraints.py`)
-   remains necessary independent of this fix** — it guards against literal
-   numerical failure (log/reciprocal of an exact float32 `0.0`), a
-   different, narrower concern than the Heywood-case optimization-level
-   exploit this M-step addresses. Both are needed; neither supersedes the
-   other.
-3. ~~Real-data validation of the `train()`-integrated update~~ — **done**:
-   see Validation performed above. `"minibatch"` remains available as an
-   explicit lower-cost option; the default is `mstep_mode="epoch"`.
-4. ~~Whether an occasional, exact full-dataset recompute on top of the
-   per-minibatch update would be worth adding back~~ — **done**: `mstep_mode
-   ="epoch"` gives an exact per-epoch recompute, and the guaranteed final
-   full-dataset update after the last epoch applies regardless of mode.
-   `mstep_gaussian_cov`/`mstep_observation_cov` remain available for a
-   caller who wants a fully manual, `train()`-external recompute instead.
-5. **Whether `Observation.mstep`/`mstep_frozen_paths` generalize to
-   `Approx`/`Dynamics`** — a candidate component-uniform contract, the same
-   generalization `eloglik`/`predictive_moment`/`initialize` already have.
-   See `mstep_dynamics_noise.md`'s `mstep_transition_stat`/
-   `mstep_noise_shrink` for the process-noise (`Q`) analogue — but `Q`'s own
-   continuous per-minibatch cadence should **not** be adopted
-   unconditionally the way `R`'s is here, given its runaway-collapse risk;
-   only `R` has been argued safe for continuous, unconditional cadence.
-6. **Whether to add `Observation.mstep_frozen_paths()`-driven auto-freezing
-   for the *manual* `mstep_gaussian_cov`/`mstep_observation_cov` functions
-   too** (currently only `train()`'s own automatic mechanism, either
-   `mstep_mode`, derives its freeze mask automatically; the manual
-   functions still require `conf.freeze_paths` to be set by hand around
-   them) — a convenience improvement, not a correctness gap.
-
-## Related commits (this branch)
-
-- `64d2927` — `_MIN_VARIANCE` float32-safety floor (prerequisite; see #2 above).
-- `f588af5` — `mstep_gaussian_cov` + `Gaussian.mstep_stat`, initial implementation and tests.
-- `f8298e9` — switched dispatch from `isinstance(Gaussian)` to duck-typed `hasattr(mstep_stat)`.
-- `28520be` — `Observation.mstep`/`mstep_frozen_paths`, `Likelihood.mstep`/`GLM.mstep` dispatch,
-  `mstep_observation_cov`.
-- `0165677` — stripped downstream-project-specific data from this document.
-- `91b6161` — reworked the trainer integration from an opt-in
-  `mstep_every_n_epochs` parameter to an unconditional, per-minibatch
-  update built directly into `train_step`; removed the intermediate
-  parameter entirely.
-- `4123fc8` — added `mstep_mode: {"minibatch", "epoch"}` and
-  the guaranteed final full-dataset update after the last epoch regardless
-  of mode; purged 5 low-value tests, added 2 new `mstep_mode` tests.
-- `57786a0` — unrelated to this feature: `AGENTS.md` testing-workflow policy update.
-- `04b64db` — `train_step`/`apply_mstep` now call `model.mstep(...)`
-  (composing both `R` and, when configured, the transition-noise `Q`
-  update) instead of `model.observation.mstep(...)` directly; no change
-  to `R`'s own behavior, only to what the call site composes alongside it.
-- `ea30c69` — deduplicated the `train_step`/`apply_mstep` call sites into a
-  shared `_do_mstep` helper, and fixed a real redundant-computation bug:
-  for `mstep_mode="epoch"`, the guaranteed post-training `apply_mstep`
-  call was needlessly recomputing the exact same full-dataset update the
-  last `finalize_epoch` call had just applied, on an unchanged model.
-- `a117cca` — (superseded, see below) added a `stop_gradient` to
-  `mstep_gaussian_cov` and centralized `stop_gradient` enforcement in
-  `XFADS.mstep`, treating gradient-freedom as a property `mstep`/`shrink`
-  should guarantee on their own terms.
-- (revert of `a117cca`'s `stop_gradient` additions) — rejected once
-  checked against the actual `trainer.py` call sites: `_do_mstep` always
-  runs strictly after the current step's gradient has already been
-  computed and applied (`eqx.filter_value_and_grad`/`optimizer.update`/
-  `eqx.apply_updates` all complete first), so none of the added
-  `stop_gradient` wraps changed any real, observable behavior -- they
-  were defense-in-depth against hypothetical future misuse, not something
-  the actual training loop needed. Also removed the pre-existing
-  `stop_gradient` calls in `Gaussian.mstep`/`MVN.shrink` for the same
-  reason, for consistency. The invariant that matters (mstep never
-  interferes with SGD) belongs at the call site's ordering, not
-  duplicated into every implementation.
+Earlier versions of this document described standalone functions such as
+`mstep_gaussian_cov` and `mstep_observation_cov`, component methods such as
+`Observation.mstep` and `Likelihood.mstep`, recursive `XFADS.mstep` dispatch,
+epoch-local accumulation, automatic model freeze-path composition, and the
+`mstep_mode` cadence option. Those APIs and cadence rules were superseded by
+the trainer-owned post-optimizer transform interface and are retained only in
+git history, not as supported usage.

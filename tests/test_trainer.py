@@ -102,12 +102,12 @@ def model_conf():
     })
 
 
-def test_mstep_initialization_precedes_optimizer_init(
+def test_post_optimizer_transform_initialization_precedes_optimizer_init(
     gaussian_model_conf, trainer_config, gaussian_sample_data
 ):
-    """The optimizer receives the Q value installed by the selected plugin."""
+    """The optimizer receives the Q value installed by the selected transform."""
     model = XFADS(gaussian_model_conf, jrnd.key(0)).initialize(*gaussian_sample_data)
-    plugin = MVNNoiseMstep(q_scale=0.25)
+    transform = MVNNoiseMstep(q_scale=0.25)
     expected_free = model.approx.free_from_kw(scale=0.25)
     seen = []
 
@@ -126,17 +126,17 @@ def test_mstep_initialization_precedes_optimizer_init(
         gaussian_sample_data,
         conf=trainer_config,
         optimizer=optax.GradientTransformation(init_fn, update_fn),
-        post_optimizer_transforms=(plugin,),
+        post_optimizer_transforms=(transform,),
     )
 
     assert len(seen) == 1
     chex.assert_trees_all_close(seen[0], expected_free)
 
 
-def test_train_with_independent_msteps(
+def test_train_with_independent_post_optimizer_transforms(
     gaussian_model_conf, trainer_config, gaussian_sample_data
 ):
-    """Independent R/Q trainer plugins run after one SGD forward pass."""
+    """Independent R/Q transforms run after one optimizer forward pass."""
     conf = gaussian_model_conf
     trainer_config.max_epoch = 1
     model = XFADS(conf, jrnd.key(0)).initialize(*gaussian_sample_data)
@@ -340,9 +340,10 @@ def test_train_freeze_paths_invalid_path_raises(
 
 @pytest.fixture
 def gaussian_model_conf():
-    """Minimal Gaussian-likelihood model configuration, for testing the
-    always-on M-step update (Poisson has no free covariance to
-    estimate this way, so mstep is a no-op for it)."""
+    """Minimal Gaussian-likelihood configuration for transform tests.
+
+    Poisson has no free covariance for the Gaussian transform to estimate.
+    """
     return OmegaConf.create({
         "mode": "smooth",
         "observation_dim": 10,
@@ -397,7 +398,7 @@ def test_batch_loss_remains_scalar(gaussian_model_conf, gaussian_sample_data):
     assert loss.shape == ()
 
 
-def test_msteps_empty_keeps_gaussian_covariance_sgd_managed(
+def test_empty_post_optimizer_transforms_keep_gaussian_covariance_optimizer_managed(
     gaussian_model_conf, trainer_config, gaussian_sample_data
 ):
     """Empty transforms select optimizer-only training without closed-form R."""
