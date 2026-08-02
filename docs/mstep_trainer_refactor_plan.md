@@ -1,15 +1,15 @@
 # Plan: move M-step orchestration into pluggable trainer policy
 
-**Status:** discarded. This proposal is retained only as a design record and
-is not pending work. No code behavior is changed by this plan file.
+**Status:** approved architecture refactor; no code behavior is changed by
+this plan file.
 
-**Reason for discarding:** a trainer-owned plugin that reuses only pre-SGD
-forward outputs but applies its update to a post-SGD model mixes inference
-outputs with changed observation/dynamics parameters. Correcting that mismatch
-would require either another post-SGD inference pass or expanding the forward
-output with additional M-step-specific observation statistics. Neither is
-wanted at this point, so the proposed refactor is discarded rather than adding
-that complexity.
+The active design deliberately keeps a minimal three-value model-output
+contract. It does **not** add M-step-specific observation predictions or
+uncertainty to the forward return, and it does not run a second post-SGD
+inference pass. The trainer plugin reuses pre-SGD posterior/predictive outputs
+and reconstructs deterministic R quantities from `moment` plus the current
+post-SGD observation/readout state. This is an accepted lightweight
+one-step-lagged approximation, not a reason to discard the refactor.
 
 ## Goal
 
@@ -65,7 +65,11 @@ natural, moment, predictive_moment = model(
 ```
 
 The trainer supplies these outputs to all selected plugins. Plugins must not
-invoke `model(...)` themselves.
+invoke `model(...)` themselves. `GaussianObservationMstep` reconstructs the
+readout mean and propagated posterior variance from `moment` using the current
+post-SGD observation/readout state. This accepted one-step-lagged
+approximation avoids both another inference pass and M-step-specific forward
+outputs.
 
 For the current MVN/additive-Gaussian process noise, `MVNNoiseMstep`
 reconstructs the noise-free predictive covariance from model outputs:
