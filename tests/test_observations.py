@@ -245,9 +245,11 @@ def test_glm_mstep_matches_mstep_gaussian_cov():
 
     _natural, moment, _pred, transition_stat = model(times, y, u, c, key=mstep_key)
     new_observation = model.observation.mstep(
-        model.observation.batch_stat(
-            times, y, u, c, moment, transition_stat, model.approx
-        )
+        t=times,
+        y=y,
+        moment=moment,
+        transition_stat=transition_stat,
+        approx=model.approx,
     )
 
     chex.assert_trees_all_close(
@@ -273,15 +275,11 @@ def test_glm_mstep_is_noop_for_poisson():
     moment = jnp.broadcast_to(single, (batch, T) + single.shape)
 
     updated = observation.mstep(
-        observation.batch_stat(
-            times,
-            y,
-            jnp.zeros((batch, T, 0)),
-            jnp.zeros((batch, T, 0)),
-            moment,
-            None,
-            approx,
-        )
+        t=times,
+        y=y,
+        moment=moment,
+        transition_stat=None,
+        approx=approx,
     )
     assert updated is observation
 

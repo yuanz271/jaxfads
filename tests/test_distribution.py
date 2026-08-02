@@ -345,7 +345,9 @@ def test_unregistered_noise_strategy_is_noop():
     )
     assert not noise.supports_mstep
     assert not noise.mstep_active
-    assert noise.mstep(None) is noise
+    assert noise.mstep(
+        t=None, y=None, moment=None, transition_stat=None, approx=approx
+    ) is noise
 
 
 def test_approx_transition_stat_default_is_identity():
@@ -453,16 +455,13 @@ def test_mvn_noise_mstep_matches_independent_reference(dim, rank):
         keys, moment_tm1, u_zeros, c_zeros
     )
 
-    stat = noise.batch_stat(
-        jnp.zeros((n_batch, n_time)),
-        jnp.zeros((n_batch, n_time, 0)),
-        u_zeros,
-        c_zeros,
-        moment,
-        transition_stat,
-        approx,
+    updated_noise = noise.mstep(
+        t=None,
+        y=None,
+        moment=moment,
+        transition_stat=transition_stat,
+        approx=approx,
     )
-    updated_noise = noise.mstep(stat)
     canon = approx.free_to_canon(updated_noise.free)
     got_cov = canon.chol @ canon.chol.T
 

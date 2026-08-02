@@ -505,7 +505,16 @@ def _run_training_loop(
         model = eqx.apply_updates(model, updates)
         key, stat_key = jr.split(key)
         t, y, u, c = batch
-        model = model.mstep(model._batch_stat(t, y, u, c, key=stat_key))
+        _natural, moment, _predicted, transition_stat = model(
+            t, y, u, c, key=stat_key
+        )
+        model = model.mstep(
+            t=t,
+            y=y,
+            moment=moment,
+            transition_stat=transition_stat,
+            approx=model.approx,
+        )
         return model, opt_state, step + 1, loss
 
     opt_state = optimizer.init(_copy_pytree(eqx.filter(model, eqx.is_inexact_array)))

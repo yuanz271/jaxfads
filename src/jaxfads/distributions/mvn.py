@@ -561,8 +561,7 @@ class _MVNNoiseMstep:
     """Exact-MVN Noise M-step strategy, delegating algebra to ``noise.approx``."""
 
     @staticmethod
-    def batch_stat(noise, t, y, u, c, moment, transition_stat, approx):
-        del t, y, u, c, approx
+    def mstep(noise, *, moment, transition_stat):
         approx = noise.approx
         moment_t = moment[:, 1:, :]
         mean_f, cov_f = transition_stat
@@ -573,14 +572,8 @@ class _MVNNoiseMstep:
             return jnp.outer(residual, residual) + cov_t + cov_f_i
 
         raw = jax.vmap(jax.vmap(one))(moment_t, mean_f, cov_f)
-        return jnp.sum(raw, axis=(0, 1)), jnp.asarray(
-            raw.shape[0] * raw.shape[1], dtype=raw.dtype
-        )
-
-    @staticmethod
-    def mstep(noise, epoch_stat):
-        approx = noise.approx
-        sums, count = epoch_stat
+        sums = jnp.sum(raw, axis=(0, 1))
+        count = jnp.asarray(raw.shape[0] * raw.shape[1], dtype=raw.dtype)
         d = approx._layout.dim
         q_hat = sums / count
         q_prior = noise.q_scale * jnp.eye(d, dtype=sums.dtype)

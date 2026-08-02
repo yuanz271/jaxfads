@@ -57,12 +57,8 @@ class Noise(eqx.Module):
         return self.approx.predictive_moment(z, self.moment())
 
     def batch_stat(self, t, y, u, c, moment, transition_stat, approx) -> Any:
-        """Return one additive Q statistic, or ``None`` when inactive."""
-        if not self.mstep_active:
-            return None
-        return self.mstep_strategy.batch_stat(
-            self, t, y, u, c, moment, transition_stat, approx
-        )
+        """Legacy statistic hook; Design B computes directly in ``mstep``."""
+        return None
 
     def frozen_paths(self) -> list[str]:
         return ["free"] if self.mstep_active else []
@@ -75,9 +71,11 @@ class Noise(eqx.Module):
             return total
         return jax.tree.map(lambda left, right: left + right, total, delta)
 
-    def mstep(self, stat: Any) -> "Noise":
-        """Return an updated component from accumulated Q statistics."""
-        if not self.mstep_active or stat is None:
+    def mstep(self, *, t, y, moment, transition_stat, approx):
+        """Apply the registered Q update directly from model outputs."""
+        if not self.mstep_active:
             return self
-        free = self.mstep_strategy.mstep(self, stat)
+        free = self.mstep_strategy.mstep(
+            self, moment=moment, transition_stat=transition_stat
+        )
         return eqx.tree_at(lambda noise: noise.free, self, free)

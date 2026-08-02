@@ -411,6 +411,20 @@ class GLM(Observation):
         """
         return self.likelihood.eloglik(key, t, moment, y, approx, mc_size, self.readout)
 
+    def mstep(self, *, t, y, moment, transition_stat, approx):
+        """Delegate output-based R M-step to the likelihood leaf."""
+        if not hasattr(self.likelihood, "mstep"):
+            return self
+        new_likelihood = self.likelihood.mstep(
+            t=t,
+            y=y,
+            moment=moment,
+            transition_stat=transition_stat,
+            approx=approx,
+            readout=self.readout,
+        )
+        return eqx.tree_at(lambda m: m.likelihood, self, new_likelihood)
+
     def mstep_from_data(self, t: Array, moment: Array, y: Array, approx: Approx) -> "GLM":
         """See :meth:`Observation.mstep_from_data`.
 
@@ -448,13 +462,6 @@ class GLM(Observation):
                 t, y, u, c, moment, transition_stat, approx, self.readout
             )
         return None
-
-    def mstep(self, stats):
-        """Apply an accumulated R statistic, if this likelihood supports it."""
-        if not isinstance(self.likelihood, Gaussian):
-            return self
-        likelihood = self.likelihood.mstep(stats)
-        return eqx.tree_at(lambda m: m.likelihood, self, likelihood)
 
     def set_readout(
         self, weight: Array | None = None, bias: Array | None = None
@@ -915,7 +922,10 @@ class Gaussian(eqx.Module, strict=True):
             jnp.sum(valid, axis=(0, 1)),
         )
 
-    def mstep(self, stats):
+    def mstep(self, *, t, y, moment, transition_stat, approx, readout):
+        stats = self.batch_stat(
+            t, y, None, None, moment, transition_stat, approx, readout
+        )
         sums, counts = stats
         r_new = sums / jnp.maximum(counts, 1)
         new_cov = unconstrain_positive(jnp.maximum(r_new - _MIN_VARIANCE, _EPS))

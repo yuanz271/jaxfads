@@ -307,49 +307,44 @@ class XFADS(ConfModule):
         """Whether this concrete Noise/Approx pairing has MAP-Q support."""
         return self.noise.mstep_active
 
-    def _batch_stat(self, t, y, u, c, *, key) -> MstepStats:
-        """Infer one data batch and return its additive component statistic."""
-        _natural, moment, _predicted, transition_stat = self(t, y, u, c, key=key)
-        return MstepStats(
-            observation=self.observation.batch_stat(
-                t, y, u, c, moment, transition_stat, self.approx
-            ),
-            noise=self.noise.batch_stat(
-                t, y, u, c, moment, transition_stat, self.approx
-            ),
-        )
-
     def frozen_paths(self) -> list[str]:
         return [
             "observation." + path
             for path in self.observation.frozen_paths()
         ] + ["noise." + path for path in self.noise.frozen_paths()]
 
-    def mstep(self, stats: MstepStats):
-        """Apply component M-steps from one statistic bundle."""
-        model = eqx.tree_at(
-            lambda m: m.observation,
-            self,
-            self.observation.mstep(stats.observation),
+    def mstep(
+        self, *, t, y, moment, transition_stat, approx=None
+    ):
+        """Delegate one model-output M-step recursively through components."""
+        approx = self.approx if approx is None else approx
+        observation = self.observation.mstep(
+            t=t,
+            y=y,
+            moment=moment,
+            transition_stat=transition_stat,
+            approx=approx,
         )
-        return eqx.tree_at(lambda m: m.noise, model, model.noise.mstep(stats.noise))
+        noise = self.noise.mstep(
+            t=t,
+            y=y,
+            moment=moment,
+            transition_stat=transition_stat,
+            approx=approx,
+        )
+        model = eqx.tree_at(lambda m: m.observation, self, observation)
+        return eqx.tree_at(lambda m: m.noise, model, noise)
 
     def mstep_from_data(self, t, y, u, c, *, key) -> "XFADS":
-
-        """Apply one explicit full-data R/Q recomputation.
-
-        This convenience method performs one inference pass over supplied
-        data, collects one component statistic bundle, and applies it through
-        ``_apply_mstep_stat``. Normal ``train()`` never calls this method;
-        it instead accumulates pre-SGD minibatch statistic deltas across an
-        epoch without an additional inference pass.
-
-        An active Q update requires both ``conf.q_mstep`` and an exact
-        concrete-Approx-class Noise M-step strategy. Otherwise the generic
-        Noise component remains unchanged and its ``free`` leaf is
-        SGD-managed.
-        """
-        return self.mstep(self._batch_stat(t, y, u, c, key=key))
+        """Manual convenience wrapper: data inference followed by mstep."""
+        _natural, moment, _predicted, transition_stat = self(t, y, u, c, key=key)
+        return self.mstep(
+            t=t,
+            y=y,
+            moment=moment,
+            transition_stat=transition_stat,
+            approx=self.approx,
+        )
 
     @classmethod
     def load(cls, path: str | Path):

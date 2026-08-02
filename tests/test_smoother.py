@@ -570,9 +570,11 @@ def test_q_mstep_uses_q_scale_and_prior_fraction():
 
     _natural, moment, _predicted, transition_stat = model(times, y, u, c, key=jr.key(2))
     expected_noise = model.noise.mstep(
-        model.noise.batch_stat(
-            times, y, u, c, moment, transition_stat, model.approx
-        )
+        t=times,
+        y=y,
+        moment=moment,
+        transition_stat=transition_stat,
+        approx=model.approx,
     )
     new_model = model.mstep_from_data(times, y, u, c, key=jr.key(2))
 
