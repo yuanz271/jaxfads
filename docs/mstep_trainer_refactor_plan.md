@@ -20,8 +20,8 @@ $$
 $$
 
 The model remains responsible for representing the generative/inference model
-and producing forward outputs. The M-step plugin interprets those outputs and
-returns an updated model.
+and producing three forward outputs. The M-step plugin interprets those
+outputs and returns an updated model.
 
 ## Target architecture
 
@@ -48,11 +48,10 @@ moment parameters and delegating predictive moments to its composed `Approx`.
 
 ## 1. Define the forward-output contract
 
-Keep the existing named forward return rather than introducing a speculative
-opaque auxiliary bundle:
+The active forward output is the existing three-value inference result:
 
 ```python
-natural, moment, predictive_moment, transition_stat = model(
+natural, moment, predictive_moment = model(
     t, y, u, c, key=key
 )
 ```
@@ -60,11 +59,21 @@ natural, moment, predictive_moment, transition_stat = model(
 The model forward pass only performs inference and returns these outputs. The
 trainer/plugin computes M-step statistics outside `XFADS.__call__`; the model
 forward pass must not collect, accumulate, or apply M-step statistics.
-`transition_stat` remains the named fourth output because Q currently needs it.
-For MVN, the plugin may reconstruct the noise-free predictive covariance from
-`predictive_moment - model.noise.moment()` when numerically valid; retain the
-named output because other Approx families may require it. Do not add a
-`ForwardOutput` wrapper or a general `aux` dictionary yet.
+
+For the current MVN/additive-Gaussian process-noise model, Q's plugin
+reconstructs the noise-free predictive moments from the predictive output and
+current Noise covariance:
+
+```python
+mean_f, cov_pred = approx.unpack(predictive_moment[:, 1:])
+_, q = approx.unpack(model.noise.moment())
+cov_f = cov_pred - q
+```
+
+The subtraction must be symmetrized and numerically stabilized. This is an
+MVN/Noise-strategy operation, not a generic Approx or core operation. Do not
+introduce a fourth `transition_stat` output or a general `aux` bundle yet; add
+another forward hook only when a concrete future Approx strategy requires it.
 
 ## 2. Define the trainer-owned MStep interface
 
@@ -134,13 +143,13 @@ class JointGaussianMAP:
 Its `__call__` should:
 
 1. unpack `batch` as `t, y, u, c`;
-2. unpack `forward` as `natural, moment, predictive_moment,
-   transition_stat`;
+2. unpack `forward` as `natural, moment, predictive_moment`;
 3. compute the Gaussian R statistic/update itself, using `t`, `y`, `moment`,
    and the model's observation/readout state;
-4. compute Q transition residual covariance itself using `moment` and
-   `transition_stat`, delegating MVN representation conversion to
-   `model.noise.approx`;
+4. compute Q transition residual covariance from `moment`,
+   `predictive_moment`, and `model.noise.moment()`: for MVN, subtract current
+   Q from the predictive covariance to recover the noise-free covariance,
+   then delegate MVN representation conversion to `model.noise.approx`;
 5. apply the Q fractional shrinkage:
 
    $$
@@ -256,7 +265,8 @@ XFADS should retain:
 
 - `observation` and `noise` model state;
 - `approx` access through the canonical composed Noise Approx;
-- inference `__call__` and its named `transition_stat` output;
+- inference `__call__` and its three named outputs (`natural`, `moment`,
+  `predictive_moment`);
 - structural model initialization/save/load.
 
 If manual full-data M-step use is needed, provide a trainer-side utility:
