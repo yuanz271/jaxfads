@@ -12,11 +12,10 @@ The trainer owns the update ordering and selected M-step policy:
 
 $$
 \text{model}
-\xrightarrow{\text{pre-SGD loss/gradient}}
-\text{SGD update}
-\xrightarrow{\text{one post-SGD forward pass}}
-\text{M-step transformation}
-\longrightarrow
+\xrightarrow{\text{one forward pass}}
+(\text{loss},\text{gradients},\text{inference outputs})
+\xrightarrow{\text{M-step transformation}}
+\xrightarrow{\text{SGD update}}
 \text{next model}.
 $$
 
@@ -58,20 +57,14 @@ natural, moment, predictive_moment, transition_stat = model(
 )
 ```
 
-The M-step plugin receives these outputs from the trainer; it must not call
-`model(...)` internally. `transition_stat` remains the named fourth output
-because Q currently needs it and it cannot be reconstructed from marginal
-moments alone.
-
-Keep the tuple contract for this refactor; do not add a `ForwardOutput`
-wrapper or a general `aux` dictionary unless repeated indexing proves
-materially unclear. The stable contract is:
-
-```python
-ForwardOutput = tuple[Array, Array, Array, Any]
-```
-
-The fourth element remains the named `transition_stat` value.
+The model forward pass only performs inference and returns these outputs. The
+trainer/plugin computes M-step statistics outside `XFADS.__call__`; the model
+forward pass must not collect, accumulate, or apply M-step statistics.
+`transition_stat` remains the named fourth output because Q currently needs it.
+For MVN, the plugin may reconstruct the noise-free predictive covariance from
+`predictive_moment - model.noise.moment()` when numerically valid; retain the
+named output because other Approx families may require it. Do not add a
+`ForwardOutput` wrapper or a general `aux` dictionary yet.
 
 ## 2. Define the trainer-owned MStep interface
 
@@ -114,8 +107,8 @@ Semantics:
 
 - `mstep=None`: ordinary SGD; no post-SGD inference pass and no M-step-owned
   freeze paths;
-- `mstep=JointGaussianMAP(...)`: post-SGD R/Q transformation on every batch,
-  with plugin-declared frozen paths;
+- `mstep=JointGaussianMAP(...)`: R/Q transformation on every batch before
+  the precomputed SGD updates, with plugin-declared frozen paths;
 - future plugins can implement other policies without changing XFADS.
 
 `mstep=None` therefore means neither R nor Q is M-step-owned. This is a
@@ -164,32 +157,31 @@ Its `__call__` should:
 
 The plugin is the sole owner of joint R/Q policy and update mathematics. It
 may use narrowly scoped distribution/model helpers, but it must not call
-component M-step methods or recursively trigger another M-step.
+component M-step methods or recursively trigger another M-step. Its model
+outputs are computed by the trainer's one forward pass; the plugin never calls
+`model(...)` itself.
 
-## 4. Preserve exact update ordering
+## 4. Preserve one-forward-pass pre-SGD ordering
 
-Inside the jitted training step:
+The trainer uses one forward pass for the loss, gradients, and inference
+outputs. It computes M-step statistics outside `XFADS.__call__`, applies the
+M-step first, then applies the precomputed SGD updates:
 
 ```python
-# Current model M_b.
-loss, grads = value_and_grad(loss_fn)(model, batch)
+(loss, forward), grads = value_and_grad_with_aux(loss_and_forward)(
+    model, batch
+)
 params = eqx.filter(model, eqx.is_inexact_array)
+model = mstep(model, batch, forward, key=stat_key)
 updates, opt_state = optimizer.update(grads, opt_state, params)
 model = eqx.apply_updates(model, updates)
-
-# Post-SGD model M_b^SGD; one fresh inference pass.
-forward = model(*batch, key=stat_key)
-model = mstep(model, batch, forward, key=stat_key)
 ```
 
 The optimizer receives the original pre-M-step parameter tree corresponding to
-the gradients. The plugin applies the M-step after SGD, matching the historical
-direct-minibatch behavior. Plugin-frozen leaves are not optimizer-owned, so
-applying the plugin after SGD does not create a second gradient update for
-those leaves.
-
-There is no epoch accumulator, no delayed epoch M-step, and no extra full-data
-pass in normal training.
+the gradients. Plugin-frozen leaves are not optimizer-owned, so the
+subsequent SGD application cannot overwrite their M-step values. There is no
+epoch accumulator, delayed epoch M-step, or extra full-data pass in normal
+training.
 
 ## 5. Configuration ownership
 
