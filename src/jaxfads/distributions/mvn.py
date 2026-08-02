@@ -30,27 +30,19 @@ from __future__ import annotations
 
 from typing import Literal, NamedTuple
 
-import jax
 from jax import Array
 from jax import numpy as jnp
 from tensorflow_probability.substrates.jax import distributions as tfd
 
 from ..base import Approx
 from ..constraints import _EPS, constrain_positive, unconstrain_positive
-from ..noise import Noise
 
 
 def _weighted_moments(zs: Array, weights: Array) -> tuple[Array, Array]:
     """Non-finite-safe weighted mean and covariance of a raw point set.
 
-    ``MVN``'s own reduction of a generic ``(zs, weights)`` point set (as
-    produced by ``core.propagate_transition_points``) into the sufficient
-    statistic this Gaussian family needs -- called from ``MVN.
-    transition_stat``, which ``core.py``'s recursions call polymorphically
-    to build each pair's ``transition_stat`` (see ``core._site_filter``/
-    ``nofilt``). Not shared with ``core.py``: reducing a point set to a
-    mean/covariance pair is a Gaussian-specific choice, not something the
-    subclass-agnostic recursions in ``core.py`` may assume.
+    This helper remains available for distribution-specific transition-point
+    calculations, but is not part of the model forward-output contract.
 
     ``zs`` : shape ``(n_points, dim)``, ``weights`` : shape ``(n_points,)``,
     summing to 1 by convention (not required to be nonnegative, so this
@@ -421,17 +413,6 @@ class MVN(Approx):
             )
         return super().transition_points(key, moment, mc_size)
 
-    def transition_stat(self, zs: Array, weights: Array) -> tuple[Array, Array]:
-        """See base class.
-
-        Reduces the raw propagated point set to its weighted
-        mean/covariance pair via :func:`_weighted_moments` -- the
-        sufficient statistic this Gaussian family's own :meth:`shrink`
-        needs, and asymptotically smaller than the raw point set whenever
-        the point count exceeds ``state_dim``.
-        """
-        return _weighted_moments(zs, weights)
-
     # ---------------------------------------------------------------------
     # free ↔ canon
     # ---------------------------------------------------------------------
@@ -555,39 +536,6 @@ class MVN(Approx):
         """
         _, Q = self.unpack(noise)
         return self.pack(z, Q)
-
-
-class _MVNNoiseMstep:
-    """Exact-MVN Noise M-step strategy, delegating algebra to ``noise.approx``."""
-
-    @staticmethod
-    def mstep(noise, *, moment, transition_stat):
-        approx = noise.approx
-        moment_t = moment[:, 1:, :]
-        mean_f, cov_f = transition_stat
-
-        def one(moment_t_i, mean_f_i, cov_f_i):
-            mean_t, cov_t = approx.unpack(moment_t_i)
-            residual = mean_t - mean_f_i
-            return jnp.outer(residual, residual) + cov_t + cov_f_i
-
-        raw = jax.vmap(jax.vmap(one))(moment_t, mean_f, cov_f)
-        sums = jnp.sum(raw, axis=(0, 1))
-        count = jnp.asarray(raw.shape[0] * raw.shape[1], dtype=raw.dtype)
-        d = approx._layout.dim
-        q_hat = sums / count
-        q_prior = noise.q_scale * jnp.eye(d, dtype=sums.dtype)
-        alpha = jnp.asarray(noise.q_prior_fraction, dtype=sums.dtype)
-        cov = (q_hat + alpha * q_prior) / (1.0 + alpha)
-        cov = 0.5 * (cov + cov.T)
-        if approx._layout.is_diag:
-            cov = jnp.diag(jnp.diagonal(cov))
-        chol = jnp.linalg.cholesky(cov + _EPS * jnp.eye(d, dtype=cov.dtype))
-        canon = MVNParam(loc=jnp.zeros(d, dtype=cov.dtype), chol=chol)
-        return approx.canon_to_free(canon)
-
-
-Noise.register_mstep(MVN, _MVNNoiseMstep())
 
 
 

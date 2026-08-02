@@ -11,7 +11,7 @@ import jax.random as jr
 import jax.numpy as jnp
 
 from jaxfads import XFADS
-from jaxfads.trainer import train
+from jaxfads.trainer import MVNNoiseMstep, GaussianObservationMstep, train
 
 # Ensure built-in subclasses are imported/registered as needed.
 from jaxfads.observations import GLM  # noqa: F401
@@ -28,8 +28,6 @@ conf = OmegaConf.create(
         "approx_kwargs": {},  # rank defaults to state_dim (full); use {"rank": r} for low-rank
         "dynamics": "OU",
         "integrator": "Euler",
-        "q_scale": 1.0,  # positive initial process-noise variance
-        "q_mstep": True,  # MAP Q update after each epoch (the default)
         "dyn_conf": {
             "theta": 2.0,
             "dt": 0.05,
@@ -74,7 +72,15 @@ trainer_conf = OmegaConf.create(
 # Minimal run trains on all data and returns the final-epoch model.
 # For validation/checkpointing/early stopping, split the data and pass a
 # `EpochHandler` as `on_epoch_end` (see Training Configuration).
-trained = train(model, data, conf=trainer_conf)
+trained = train(
+    model,
+    data,
+    conf=trainer_conf,
+    msteps=(
+        GaussianObservationMstep(),
+        MVNNoiseMstep(q_scale=1.0, q_prior_fraction=0.1),
+    ),
+)
 
 natural_params, moment_params, predictions = trained(
     times, observations, controls, covariates, key=jr.key(1)

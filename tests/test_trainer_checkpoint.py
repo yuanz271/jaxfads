@@ -41,7 +41,6 @@ def _model_conf(obs_dim=6, state_dim=2):
             "fb_penalty": 0,
             "noise_penalty": 0.0,
             "dropout": 0.0,
-            "q_scale": 1.0,
             "dyn_conf": OmegaConf.create({"input_dim": 0, "context_dim": 0}),
             "enc_conf": OmegaConf.create({"width": 8, "depth": 1, "dropout": 0.0}),
             "obs_conf": OmegaConf.create(
@@ -79,7 +78,7 @@ def _assert_loadable_checkpoint(path, batch):
 
     loaded = XFADS.load(path)
     assert loaded.approx is loaded.noise.approx
-    free_energy, post_moments, prior_moments, _transition_stat = loaded(*batch, key=jrnd.key(123))
+    free_energy, post_moments, prior_moments = loaded(*batch, key=jrnd.key(123))
     assert jnp.isfinite(free_energy).all()
     assert jnp.isfinite(post_moments).all()
     assert jnp.isfinite(prior_moments).all()

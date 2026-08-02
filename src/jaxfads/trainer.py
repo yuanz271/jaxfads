@@ -34,6 +34,9 @@ from rich.progress import (
 
 from . import vi
 from .logging import get_logger
+from .msteps import GaussianObservationMstep, MStep, MVNNoiseMstep
+
+__all__ = ["GaussianObservationMstep", "MStep", "MVNNoiseMstep", "batch_loss", "train"]
 
 logger = get_logger(__name__)
 
@@ -44,18 +47,16 @@ logger = get_logger(__name__)
 #: anything else (gradient clipping, weight decay, custom schedules).
 #: Validation, checkpointing, and early stopping are not part of training
 #: config; they live in handlers (see :class:`EpochHandler`).
-DEFAULT_TRAINER_CONFIG = DictConfig(
-    {
-        "max_epoch": 50,
-        "learning_rate": 1e-3,
-        "batch_size": 1,
-        "seed": 0,
-        "kl_warmup_steps": 0,
-        # Optional list of dot-separated attribute paths to freeze.
-        # Example: ["noise.free", "unconstrained_prior_natural"]
-        "freeze_paths": [],
-    }
-)
+DEFAULT_TRAINER_CONFIG = DictConfig({
+    "max_epoch": 50,
+    "learning_rate": 1e-3,
+    "batch_size": 1,
+    "seed": 0,
+    "kl_warmup_steps": 0,
+    # Optional list of dot-separated attribute paths to freeze.
+    # Example: ["noise.free", "unconstrained_prior_natural"]
+    "freeze_paths": [],
+})
 
 
 def _resolve_attr_path(obj, parts: tuple[str, ...]):
@@ -207,7 +208,7 @@ def batch_loss(
     times, observations, controls, covariates = batch
 
     key, model_key = jr.split(key)
-    _, posterior_moments, prior_moments, _transition_stat = model(
+    _, posterior_moments, prior_moments = model(
         times, observations, controls, covariates, key=model_key
     )
 
@@ -379,7 +380,9 @@ class EpochHandler:
         )
         self.checkpoint_every = checkpoint_every
         self.patience = patience
-        self.save_fn = save_fn if save_fn is not None else (lambda m, p: save_model(p, m))
+        self.save_fn = (
+            save_fn if save_fn is not None else (lambda m, p: save_model(p, m))
+        )
         self.data_sharding = data_sharding
         self.model_sharding = model_sharding
         self.key = jr.key(seed)
@@ -475,14 +478,9 @@ def _run_training_loop(
     param_schedule=None,
     beta_schedule=None,
     regularizer=None,
+    msteps=(),
 ):
-    """Run direct post-SGD minibatch R/Q M-steps alongside minibatch SGD.
-
-    Each step computes loss and gradients, applies SGD, then performs one
-    fresh inference pass over the same batch to derive and apply its direct
-    R/Q statistic. Statistics are discarded immediately; no epoch accumulator
-    or full-data inference is used by normal training.
-    """
+    """Run minibatch SGD followed by ordered trainer-owned M-step policies."""
 
     @eqx.filter_jit(donate="all")
     def train_step(model, opt_state, batch, key, step):
@@ -494,27 +492,24 @@ def _run_training_loop(
         beta = beta_schedule(step) if beta_schedule is not None else 1.0
 
         def loss_fn(current_model):
-            loss = batch_loss(current_model, batch, key, beta=beta)
+            key_loss, key_forward = jr.split(key)
+            t, y, u, c = batch
+            forward = current_model(t, y, u, c, key=key_forward)
+            _natural, moment, predictive = forward
+            elbo_key = jr.fold_in(key_loss, 0)
+            loss = -jnp.mean(
+                batch_elbo(current_model, elbo_key, t, moment, predictive, y, beta=beta)
+            )
             if regularizer is not None:
                 loss = loss + regularizer(current_model)
-            return loss
+            return loss, forward
 
-        loss, grads = eqx.filter_value_and_grad(loss_fn)(model)
+        (loss, forward), grads = eqx.filter_value_and_grad(loss_fn, has_aux=True)(model)
         params = eqx.filter(model, eqx.is_inexact_array)
         updates, opt_state = optimizer.update(grads, opt_state, params)
         model = eqx.apply_updates(model, updates)
-        key, stat_key = jr.split(key)
-        t, y, u, c = batch
-        _natural, moment, _predicted, transition_stat = model(
-            t, y, u, c, key=stat_key
-        )
-        model = model.mstep(
-            t=t,
-            y=y,
-            moment=moment,
-            transition_stat=transition_stat,
-            approx=model.approx,
-        )
+        for mstep in msteps:
+            model = mstep(model, batch, forward, key=key)
         return model, opt_state, step + 1, loss
 
     opt_state = optimizer.init(_copy_pytree(eqx.filter(model, eqx.is_inexact_array)))
@@ -532,9 +527,7 @@ def _run_training_loop(
 
     def finalize_epoch(epoch_idx, batch_losses):
         train_loss = (
-            float(jnp.mean(jnp.stack(batch_losses)))
-            if batch_losses
-            else float("nan")
+            float(jnp.mean(jnp.stack(batch_losses))) if batch_losses else float("nan")
         )
         train_losses.append(train_loss)
         pbar.update(task_id, advance=1, loss=train_loss)
@@ -566,9 +559,7 @@ def _run_training_loop(
         else:
             finalize_epoch(current_epoch, epoch_batch_losses)
     except KeyboardInterrupt:
-        logger.info(
-            "training interrupted; discarding partial epoch M-step statistics"
-        )
+        logger.info("training interrupted; discarding partial epoch M-step statistics")
     finally:
         pbar.stop()
 
@@ -584,6 +575,7 @@ def train(
     regularizer=None,
     optimizer=None,
     param_schedule=None,
+    msteps=(),
 ):
     """
     Training routine for XFADS models with multi-device support.
@@ -594,15 +586,10 @@ def train(
     those are epoch-level policy supplied via ``on_epoch_end`` (see
     :class:`EpochHandler`). The caller owns the train/validation split.
 
-Each batch's existing pre-SGD ELBO forward pass emits additive observation
-statistics and, when ``model.conf.q_mstep`` is true, transition-noise
-statistics. The trainer accumulates them over the epoch and finalizes R and
-enabled Q once at the epoch boundary before callbacks/checkpoints, without an
-additional inference pass. For a Gaussian-likelihood model R is therefore
-M-step-owned and excluded from SGD via
-``model.frozen_paths()``. When ``q_mstep`` is true and Noise owns Q,
-``noise.free`` is excluded the same way; when false, it remains
-SGD-managed. See [mstep_dynamics_noise](../docs/mstep_dynamics_noise.md).
+    Each batch performs one forward pass for loss, gradients, and plugin outputs,
+    then applies SGD and the ordered ``msteps`` transformations to the updated
+    model. ``msteps=()`` gives ordinary SGD. Plugin-owned frozen paths are merged
+    with ``conf.freeze_paths`` before optimizer construction.
 
     Parameters
     ----------
@@ -638,6 +625,8 @@ SGD-managed. See [mstep_dynamics_noise](../docs/mstep_dynamics_noise.md).
         clipping, weight decay, gradient noise, or a custom schedule, build
         your own ``optax`` optimizer and pass it here; ``conf.learning_rate``
         is then ignored. ``conf.freeze_paths`` is still applied on top.
+    msteps : Sequence[MStep], optional
+        Ordered trainer-owned R/Q transformations. Defaults to ``()``.
     param_schedule : Callable or None, optional
         Optional ``param_schedule(model, step) -> model`` applied at the start
         of every step (before the loss/gradient computation), for driving a
@@ -659,6 +648,9 @@ SGD-managed. See [mstep_dynamics_noise](../docs/mstep_dynamics_noise.md).
     t0 = time.perf_counter()
 
     key = jr.key(conf.seed)
+    key, init_key = jr.split(key)
+    for mstep in msteps:
+        model = mstep.initialize(model, key=init_key)
 
     # >>> Prepare sharding
     n_devices = len(jax.devices())
@@ -667,7 +659,9 @@ SGD-managed. See [mstep_dynamics_noise](../docs/mstep_dynamics_noise.md).
     # (used by eqx.filter_shard below) rejects any spec, raising "only refer to
     # Auto axes of the mesh ... meant to use the reshard API?". Requesting Auto
     # axes explicitly restores with_sharding_constraint's pre-0.9 behavior.
-    mesh = jax.make_mesh((n_devices,), ("batch",), axis_types=(jax.sharding.AxisType.Auto,))
+    mesh = jax.make_mesh(
+        (n_devices,), ("batch",), axis_types=(jax.sharding.AxisType.Auto,)
+    )
     data_sharding = jshd.NamedSharding(mesh, jshd.PartitionSpec("batch"))
     model_sharding = jshd.NamedSharding(mesh, jshd.PartitionSpec())
 
@@ -706,23 +700,13 @@ SGD-managed. See [mstep_dynamics_noise](../docs/mstep_dynamics_noise.md).
         optimizer = optax.adam(conf.learning_rate)
 
     # Build the freeze mask over the *filtered* (trainable-array) structure so it
-    # aligns with the params the optimizer sees inside the training loop.
+    # aligns with the params the optimizer sees inside the training loop. Plugin
+    # initialization above deliberately runs before this mask and optimizer
+    # construction.
     params = eqx.filter(model, eqx.is_inexact_array)
     freeze_mask = jax.tree.map(lambda _: False, params)
-    # Always exclude whatever model.observation.mstep touches from gradient
-    # updates -- no conf.freeze_paths entry, no flag, required from the
-    # caller. mstep is applied to model.observation unconditionally at its
-    # configured cadence, so gradient descent must never
-    # fight it, for any model (a no-op path list for Observations that
-    # don't override mstep, e.g. Poisson). Same reasoning for noise.free
-    # whenever model.q_mstep_active is true: Noise's Q M-step update would
-    # otherwise immediately overwrite whatever gradient descent just
-    # computed for noise.free -- not a numerical-stability issue (the LL
-    # and KL terms are independent given a fixed posterior, so computing
-    # each update from that same posterior is well-defined regardless),
-    # just wasted, silently-discarded gradient computation unless excluded
-    # here, mirroring observation.mstep's own auto-exclusion exactly.
-    freeze_paths = [str(p) for p in conf.freeze_paths] + model.frozen_paths()
+    plugin_paths = [path for mstep in msteps for path in mstep.frozen_paths(model)]
+    freeze_paths = [str(p) for p in conf.freeze_paths] + plugin_paths
     for path in freeze_paths:
         parts = tuple(path.split("."))
         _ = _resolve_attr_path(model, parts)  # fail fast if path is invalid
@@ -767,6 +751,7 @@ SGD-managed. See [mstep_dynamics_noise](../docs/mstep_dynamics_noise.md).
         param_schedule=param_schedule,
         beta_schedule=beta_schedule,
         regularizer=regularizer,
+        msteps=msteps,
     )
 
     dt = time.perf_counter() - t0

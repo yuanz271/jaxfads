@@ -45,8 +45,6 @@ def model_conf():
             "fb_penalty": 0,
             "noise_penalty": 0.0,
             "dropout": 0.0,
-            "q_scale": 1.0,
-            "q_mstep": False,
             "dyn_conf": OmegaConf.create(
                 {
                     "width": 8,

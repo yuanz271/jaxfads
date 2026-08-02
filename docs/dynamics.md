@@ -16,7 +16,8 @@ z_{t+1} = Integrator(Dynamics, z_t, u_t, c_t)
 
 - `Dynamics` defines the system map.
 - `Integrator` defines how one-step updates are produced.
-- Process noise remains owned by `XFADS` through top-level `q_scale`.
+- Process-noise representation remains owned by `XFADS`; Q initialization and
+  closed-form updates are trainer policy supplied by `MVNNoiseMstep`.
 
 Choose the dynamics/integrator pair that matches your model: if your
 `Dynamics.eval(...)` returns a derivative, use `Euler` or `RK4`; if it returns
@@ -64,7 +65,7 @@ Example:
 ```yaml
 dynamics: Functional
 integrator: Identity
-q_scale: 1.0
+# Q initialization is selected by MVNNoiseMstep(q_scale=...).
 
 dyn_conf:
   fn_path: my_pkg.my_maps:my_transition
@@ -78,7 +79,7 @@ dyn_conf:
 ```yaml
 dynamics: OU
 integrator: Euler
-q_scale: 1.0
+# Q initialization is selected by MVNNoiseMstep(q_scale=...).
 
 dyn_conf:
   theta: 2.0
@@ -92,7 +93,7 @@ dyn_conf:
 ```yaml
 dynamics: Identity
 integrator: Identity
-q_scale: 1.0
+# Q initialization is selected by MVNNoiseMstep(q_scale=...).
 
 dyn_conf:
   input_dim: 0
@@ -107,7 +108,7 @@ Use this as the weakest built-in dynamics prior when you want
 ```yaml
 dynamics: MyDynamics
 integrator: Identity
-q_scale: 1.0
+# Q initialization is selected by MVNNoiseMstep(q_scale=...).
 
 dyn_conf:
   input_dim: 0

@@ -11,23 +11,15 @@
   Monte Carlo behavior exactly, bit-for-bit. Real-data validation across
   `state_dim` 8/16/32 showed UT is never worse, and often better/cheaper,
   than Monte Carlo on posterior-RMSE. See `docs/transition_points.md`.
-* Added accumulated epoch-local closed-form EM M-steps for Gaussian
-  observation noise `R` and, when enabled, transition/process noise `Q`.
-  Their additive statistics are emitted by each existing pre-SGD minibatch
-  inference pass and finalized once at the epoch boundary, avoiding both
-  noisy replacement-style minibatch updates and an extra full-data inference
-  pass. R remains always M-step-owned for Gaussian likelihoods. Standalone
-  `mstep_gaussian_cov`/`mstep_observation_cov` and `XFADS.mstep(...)` remain
-  available for explicit full-data recomputation outside `train()`. See
-  `docs/mstep_gaussian_cov.md` and `docs/mstep_dynamics_noise.md`.
-* **Breaking:** transition/process noise uses required top-level positive
-  `q_scale` and `q_mstep` (default `true`). `q_scale` initializes Q; with
-  `q_mstep=true`, direct batch MAP Q finalization uses `q_scale` and
-  `q_prior_fraction` when the generic Noise component has a registered
-  exact-Approx-class strategy (built in for `MVN`), and `train()` auto-freezes
-  `noise.free`. `q_mstep=false`, or no matching strategy, omits Q
-  statistics/finalization and leaves Q SGD-managed.
-  `dyn_conf.state_noise`, `noise_prior`, and `noise_prior_dof` were removed.
+* **Breaking:** M-step updates are now explicit, ordered trainer plugins:
+  pass `GaussianObservationMstep()` and/or
+  `MVNNoiseMstep(q_scale=..., q_prior_fraction=...)` to `train(msteps=...)`.
+  `msteps=()` is ordinary SGD. The MVN Q plugin owns both
+  `Q_init = q_scale I` and fractional Q-prior shrinkage, and initializes Q
+  before optimizer state creation. Model/component M-step APIs, epoch-local
+  M-step accumulation, top-level `q_scale`, `q_mstep`, and
+  `q_prior_fraction` configuration have been removed. See
+  `docs/training.md` and `docs/mstep_trainer_refactor_plan.md`.
 * Added `cuda12`/`cuda13` optional-dependency extras
   (`pip install jaxfads[cuda12]` or `jaxfads[cuda13]`) for one-step GPU
   installs; the base `jax` dependency stays CPU-only. The two extras are

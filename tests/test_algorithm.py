@@ -49,10 +49,6 @@ class _DummyModel:
         self.backward = _Identity(state_dim)
         self.noise = Noise(
             approx=approx,
-            q_scale=cov,
-            q_prior_fraction=0.1,
-            state_dim=state_dim,
-            mstep_enabled=False,
             free=approx.free_from_kw(scale=cov),
         )
 
@@ -74,7 +70,7 @@ def test_filter_shapes_and_finite(diag):
     u = jnp.zeros((T, 0))
     c = jnp.zeros((T, 0))
 
-    nature_f, moment_f, moment_p, _transition_stat = core.filter(
+    nature_f, moment_f, moment_p = core.filter(
         model, key, jnp.arange(T), alpha, u, c
     )
 
@@ -126,10 +122,10 @@ def test_causal_reindexed_identity(diag):
     u = jnp.zeros((T, 0))
     c = jnp.zeros((T, 0))
 
-    check_nature, _, _, _transition_stat = core.filter(
+    check_nature, _, _ = core.filter(
         model, key, jnp.arange(T), alpha, u, c
     )
-    nature, moment, moment_p, _transition_stat2 = core.causal(
+    nature, moment, moment_p = core.causal(
         model, key, jnp.arange(T), alpha, beta, u, c
     )
 
@@ -152,10 +148,10 @@ def test_causal_zero_beta_reduces_to_alpha_filter(diag):
     u = jnp.zeros((T, 0))
     c = jnp.zeros((T, 0))
 
-    check_nature, check_moment, check_moment_p, _transition_stat = core.filter(
+    check_nature, check_moment, check_moment_p = core.filter(
         model, key, jnp.arange(T), alpha, u, c
     )
-    nature, moment, moment_p, _transition_stat2 = core.causal(
+    nature, moment, moment_p = core.causal(
         model, key, jnp.arange(T), alpha, beta, u, c
     )
 
@@ -175,7 +171,7 @@ class _Nonlinear(Dynamics):
     f: Callable[..., Array]
 
     def __init__(self, conf, key):
-        import jaxfads.nn as nn
+        from jaxfads import nn
 
         self.conf = conf
         self.f = nn.make_mlp(

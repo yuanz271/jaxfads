@@ -50,9 +50,9 @@ Trainer
 ```
 
 `Approx` remains distribution-only. `Noise` retains only static Approx
-composition, Q initialization state, `free`, and generic predictive decoding.
-Remove M-step registries, M-step execution, M-step policy, and freeze-path
-policy from `Noise`.
+composition, `free`, and generic predictive decoding. `MVNNoiseMstep` owns Q
+initialization, prior policy, and freeze-path policy. Remove M-step registries,
+M-step execution, M-step policy, and initialization policy from `Noise`.
 
 ## 1. Forward-output contract
 
@@ -90,6 +90,9 @@ Start with explicit plugin objects, not a config-name registry:
 
 ```python
 class MStep(Protocol):
+    def initialize(self, model: XFADS, *, key) -> XFADS:
+        ...
+
     def __call__(
         self,
         model: XFADS,
@@ -156,7 +159,12 @@ It owns only the R residual/covariance update.
 
 ```python
 class MVNNoiseMstep:
+    q_scale: float
     q_prior_fraction: float
+
+    def initialize(self, model, *, key):
+        # Encode Q_init = q_scale * I in model.noise.free.
+        ...
 
     def __call__(self, model, batch, forward, *, key):
         # Use moment, predictive_moment, model.noise.moment(), and MVN
@@ -172,8 +180,9 @@ It owns only the Q update:
 $$
 Q_{\mathrm{new}}
 =
-\frac{\widehat Q+\alpha q_{\mathrm{scale}}I}
+\frac{\widehat Q+\alpha Q_0}
 {1+\alpha},
+\qquad Q_0=q_{\mathrm{scale}}I,
 \qquad
 \alpha=\texttt{q\_prior\_fraction}.
 $$
@@ -209,24 +218,52 @@ their final update for the batch.
 There is no epoch accumulator, delayed epoch M-step, extra full-data pass, or
 extra post-SGD forward pass in normal training.
 
-## 5. Configuration ownership
+## 5. Configuration ownership and initialization
 
-Keep `q_scale` on model/Noise because it defines initial Q and the shrinkage
-center:
-
-```yaml
-q_scale: 1.0
-```
-
-Keep M-step-specific policy on the selected plugin:
+`MVNNoiseMstep` owns the complete isotropic Q-prior policy:
 
 ```python
-MVNNoiseMstep(q_prior_fraction=0.1)
+MVNNoiseMstep(
+    q_scale=0.01,
+    q_prior_fraction=1.0,
+)
 ```
 
-Do not duplicate `q_scale` in the plugin. Q-only behavior is selected by
-including or omitting `MVNNoiseMstep`; R-only behavior uses only
-`GaussianObservationMstep`.
+It defines both:
+
+$$
+Q_{\mathrm{init}}=Q_0=q_{\mathrm{scale}}I,
+$$
+
+and:
+
+$$
+Q_{\mathrm{new}}
+=
+\frac{\widehat Q+\alpha Q_0}{1+\alpha},
+\qquad
+\alpha=\texttt{q\_prior\_fraction}.
+$$
+
+Before constructing freeze masks or optimizer state, the trainer applies each
+selected plugin's initializer:
+
+```python
+for mstep in msteps:
+    model = mstep.initialize(model, key=init_key)
+
+opt_state = optimizer.init(eqx.filter(model, eqx.is_inexact_array))
+```
+
+Thus `noise.free` is initialized from the same Q prior used by subsequent
+updates, and optimizer state is built from the actual parameter arrays. Both
+`q_scale` and `q_prior_fraction` are trainer-plugin policy, not model
+configuration. Q-only behavior includes only `MVNNoiseMstep`; R-only behavior
+uses only `GaussianObservationMstep`.
+
+With `msteps=()`, XFADS retains its neutral default Q initialization. Add a
+separate trainer initializer only if a concrete SGD-Q experiment requires a
+configurable initialization policy.
 
 ## 6. Simplify model components
 
@@ -250,7 +287,7 @@ Remove from active model code:
 - exact Approx M-step registry;
 - `batch_stat`, `accumulate_stat`, `mstep`;
 - `mstep_active`, `supports_mstep`;
-- `q_prior_fraction`, `mstep_enabled`;
+- `q_scale`, `q_prior_fraction`, `mstep_enabled`;
 - component-level M-step freeze policy.
 
 Remove from XFADS:
@@ -308,7 +345,8 @@ Add/retain focused tests for:
 1. `Approx` remains array-free/static and `Noise` preserves composed Approx.
 2. `GaussianObservationMstep` updates only R from one supplied forward output.
 3. `MVNNoiseMstep` updates only Q from the same supplied forward output.
-4. `msteps=()` performs ordinary SGD without retained plugin outputs.
+4. `msteps=()` performs ordinary SGD without retained plugin outputs or
+plugin-owned initialization.
 5. Unsupported Approx use fails clearly for `MVNNoiseMstep`.
 6. No additional post-SGD forward call occurs when one or more plugins run.
 7. Fractional Q formula matches an independent reference.

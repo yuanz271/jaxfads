@@ -27,6 +27,7 @@ posterior is **dynamics-smoothed**, yielding more robust estimates.
 
 ```python
 from omegaconf import OmegaConf
+from jaxfads.msteps import MVNNoiseMstep
 
 state_dim = 4       # PCA rank
 obs_dim = 50        # observation dimensionality
@@ -44,7 +45,6 @@ conf = OmegaConf.create(
         "dynamics": "OU",       # or any dynamics model
         "integrator": "Euler",
         "dropout": 0.0,
-        "q_scale": 1.0,
         "dyn_conf": {
             "theta": 2.0,
             "dt": 0.05,
@@ -117,7 +117,7 @@ This freezes:
 
 Trainable parameters are then only:
 - dynamics (`dynamics`)
-- state noise (`noise_free`)
+- state noise (`noise.free`)
 - encoders (`alpha_encoder`, `beta_encoder`)
 - prior (`unconstrained_prior_natural`)
 
@@ -136,7 +136,13 @@ train_data, valid_data = train_test_split(
 model = XFADS(conf, jr.key(0)).initialize(*train_data)
 
 handler = EpochHandler(valid_data=valid_data)
-train(model, train_data, conf=trainer_conf, on_epoch_end=handler)
+train(
+    model,
+    train_data,
+    conf=trainer_conf,
+    on_epoch_end=handler,
+    msteps=(MVNNoiseMstep(q_scale=1.0),),
+)
 trained = handler.best_model
 
 # Inference
@@ -250,7 +256,6 @@ integrator for discrete-time dynamics:
 ```python
 "dynamics": "Identity",
 "integrator": "Identity",
-"q_scale": 1.0,
 "dyn_conf": {
     "input_dim": 0,
     "context_dim": 0,

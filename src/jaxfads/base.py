@@ -11,7 +11,6 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
-import jax
 from gearax.mixin import SubclassRegistryMixin
 from gearax.modules import ConfModule
 from jax import Array
@@ -204,62 +203,6 @@ class Approx(SubclassRegistryMixin, ABC):
         ``docs/transition_points.md``.
         """
         return _monte_carlo_transition_points(self, key, moment, mc_size)
-
-    def transition_stat(self, zs: Array, weights: Array) -> Any:
-        """Reduce a propagated, noise-free point set ``(zs, weights)`` --
-        as produced by ``core.propagate_transition_points`` -- to whatever
-        family-specific statistic this subclass's own :meth:`shrink`
-        needs as its ``transition_stat`` argument.
-
-        Called once per (batch, time) pair by ``XFADS``'s own forward
-        pass (``core._site_filter``/``nofilt``/``causal``),
-        **unconditionally**, for every ``Approx`` subclass -- not gated
-        behind whether ``shrink``/``Q``-estimation is actually configured
-        for a given model (see ``docs/mstep_dynamics_noise.md`` for why:
-        gating this behind a flag was tried and rejected once checked
-        against the actual marginal cost). This method must therefore be
-        cheap and safe to call regardless of whether the model ever calls
-        ``shrink``.
-
-        ``core.py``'s recursions call this method polymorphically and
-        never interpret its return value themselves -- they only stack it
-        across time steps via ``jax.lax.scan``/``jax.vmap`` (which
-        requires a fixed pytree structure/shape across steps, satisfied
-        as long as this method's output shape doesn't depend on the
-        *values* of ``zs``/``weights``, only their static shapes). This
-        keeps ``core.py`` itself fully agnostic to what a "transition
-        statistic" means for any concrete family -- unlike an earlier
-        design that had ``core.py`` reduce the point set to a
-        mean/covariance pair directly, presuming a Gaussian-shaped
-        sufficient statistic (rejected once checked against ``core.py``'s
-        own agnosticism invariant).
-
-        Default: identity -- returns ``(zs, weights)`` unchanged, i.e. no
-        reduction at all. This is the safe, zero-assumption default: any
-        ``Approx`` subclass that doesn't override this behaves exactly as
-        if this method didn't exist (the raw point set passed straight
-        through as ``transition_stat``). A subclass overrides this only when
-        it wants a smaller, reduced per-pair summary instead of the raw
-        point set (e.g. a Gaussian family reducing to a weighted
-        mean/covariance pair, which is asymptotically smaller than the
-        raw point set whenever the point count exceeds ``state_dim``),
-        pairing its override with its own :meth:`shrink` implementation
-        that knows how to consume that reduced form.
-
-        Parameters
-        ----------
-        zs : Array, shape (n_points, state_dim)
-            Propagated points (no noise added).
-        weights : Array, shape (n_points,)
-            Corresponding point weights.
-
-        Returns
-        -------
-        Any
-            Subclass-defined reduced statistic (default: ``(zs,
-            weights)`` unchanged).
-        """
-        return zs, weights
 
     @abstractmethod
     def kl(self, moment1: Array, moment2: Array) -> Array:
@@ -495,100 +438,12 @@ class Observation(SubclassRegistryMixin, ConfModule):
         ...
 
     @abstractmethod
-    def initialize(self, t: Array, y: Array, u: Array, c: Array) -> "Observation":
+    def initialize(self, t: Array, y: Array, u: Array, c: Array) -> Observation:
         """
         Initialize observation parameters from data statistics.
         """
         ...
 
-    def batch_stat(
-        self, t, y, u, c, moment, transition_stat, approx
-    ):
-        """Return one additive observation statistic, or ``None``."""
-        return None
-
-    def mstep(self, *, t, y, moment, transition_stat, approx):
-        """Finalize one accumulated observation statistic into an Observation."""
-        return self
-
-    def accumulate_stat(self, total, delta):
-        """Add fixed-shape observation statistic pytrees, preserving ``None``."""
-        if total is None:
-            return delta
-        if delta is None:
-            return total
-        return jax.tree.map(lambda left, right: left + right, total, delta)
-
-    def mstep_from_data(self, t: Array, moment: Array, y: Array, approx: Approx) -> Observation:
-        """Closed-form, non-SGD parameter update from a full forward pass.
-
-        Computes a closed-form (EM M-step-style) update for this
-        Observation's own parameters (e.g. Gaussian observation noise
-        covariance), given ``(t, moment, y)`` for the *entire* dataset (or
-        an entire batch treated as such) and the current ``approx``. This
-        is deliberately separate from gradient-based training. Not
-        required to be gradient-free on its own terms -- the actual
-        guarantee against interfering with SGD lives at the call site
-        (e.g. ``mstep_observation_cov``, or ``train()``'s own
-        ``train_step``/``apply_mstep``), which only ever invokes this
-        after the current step's gradient has already been computed and
-        applied, using an already-concrete, already-updated model.
-        Implementations should not add their own defensive
-        ``stop_gradient`` either -- the invariant belongs at the call
-        site, not duplicated into every implementation.
-
-        Default implementation is a no-op: returns ``self`` unchanged.
-        Concrete subclasses that support this (e.g. ``GLM`` wrapping a
-        ``Gaussian`` likelihood) override it; subclasses that don't
-        (e.g. ``GLM`` wrapping ``Poisson``) simply inherit this default.
-
-        Parameters
-        ----------
-        t : Array
-            Time indices for the dataset/batch, shape matching ``y``'s
-            leading axes.
-        moment : Array
-            Moment parameters of the posterior ``q(z_t)`` for every
-            (batch, time) instance, from a forward pass over ``t, y, u, c``.
-        y : Array
-            Observed data for every (batch, time) instance.
-        approx : Approx
-            Exponential-family approximation instance (needed to unpack
-            ``moment`` into mean/covariance; not owned by ``Observation``).
-
-        Returns
-        -------
-        Observation
-            A (possibly) updated Observation instance. Must not depend on
-            or produce gradients.
-        """
-        return self
-
-    def frozen_paths(self) -> list[str]:
-        """Attribute paths (relative to this Observation) that must be
-        excluded from gradient updates whenever :meth:`mstep`-driven
-        updates are active.
-
-        Callers (e.g. ``train()``, which does this unconditionally, every
-        training run) use this to automatically derive which leaves to
-        freeze from the optimizer, so that gradient descent does not fight
-        a closed-form update computed by :meth:`mstep`. No user-facing
-        configuration is required for this; ``train()`` folds these paths
-        into its own freeze mask automatically.
-
-        Default implementation returns ``[]`` (nothing to freeze).
-        Concrete subclasses that override :meth:`mstep` non-trivially
-        should override this too, returning the paths :meth:`mstep`
-        actually writes to.
-
-        Returns
-        -------
-        list of str
-            Dot-separated attribute paths, relative to this Observation
-            instance (e.g. ``["likelihood.unconstrained_cov"]`` for a
-            ``GLM`` wrapping a ``Gaussian`` likelihood).
-        """
-        return []
 
 
 class Encoder(SubclassRegistryMixin, ConfModule):
@@ -620,7 +475,7 @@ class Encoder(SubclassRegistryMixin, ConfModule):
 __all__ = [
     "Approx",
     "Dynamics",
+    "Encoder",
     "Integrator",
     "Observation",
-    "Encoder",
 ]

@@ -9,6 +9,7 @@ from jax import random as jrnd
 from omegaconf import OmegaConf
 
 import jaxfads.observations  # noqa: F401 — register GLM subclass
+from jaxfads.msteps import GaussianObservationMstep, MVNNoiseMstep
 from jaxfads.smoother import XFADS
 from jaxfads.trainer import batch_loss, train
 
@@ -85,8 +86,6 @@ def model_conf():
             "fb_penalty": 0,
             "noise_penalty": 0.01,
             "dropout": 0.0,
-            "q_scale": 1.0,
-            "q_mstep": False,
             "dyn_conf": OmegaConf.create(
                 {
                     "width": 8,
@@ -113,6 +112,54 @@ def model_conf():
             ),
         }
     )
+
+
+def test_mstep_initialization_precedes_optimizer_init(
+    gaussian_model_conf, trainer_config, gaussian_sample_data
+):
+    """The optimizer receives the Q value installed by the selected plugin."""
+    model = XFADS(gaussian_model_conf, jrnd.key(0)).initialize(*gaussian_sample_data)
+    plugin = MVNNoiseMstep(q_scale=0.25)
+    expected_free = model.approx.free_from_kw(scale=0.25)
+    seen = []
+
+    def init_fn(params):
+        seen.append(params.noise.free)
+        return ()
+
+    def update_fn(updates, state, params=None):
+        del params
+        return updates, state
+
+    trainer_config.max_epoch = 1
+    trainer_config.batch_size = 16
+    train(
+        model,
+        gaussian_sample_data,
+        conf=trainer_config,
+        optimizer=optax.GradientTransformation(init_fn, update_fn),
+        msteps=(plugin,),
+    )
+
+    assert len(seen) == 1
+    chex.assert_trees_all_close(seen[0], expected_free)
+
+
+def test_train_with_independent_msteps(
+    gaussian_model_conf, trainer_config, gaussian_sample_data
+):
+    """Independent R/Q trainer plugins run after one SGD forward pass."""
+    conf = gaussian_model_conf
+    trainer_config.max_epoch = 1
+    model = XFADS(conf, jrnd.key(0)).initialize(*gaussian_sample_data)
+    trained = train(
+        model,
+        gaussian_sample_data,
+        conf=trainer_config,
+        msteps=(GaussianObservationMstep(), MVNNoiseMstep(q_scale=1.0, q_prior_fraction=0.1)),
+    )
+    assert jnp.isfinite(trained.observation.likelihood.cov()).all()
+    assert jnp.isfinite(trained.noise.free).all()
 
 
 def test_train(model_conf, trainer_config, sample_data):
@@ -220,7 +267,6 @@ def test_train_lora_rank1_end_to_end(trainer_config, sample_data):
             "fb_penalty": 0,
             "noise_penalty": 0.01,
             "dropout": 0.0,
-            "q_scale": 0.1,
             "dyn_conf": OmegaConf.create(
                 {
                     "width": 8,
@@ -261,7 +307,7 @@ def test_train_lora_rank1_end_to_end(trainer_config, sample_data):
         controls[:4],
         contexts[:4],
     )
-    free_energy, post_mom, prior_mom, _transition_stat = trained_model(*batch, key=jrnd.key(1))
+    free_energy, post_mom, prior_mom = trained_model(*batch, key=jrnd.key(1))
 
     assert jnp.isfinite(free_energy).all()
     assert jnp.isfinite(post_mom).all()
@@ -331,8 +377,6 @@ def gaussian_model_conf():
             "fb_penalty": 0,
             "noise_penalty": 0.01,
             "dropout": 0.0,
-            "q_scale": 1.0,
-            "q_mstep": False,
             "dyn_conf": OmegaConf.create(
                 {
                     "width": 8,
@@ -373,102 +417,12 @@ def gaussian_sample_data():
     return times, observations, controls, contexts
 
 
-def test_mstep_updates_r_unconditionally(gaussian_model_conf, trainer_config, gaussian_sample_data):
-    """The default epoch M-step updates R unconditionally -- R must move
-    substantially away from a
-    deliberately-wrong initial value after training, with no special
-    configuration required."""
-    model = XFADS(gaussian_model_conf, jrnd.key(0))
-    wrong_cov = jnp.full((10,), 1e-4)
-    chex.assert_trees_all_close(
-        model.observation.likelihood.cov(), wrong_cov, atol=1e-3
-    )
-
-    trainer_config.max_epoch = 2
-    trainer_config.batch_size = 16
-    trained_model = train(model, gaussian_sample_data, conf=trainer_config)
-
-    new_cov = trained_model.observation.likelihood.cov()
-    assert not jnp.allclose(new_cov, wrong_cov, atol=1e-2)
-    chex.assert_tree_all_finite(new_cov)
 
 
-def test_frozen_paths_always_excluded_from_gradients(
-    gaussian_model_conf, trainer_config, gaussian_sample_data
-):
-    """model.observation.frozen_paths() must always be excluded from
-    gradient updates, with no conf.freeze_paths entry or flag -- i.e. R's
-    value is fully determined by mstep, not perturbed by gradient descent
-    on top of it. Verified indirectly: R after training must be close to
-    what an independent mstep call on the same (t, moment, y) would give
-    (up to the model's inherent mc_size=1 Monte Carlo sampling noise from
-    using a different PRNG key -- not exact reproduction of an internal
-    implementation detail). A gradient-descent-driven fight on top of mstep
-    would show up as a systematic bias much larger than this sampling
-    noise, not just a few percent."""
-    model = XFADS(gaussian_model_conf, jrnd.key(0))
-    trainer_config.max_epoch = 1
-    trainer_config.batch_size = 32  # single batch == whole dataset
-
-    trained_model = train(model, gaussian_sample_data, conf=trainer_config)
-
-    expected_model = trained_model.mstep_from_data(
-        *gaussian_sample_data, key=jrnd.key(123)
-    )
-
-    chex.assert_trees_all_close(
-        trained_model.observation.likelihood.cov(),
-        expected_model.observation.likelihood.cov(),
-        atol=0.1,
-    )
 
 
-def test_mstep_composes_with_on_epoch_end(
-    gaussian_model_conf, trainer_config, gaussian_sample_data
-):
-    """A user-supplied on_epoch_end must keep working unmodified, independent
-    of the always-on M-step update -- no composition required
-    from the caller."""
-    model = XFADS(gaussian_model_conf, jrnd.key(0))
-    trainer_config.max_epoch = 3
-    trainer_config.batch_size = 16
-
-    epochs_seen = []
-
-    def on_epoch_end(m, info):
-        epochs_seen.append(info["epoch"])
-        return False
-
-    trained_model = train(
-        model, gaussian_sample_data, conf=trainer_config, on_epoch_end=on_epoch_end
-    )
-
-    assert epochs_seen == [0, 1, 2]
-    chex.assert_tree_all_finite(trained_model.observation.likelihood.cov())
 
 
-def test_mstep_composes_with_user_freeze_paths(
-    gaussian_model_conf, trainer_config, gaussian_sample_data
-):
-    """A user's own conf.freeze_paths entries (for an unrelated parameter)
-    must keep working correctly alongside the always-derived
-    frozen_paths() entries -- the two sources of frozen paths compose,
-    neither overwrites the other."""
-    model = XFADS(gaussian_model_conf, jrnd.key(0))
-    noise0 = jax.device_get(model.noise.free)
-
-    trainer_config.max_epoch = 2
-    trainer_config.batch_size = 16
-    trainer_config.freeze_paths = ["noise.free"]
-
-    trained_model = train(model, gaussian_sample_data, conf=trainer_config)
-
-    chex.assert_trees_all_close(
-        jax.device_get(trained_model.noise.free), noise0, atol=0.0
-    )
-    assert not jnp.allclose(
-        trained_model.observation.likelihood.cov(), jnp.full((10,), 1e-4), atol=1e-2
-    )
 
 
 def test_batch_loss_remains_scalar(gaussian_model_conf, gaussian_sample_data):
@@ -478,89 +432,19 @@ def test_batch_loss_remains_scalar(gaussian_model_conf, gaussian_sample_data):
     assert loss.shape == ()
 
 
-def test_accumulated_stats_match_manual_mstep_for_frozen_model(
+
+
+
+
+
+
+
+
+def test_msteps_empty_keeps_gaussian_covariance_sgd_managed(
     gaussian_model_conf, trainer_config, gaussian_sample_data
 ):
-    """One frozen full-batch epoch finalizes the same R/Q statistics as the
-    manual full-data mstep API."""
+    """Empty msteps selects ordinary SGD without a closed-form R update."""
     model = XFADS(gaussian_model_conf, jrnd.key(0))
-    reference_model = XFADS(gaussian_model_conf, jrnd.key(0))
-    trainer_config.max_epoch = 1
-    trainer_config.batch_size = 32
-    trainer_config.learning_rate = 0.0
-    trained = train(
-        model,
-        gaussian_sample_data,
-        conf=trainer_config,
-        optimizer=optax.sgd(0.0),
-    )
-
-    expected = reference_model.mstep_from_data(*gaussian_sample_data, key=jrnd.key(1))
-    chex.assert_trees_all_close(
-        trained.observation.likelihood.cov(),
-        expected.observation.likelihood.cov(),
-        atol=1e-5,
-    )
-    chex.assert_trees_all_close(trained.noise.free, expected.noise.free, atol=1e-5)
-
-
-def test_q_mstep_updates_q_and_freezes_noise_free(
-    gaussian_model_conf, trainer_config, gaussian_sample_data
-):
-    """q_mstep=true updates Q through shrink and auto-freezes noise.free."""
-    conf = OmegaConf.merge(gaussian_model_conf, {"q_scale": 1.0, "q_mstep": True})
-    model = XFADS(conf, jrnd.key(0))
-    noise0 = jax.device_get(model.noise.free)
-
-    trainer_config.max_epoch = 2
-    trainer_config.batch_size = 16
-    trained_model = train(model, gaussian_sample_data, conf=trainer_config)
-
-    assert not jnp.allclose(jax.device_get(trained_model.noise.free), noise0, atol=1e-3)
-    chex.assert_tree_all_finite(trained_model.noise.free)
-
-
-def test_q_mstep_noise_free_matches_independent_mstep(
-    gaussian_model_conf, trainer_config, gaussian_sample_data
-):
-    """q_mstep=true excludes noise.free from SGD, leaving the M-step value."""
-    conf = OmegaConf.merge(gaussian_model_conf, {"q_scale": 1.0, "q_mstep": True})
-    model = XFADS(conf, jrnd.key(0))
-
-    trainer_config.max_epoch = 1
-    trainer_config.batch_size = 32  # single batch == whole dataset
-
-    trained_model = train(model, gaussian_sample_data, conf=trainer_config)
-
-    t, y, u, c = gaussian_sample_data
-    expected_model = trained_model.mstep_from_data(t, y, u, c, key=jrnd.key(123))
-
-    chex.assert_trees_all_close(
-        trained_model.noise.free, expected_model.noise.free, atol=0.2
-    )
-
-
-def test_q_mstep_false_leaves_noise_free_gradient_trained(
-    gaussian_model_conf, trainer_config, gaussian_sample_data
-):
-    """q_mstep=false skips shrink and leaves noise.free SGD-managed."""
-    conf = OmegaConf.merge(gaussian_model_conf, {"q_scale": 1.0, "q_mstep": False})
-    model = XFADS(conf, jrnd.key(0))
-    noise0 = jax.device_get(model.noise.free)
-
-    trainer_config.max_epoch = 2
-    trainer_config.batch_size = 16
-    trained_model = train(model, gaussian_sample_data, conf=trainer_config)
-
-    assert not jnp.allclose(jax.device_get(trained_model.noise.free), noise0, atol=1e-3)
-
-
-def test_accumulated_stats_finalize_before_epoch_callback(
-    gaussian_model_conf, trainer_config, gaussian_sample_data
-):
-    """Callbacks/checkpoints see epoch-finalized R rather than stale R."""
-    model = XFADS(gaussian_model_conf, jrnd.key(0))
-    initial_cov = jax.device_get(model.observation.likelihood.cov())
     seen = []
 
     def on_epoch_end(current_model, info):
@@ -568,9 +452,9 @@ def test_accumulated_stats_finalize_before_epoch_callback(
         seen.append(current_model.observation.likelihood.cov())
         return False
 
-    trainer_config.max_epoch = 2
+    trainer_config.max_epoch = 1
     trainer_config.batch_size = 16
     train(model, gaussian_sample_data, conf=trainer_config, on_epoch_end=on_epoch_end)
 
-    assert len(seen) == 2
-    assert not jnp.allclose(seen[0], initial_cov, atol=1e-2)
+    assert len(seen) == 1
+    assert jnp.isfinite(seen[0]).all()

@@ -114,18 +114,18 @@ Invariant for callers:
   - `trainer_conf.freeze_paths: list[str]` (dot-separated model attribute paths,
     e.g. `["noise.free"]`); applied on top of the default or a supplied
     optimizer.
-- Process noise uses top-level `q_scale` (positive variance) and `q_mstep`
-  (default `True`). With `q_mstep=True`, pre-SGD minibatch R/Q statistics are
-  accumulated and Q is finalized from the direct batch statistic using
-  `q_scale` and `q_prior_fraction` when the generic Noise component has a
-  registered exact-Approx-class M-step strategy; then `noise.free` is
-  auto-frozen. With
-  `q_mstep=False`, or no registered strategy, Q statistics are omitted and
-  `noise.free` remains SGD-managed. `state_noise`, `noise_prior`, and
-  `noise_prior_dof` are unsupported.
-- Normal `train()` has one accumulated R/Q update at each epoch boundary and
-  performs no extra inference pass for that update. `XFADS.mstep_from_data(...)`
-  remains the explicit manual full-data recomputation API.
+- M-step policy is trainer-owned and explicit: pass ordered `msteps` to
+  `train()`. `msteps=()` is ordinary SGD with no M-step-owned freeze paths.
+  `GaussianObservationMstep()` owns the Gaussian R update.
+  `MVNNoiseMstep(q_scale=..., q_prior_fraction=...)` owns both the isotropic
+  Q-prior initializer (`Q_init = q_scale I`) and its fractional Q update; it
+  initializes `noise.free` before freeze-mask and optimizer-state creation,
+  then freezes that leaf. Omitting `MVNNoiseMstep` leaves Q SGD-managed.
+- Each batch uses one pre-SGD inference forward for loss, gradients, and the
+  selected plugins' statistics; plugins update the post-SGD model with no
+  extra inference pass. Model/component M-step APIs are unsupported.
+- `state_noise`, `noise_prior`, `noise_prior_dof`, `q_mstep`, and model-level
+  `q_scale`/`q_prior_fraction` are unsupported.
 - No built-in covariance-based noise regularization is applied by default.
 
 ## Testing Workflow

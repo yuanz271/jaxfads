@@ -7,11 +7,10 @@ neural encoders, dynamics models, observation models, and filtering/smoothing
 algorithms.
 """
 
-import math
 from collections.abc import Callable
 from functools import partial
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any
 
 import equinox as eqx
 from gearax.modules import ConfModule, load_model, save_model
@@ -36,13 +35,6 @@ from .noise import Noise
 from .util import vmap_with_key
 
 logger = get_logger(__name__)
-
-
-class MstepStats(NamedTuple):
-    """Additive observation/noise statistic bundle for any data batch."""
-
-    observation: Any
-    noise: Any
 
 
 class XFADS(ConfModule):
@@ -128,7 +120,7 @@ class XFADS(ConfModule):
     >>> u = jnp.zeros((32, 100, 1))         # controls
     >>> c = jnp.zeros((32, 100, 1))         # covariates
     >>>
-    >>> natural, mean, prediction, transition_stat = model(t, y, u, c, key=key)
+    >>> natural, mean, prediction = model(t, y, u, c, key=key)
     """
 
     dynamics: Dynamics
@@ -199,28 +191,13 @@ class XFADS(ConfModule):
         self.dynamics = Dynamics.get_subclass(dynamics_name)(dyn_conf, key=ky)
         self.integrator = Integrator.get_subclass(integrator_name)(dyn_conf)
 
-        q_scale = float(self.conf.q_scale)
-        if not math.isfinite(q_scale) or q_scale <= 0:
-            raise ValueError(
-                f"q_scale must be a positive finite variance, got {q_scale!r}"
-            )
-        q_prior_fraction = float(self.conf.get("q_prior_fraction", 0.1))
-        if not math.isfinite(q_prior_fraction) or q_prior_fraction < 0:
-            raise ValueError(
-                "q_prior_fraction must be finite and nonnegative, got "
-                f"{q_prior_fraction!r}"
-            )
         approx_cls = Approx.get_subclass(self.conf.approx)
         approx_kwargs = dict(self.conf.approx_kwargs)
         approx_kwargs.setdefault("rank", self.conf.state_dim)
         approx = approx_cls(dim=self.conf.state_dim, **approx_kwargs)
         self.noise = Noise(
             approx=approx,
-            q_scale=q_scale,
-            q_prior_fraction=q_prior_fraction,
-            state_dim=int(self.conf.state_dim),
-            mstep_enabled=self.conf.get("q_mstep", True),
-            free=approx.free_from_kw(scale=q_scale),
+            free=approx.free_from_kw(scale=1.0),
         )
 
         obs_conf = OmegaConf.merge(
@@ -302,50 +279,6 @@ class XFADS(ConfModule):
         observation = self.observation.initialize(t, y, u, c)
         return eqx.tree_at(lambda m: m.observation, self, observation)
 
-    @property
-    def q_mstep_active(self) -> bool:
-        """Whether this concrete Noise/Approx pairing has MAP-Q support."""
-        return self.noise.mstep_active
-
-    def frozen_paths(self) -> list[str]:
-        return [
-            "observation." + path
-            for path in self.observation.frozen_paths()
-        ] + ["noise." + path for path in self.noise.frozen_paths()]
-
-    def mstep(
-        self, *, t, y, moment, transition_stat, approx=None
-    ):
-        """Delegate one model-output M-step recursively through components."""
-        approx = self.approx if approx is None else approx
-        observation = self.observation.mstep(
-            t=t,
-            y=y,
-            moment=moment,
-            transition_stat=transition_stat,
-            approx=approx,
-        )
-        noise = self.noise.mstep(
-            t=t,
-            y=y,
-            moment=moment,
-            transition_stat=transition_stat,
-            approx=approx,
-        )
-        model = eqx.tree_at(lambda m: m.observation, self, observation)
-        return eqx.tree_at(lambda m: m.noise, model, noise)
-
-    def mstep_from_data(self, t, y, u, c, *, key) -> "XFADS":
-        """Manual convenience wrapper: data inference followed by mstep."""
-        _natural, moment, _predicted, transition_stat = self(t, y, u, c, key=key)
-        return self.mstep(
-            t=t,
-            y=y,
-            moment=moment,
-            transition_stat=transition_stat,
-            approx=self.approx,
-        )
-
     @classmethod
     def load(cls, path: str | Path):
         """
@@ -412,7 +345,7 @@ class XFADS(ConfModule):
             )
         )
 
-    def __call__(self, t, y, u, c, *, key) -> tuple[Array, Array, Array, Any]:
+    def __call__(self, t, y, u, c, *, key) -> tuple[Array, Array, Array]:
         """
         Perform variational inference for state-space model.
 
@@ -443,19 +376,8 @@ class XFADS(ConfModule):
             Moment parameters of posterior distributions over states.
         predictions : Array, shape (N, T, param_dim)
             Predicted moment parameters from dynamics model.
-        transition_stat : Any
-            A per-pair auxiliary statistic, aligned with
-            ``moment_params[:, 1:, :]`` -- ``self.approx.transition_stat``
-            applied to the propagated, noise-free point set from pushing
-            each pair's ``q(z_{t-1})`` through ``self.transition``
-            (default: the raw point set unchanged; ``MVN`` reduces to a
-            weighted mean/covariance pair). Deliberately general-purpose,
-            not `shrink`-specific naming -- currently consumed by
-            :meth:`mstep` (for the ``Q`` update), but not conceptually
-            tied to that one use. Always computed (reuses the same
-            propagation already needed for ``predictions``, at negligible
-            marginal cost -- see ``core._site_filter``); most callers can
-            ignore it.
+        M-step statistics are intentionally computed by trainer policies from
+        these inference outputs; the model forward pass remains inference-only.
 
         Notes
         -----
@@ -486,14 +408,14 @@ class XFADS(ConfModule):
         >>> u = jnp.zeros((1, 100, 5))
         >>> c = jnp.zeros((1, 100, 3))
         >>>
-        >>> natural, moment, pred, transition_stat = model(t, y, u, c, key=key)
+        >>> natural, moment, pred = model(t, y, u, c, key=key)
         >>>
         >>> # Batch inference
         >>> y_batch = jrnd.normal(key, (32, 100, 50))
         >>> u_batch = jnp.zeros((32, 100, 5))
         >>> c_batch = jnp.zeros((32, 100, 3))
         >>>
-        >>> natural, moment, pred, transition_stat = model(t, y_batch, u_batch, c_batch, key=key)
+        >>> natural, moment, pred = model(t, y_batch, u_batch, c_batch, key=key)
         """
         approx = self.approx
 

@@ -12,6 +12,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from jaxfads.base import Encoder
 from jaxfads.distributions.mvn import MVN
+from jaxfads.msteps import MVNNoiseMstep
 from jaxfads.smoother import XFADS
 
 
@@ -36,7 +37,6 @@ def test_constructor():
     y_size = 10
     z_size = 2
     u_size = 1
-    q_scale = 1.0
     mc_size = 10
     seed = 0
     likelihood = "Poisson"
@@ -61,8 +61,7 @@ def test_constructor():
             fb_penalty=0,
             noise_penalty=0,
             dropout=dropout,
-            q_scale=q_scale,
-            dyn_conf=OmegaConf.create(
+                    dyn_conf=OmegaConf.create(
                 dict(
                     width=width,
                     depth=depth,
@@ -126,7 +125,6 @@ def test_constructor_accepts_dynamics_and_integrator_keys():
             fb_penalty=0,
             noise_penalty=0,
             dropout=0.0,
-            q_scale=1.0,
             dyn_conf=OmegaConf.create(dict(input_dim=0, context_dim=0)),
             enc_conf=OmegaConf.create(dict(width=8, depth=1, dropout=0.0)),
             obs_conf=OmegaConf.create(
@@ -172,7 +170,6 @@ def test_top_level_dims_override_subconfig_dims():
             fb_penalty=0,
             noise_penalty=0,
             dropout=0.0,
-            q_scale=1.0,
             dyn_conf=OmegaConf.create(
                 dict(
                     state_dim=999,
@@ -224,7 +221,7 @@ def test_top_level_dims_override_subconfig_dims():
 
     model = model.initialize(times, y, u, c)
     key, k = jr.split(key)
-    free_energy, post_mom, prior_mom, _transition_stat = model(times, y, u, c, key=k)
+    free_energy, post_mom, prior_mom = model(times, y, u, c, key=k)
 
     assert jnp.isfinite(free_energy).all()
     assert jnp.isfinite(post_mom).all()
@@ -260,7 +257,6 @@ def test_mode_smoke_forward_pass(mode, approx_kwargs):
             fb_penalty=0,
             noise_penalty=0,
             dropout=0.0,
-            q_scale=1.0,
             dyn_conf=OmegaConf.create(dict(input_dim=0, context_dim=0)),
             enc_conf=OmegaConf.create(
                 dict(
@@ -290,7 +286,7 @@ def test_mode_smoke_forward_pass(mode, approx_kwargs):
     c = jnp.zeros((1, T, 0))
 
     model = model.initialize(times, y, u, c)
-    _, post_mom, prior_mom, _transition_stat = model(times, y, u, c, key=jr.key(2))
+    _, post_mom, prior_mom = model(times, y, u, c, key=jr.key(2))
 
     assert jnp.isfinite(post_mom).all()
     assert jnp.isfinite(prior_mom).all()
@@ -316,7 +312,6 @@ def test_invalid_mode_error_lists_filter_smooth_causal():
             fb_penalty=0,
             noise_penalty=0,
             dropout=0.0,
-            q_scale=1.0,
             dyn_conf=OmegaConf.create(dict(input_dim=0, context_dim=0)),
             enc_conf=OmegaConf.create(dict(width=8, depth=1, dropout=0.0)),
             obs_conf=OmegaConf.create(
@@ -363,7 +358,6 @@ def test_filter_mode_skips_beta_encoder():
             fb_penalty=0,
             noise_penalty=0,
             dropout=0.0,
-            q_scale=1.0,
             dyn_conf=OmegaConf.create(dict(input_dim=0, context_dim=0)),
             enc_conf=OmegaConf.create(dict(width=8, depth=1, dropout=0.0)),
             obs_conf=OmegaConf.create(
@@ -392,7 +386,7 @@ def test_filter_mode_skips_beta_encoder():
     c = jnp.zeros((1, T, 0))
 
     model = model.initialize(times, y, u, c)
-    _, post_mom, prior_mom, _transition_stat = model(times, y, u, c, key=jr.key(2))
+    _, post_mom, prior_mom = model(times, y, u, c, key=jr.key(2))
 
     assert jnp.isfinite(post_mom).all()
     assert jnp.isfinite(prior_mom).all()
@@ -420,7 +414,6 @@ def test_xfads_nofilt_mode():
             noise_penalty=0,
             dropout=0.0,
             nofilt_eps=1e-6,
-            q_scale=1.0,
             dyn_conf=OmegaConf.create(dict(input_dim=0, context_dim=0)),
             enc_conf=OmegaConf.create(
                 dict(alpha_encoder="IdentityEncoder", width=8, depth=1, dropout=0.0)
@@ -447,7 +440,7 @@ def test_xfads_nofilt_mode():
     c = jnp.zeros((1, T, 0))
 
     model = model.initialize(times, y, u, c)
-    nature, post_mom, prior_mom, _transition_stat = model(times, y, u, c, key=jr.key(2))
+    nature, post_mom, prior_mom = model(times, y, u, c, key=jr.key(2))
 
     assert jnp.isfinite(nature).all()
     assert jnp.isfinite(post_mom).all()
@@ -459,10 +452,8 @@ def _gaussian_model(
     y_size,
     z_size,
     *,
-    q_scale=1.0,
-    q_prior_fraction=0.1,
-    q_mstep=True,
     approx="MVN",
+    rank=None,
 ):
     model_conf = OmegaConf.create(
         dict(
@@ -472,16 +463,13 @@ def _gaussian_model(
             dynamics="MockDynamics",
             integrator="Identity",
             approx=approx,
-            approx_kwargs={},
+            approx_kwargs={} if rank is None else {"rank": rank},
             mc_size=2,
             seed=0,
             n_steps=T,
             fb_penalty=0,
             noise_penalty=0,
             dropout=0.0,
-            q_scale=q_scale,
-            q_prior_fraction=q_prior_fraction,
-            q_mstep=q_mstep,
             dyn_conf=dict(input_dim=0, context_dim=0),
             enc_conf=dict(width=8, depth=1, dropout=0.0),
             obs_conf=dict(
@@ -499,83 +487,48 @@ def _gaussian_model(
 
 def test_q_scale_initializes_isotropic_q():
     """q_scale initializes Q to q_scale times identity."""
-    model = _gaussian_model(5, 4, 3, q_scale=0.25)
+    model = _gaussian_model(5, 4, 3)
+    model = MVNNoiseMstep(q_scale=0.25).initialize(model, key=jr.key(1))
     _mean, q = model.approx.unpack(
         model.approx.canon_to_moment(model.approx.free_to_canon(model.noise.free))
     )
     chex.assert_trees_all_close(q, 0.25 * jnp.eye(3), atol=1e-5)
 
+@pytest.mark.parametrize("rank", [0, 3])
+def test_mvn_noise_mstep_matches_fractional_q_prior(rank):
+    """The Q update uses the plugin's initializer and fractional prior center."""
+    d = 3
+    plugin = MVNNoiseMstep(q_scale=0.25, q_prior_fraction=0.5)
+    model = plugin.initialize(_gaussian_model(2, 4, d, rank=rank), key=jr.key(1))
+    approx = model.approx
+    mean_t = jnp.array([1.0, -2.0, 0.5])
+    mean_f = jnp.zeros(d)
+    cov_t = jnp.diag(jnp.array([0.2, 0.3, 0.4]))
+    cov_f = jnp.diag(jnp.array([0.4, 0.5, 0.6]))
+    _mean_q, q = approx.unpack(model.noise.moment())
+    posterior = jnp.stack(
+        (approx.pack(jnp.zeros(d), cov_t), approx.pack(mean_t, cov_t))
+    )[None]
+    predictive = jnp.stack(
+        (approx.pack(jnp.zeros(d), cov_f + q), approx.pack(mean_f, cov_f + q))
+    )[None]
+
+    updated = plugin(
+        model,
+        (None, None, None, None),
+        (jnp.zeros_like(posterior), posterior, predictive),
+        key=jr.key(2),
+    )
+    _mean, q_updated = approx.unpack(updated.noise.moment())
+    q_hat = jnp.outer(mean_t - mean_f, mean_t - mean_f) + cov_t + cov_f
+    expected = (q_hat + 0.5 * 0.25 * jnp.eye(d)) / 1.5
+    if rank == 0:
+        expected = jnp.diag(jnp.diagonal(expected))
+    chex.assert_trees_all_close(q_updated, expected, atol=1e-5)
+
 
 @pytest.mark.parametrize("q_scale", [0.0, -1.0, float("nan"), float("inf")])
 def test_q_scale_must_be_positive_and_finite(q_scale):
     """q_scale is a scalar process variance, not an arbitrary scale."""
-    with pytest.raises(ValueError, match="positive finite variance"):
-        _gaussian_model(5, 4, 3, q_scale=q_scale)
-
-
-def test_q_mstep_false_updates_observation_only():
-    """q_mstep=false leaves Q untouched while still updating R."""
-    T, y_size, z_size = 5, 4, 3
-    model = _gaussian_model(T, y_size, z_size, q_mstep=False)
-    times = jnp.broadcast_to(jnp.arange(T), (2, T))
-    y = jr.normal(jr.key(1), (2, T, y_size))
-    u = jnp.zeros((2, T, 0))
-    c = jnp.zeros((2, T, 0))
-    model = model.initialize(times, y, u, c)
-
-    new_model = model.mstep_from_data(times, y, u, c, key=jr.key(2))
-
-    assert not jnp.allclose(
-        new_model.observation.likelihood.unconstrained_cov,
-        model.observation.likelihood.unconstrained_cov,
-    )
-    chex.assert_trees_all_close(new_model.noise.free, model.noise.free)
-
-
-def test_unregistered_approx_keeps_q_sgd_managed():
-    """An exact-unregistered Approx has no MAP-Q strategy in either mode."""
-    T, y_size, z_size = 5, 4, 3
-    times = jnp.broadcast_to(jnp.arange(T), (2, T))
-    y = jr.normal(jr.key(1), (2, T, y_size))
-    u = jnp.zeros((2, T, 0))
-    c = jnp.zeros((2, T, 0))
-
-    disabled = _gaussian_model(
-        T, y_size, z_size, q_mstep=False, approx="UnregisteredMVN"
-    ).initialize(times, y, u, c)
-    enabled = _gaussian_model(
-        T, y_size, z_size, q_mstep=True, approx="UnregisteredMVN"
-    ).initialize(times, y, u, c)
-
-    assert not disabled.noise.supports_mstep
-    assert not enabled.noise.supports_mstep
-    assert not enabled.q_mstep_active
-    chex.assert_trees_all_close(
-        enabled.mstep_from_data(times, y, u, c, key=jr.key(2)).noise.free,
-        enabled.noise.free,
-    )
-
-
-def test_q_mstep_uses_q_scale_and_prior_fraction():
-    """Noise M-step uses its static q_scale and q_prior_fraction policy."""
-    T, y_size, z_size = 5, 4, 3
-    model = _gaussian_model(
-        T, y_size, z_size, q_scale=0.7, q_prior_fraction=0.25
-    )
-    times = jnp.broadcast_to(jnp.arange(T), (2, T))
-    y = jr.normal(jr.key(1), (2, T, y_size))
-    u = jnp.zeros((2, T, 0))
-    c = jnp.zeros((2, T, 0))
-    model = model.initialize(times, y, u, c)
-
-    _natural, moment, _predicted, transition_stat = model(times, y, u, c, key=jr.key(2))
-    expected_noise = model.noise.mstep(
-        t=times,
-        y=y,
-        moment=moment,
-        transition_stat=transition_stat,
-        approx=model.approx,
-    )
-    new_model = model.mstep_from_data(times, y, u, c, key=jr.key(2))
-
-    chex.assert_trees_all_close(new_model.noise.free, expected_noise.free)
+    with pytest.raises(ValueError, match="finite and positive"):
+        MVNNoiseMstep(q_scale=q_scale)

@@ -21,7 +21,7 @@ Legend:
 | Low-rank pseudo-observation parameter output from encoders | `PARTIAL` | `src/jaxfads/distributions/mvn.py` (`MVN.free_to_natural`); smoke test in `tests/test_smoother.py:186` | Unified via `MVN(dim, rank=r)`, but `h` is emitted independently of `J` (see detail below). Paper Eq. 19 couples them via `h = Kᵀb`, `J = KᵀK`. |
 | Low-rank structured linear algebra complexity claims (Woodbury/Cholesky pipeline) | `MISMATCH` | `MVN.natural_to_moment`, `MVN.moment_to_natural`, `MVN.unpack`, `MVN.kl` in `src/jaxfads/distributions/mvn.py` | Current inference/kl/sample paths materialize full covariance/precision operations (TFP full-cov + dense solves), so paper's scalable structured complexity is not realized end-to-end. |
 | Streaming/causal inference recursion (paper Eq. 29 family) | `MATCH` | `src/jaxfads/core.py` (`causal`), `src/jaxfads/smoother.py` (`mode="causal"` branch) | Implemented as alpha-only filtering for `λ̆_t` followed by reconstruction `λ_t = λ̆_t + b_t` (code indexing, where `b_t` corresponds to paper `β_{t+1}`). The API also exposes `mode="filter"` for alpha-only filtering output directly. |
-| Generative-model parameter learning strategy (θ, ψ, including state-noise `Q_θ` and the observation model's own noise) | `MATCH` | `src/jaxfads/trainer.py` (`train`, gradient descent on the full model via `eqx.filter_value_and_grad`) | The paper explicitly considers classical vEM (alternating E-step/M-step over the approximate posterior and generative-model parameters) and rejects it for scalability, adopting VAE-style joint gradient-based training of θ/ψ/φ via stochastic backpropagation instead (paper: "vEM can be slow due to the need to fully optimize the variational parameters before taking gradient steps on parameters of the generative model... the VAE is better suited for large scale problems for its ability to simultaneously learn the generative model and inference network"). `train()`'s default (unconstrained gradient descent over the whole model, including `noise_free`/observation-noise parameters) matches this choice exactly; no M-step/vEM machinery is used by default. |
+| Generative-model parameter learning strategy (θ, ψ, including state-noise `Q_θ` and the observation model's own noise) | `MATCH` | `src/jaxfads/trainer.py` (`train`, gradient descent on the full model via `eqx.filter_value_and_grad`) | The paper explicitly considers classical vEM (alternating E-step/M-step over the approximate posterior and generative-model parameters) and rejects it for scalability, adopting VAE-style joint gradient-based training of θ/ψ/φ via stochastic backpropagation instead (paper: "vEM can be slow due to the need to fully optimize the variational parameters before taking gradient steps on parameters of the generative model... the VAE is better suited for large scale problems for its ability to simultaneously learn the generative model and inference network"). `train()` defaults to unconstrained gradient descent over the whole model, including `noise.free` and observation-noise parameters; no M-step/vEM machinery is used unless explicit trainer plugins are selected. |
 
 ## Consistency Details
 
@@ -44,16 +44,12 @@ above so they aren't mistaken for gaps or failures to replicate the
 paper's method.
 
 - **Closed-form, non-SGD updates for observation noise (`R`) and
-  transition/process noise (`Q`)**: `Observation.mstep`/
-  `mstep_gaussian_cov` (`src/jaxfads/observations.py`,
-  [docs/mstep_gaussian_cov.md](mstep_gaussian_cov.md)) and
-  `Approx.shrink`/`XFADS.mstep`
-  (`src/jaxfads/base.py`, `src/jaxfads/distributions/mvn.py`,
-  `src/jaxfads/smoother.py`,
-  [docs/mstep_dynamics_noise.md](mstep_dynamics_noise.md)) provide an
-  alternative to the paper's joint-gradient-descent treatment of `R`/`Q`.
-  `R` is always M-step updated; `Q` is controlled by top-level
-  `conf.q_mstep` (default `true`) and initialized by `conf.q_scale`. This is
+  transition/process noise (`Q`)**: the trainer-owned
+  `GaussianObservationMstep` and `MVNNoiseMstep` provide an opt-in alternative
+  to the paper's joint-gradient-descent treatment of `R`/`Q`. `R` and `Q` are
+  independently selected through `train(..., msteps=...)`; Q initialization
+  and prior shrinkage are owned by `MVNNoiseMstep(q_scale=...,
+  q_prior_fraction=...)`. This is
   narrower than the classical vEM the paper considers and rejects: only
   `R`/`Q` are ever updated this way, never `θ`/`ψ`/`φ` as a whole, and
   gradient descent on the remaining parameters continues throughout

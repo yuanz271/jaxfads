@@ -22,6 +22,7 @@ import numpy as np
 from omegaconf import OmegaConf
 
 from jaxfads import XFADS, configure_logging
+from jaxfads.msteps import GaussianObservationMstep, MVNNoiseMstep
 from jaxfads.observations import GLM  # noqa: F401 (register GLM)
 from jaxfads.trainer import EpochHandler, train, train_test_split
 
@@ -121,8 +122,6 @@ def main() -> None:
         noise_penalty=0.01,
         dropout=0.0,
         mc_size=4,
-        q_scale=0.1,
-        q_mstep=bool(args.q_mstep),
         dyn_conf=dict(
             input_dim=0,
             context_dim=0,
@@ -174,6 +173,14 @@ def main() -> None:
                 train_data,
                 conf=OmegaConf.create({**trainer_conf, "seed": seed}),
                 on_epoch_end=handler,
+                msteps=(
+                    GaussianObservationMstep(),
+                    *(
+                        (MVNNoiseMstep(q_scale=0.1),)
+                        if args.q_mstep
+                        else ()
+                    ),
+                ),
             )
             trained = handler.best_model
             dt_train = time.perf_counter() - t0

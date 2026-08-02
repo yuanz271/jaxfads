@@ -160,12 +160,10 @@ the loss is evaluated on and what persists in the returned model. It is a
 general mechanism — the trainer only calls the function and does not
 interpret what it changes.
 
-Do **not** schedule `noise.free`. When `q_mstep=true` and Noise has an exact
-registered Approx-family M-step strategy, the joint epoch update owns Q and
-would overwrite a scheduled value. Otherwise Q is SGD-managed, but the
-dedicated Q scheduling helper has
-been intentionally removed until a future explicit `q_update_mode="sgd" |
-"map"` API defines unambiguous ownership semantics.
+Do **not** schedule `noise.free` while `MVNNoiseMstep` is selected. That
+plugin owns Q and would overwrite a scheduled value. With `msteps=()`, Q is
+SGD-managed and may be scheduled explicitly if the path is also frozen from
+optimizer updates.
 
 **`freeze_paths` is required, not optional, when using `param_schedule`.**
 Without it, the optimizer's own gradient-based update (plus gradient noise
@@ -192,54 +190,30 @@ encoding is typically nonlinear (e.g. a sqrt or inverse-softplus transform),
 so interpolating free-form values directly traces a different, distorted path
 through the intended constrained space.
 
-## Automated Observation-Noise and Transition-Noise Updates (`mstep`)
+## Trainer-owned Observation-Noise and Transition-Noise Updates (`msteps`)
 
 For a Gaussian-likelihood model, the observation noise covariance `R` is
 driven by a closed-form EM M-step instead of gradient descent, avoiding a
 Heywood-case degeneracy that plain gradient-based MLE of `R` is prone to
 (see [`mstep_gaussian_cov`](mstep_gaussian_cov.md) for the full rationale).
-There is nothing to opt into for the Gaussian R update: it is M-step-owned
-rather than gradient-trained. During every minibatch's existing **pre-SGD**
-ELBO forward pass, the trainer derives an additive R statistic from the same
-posterior moments. It sums those statistics across the epoch and finalizes R
-once at the epoch boundary before callbacks/checkpoints, without an extra
-inference pass.
+Select the R policy explicitly with `GaussianObservationMstep()`. During
+every minibatch's existing **pre-SGD** ELBO forward pass, the plugin derives
+an R statistic from the same posterior moments and applies it after SGD,
+without an extra inference pass.
 
 The transition/process-noise covariance `Q` (`model.noise.free`) is
-initialized from positive top-level `conf.q_scale`. When `conf.q_mstep=True`
-and the generic Noise component has an exact registered Approx-family M-step
-strategy (built in for `MVN`), it accumulates its additive MAP statistic from
-fresh post-SGD batch inference and finalizes Q from that direct batch
-statistic using `q_scale` plus `q_prior_fraction`; `noise.free` is then
-automatically frozen from SGD. Set `q_mstep=False`, or use an Approx without a registered strategy, to
-leave `noise.free` SGD-managed.
+initialized by `MVNNoiseMstep(q_scale=...)` before freeze-mask and optimizer
+state creation. That plugin owns the complete Q prior policy: its initializer
+sets `Q_init = q_scale * I`, and its additive MAP statistic uses the same
+`q_scale` with `q_prior_fraction`; `noise.free` is automatically frozen from
+SGD. Omit `MVNNoiseMstep` to leave `noise.free` SGD-managed.
 
-This is an epoch-local generalized MAP-EM update: batch statistics are
-computed under models that evolve through SGD within the epoch, so it is not
-an exact final-model full-data M-step. At the next epoch boundary the
-accumulators reset, while the learned R/Q values remain model state for
-inference. An interrupted partial epoch discards its ephemeral accumulated
-statistics.
-
-`model.observation.mstep_frozen_paths()` is always excluded from the
-optimizer automatically (folded into `train()`'s internal freeze mask), so
-gradient descent never fights the epoch-final R update -- no
-`conf.freeze_paths` entry is needed. When `conf.q_mstep` is true,
-`noise.free` is excluded the same way when Noise has an active M-step strategy.
-
-For an explicit full-data recomputation outside `train()`—for example,
-manual EM-style alternation—call `model.mstep(...)`. That manual API runs a
-fresh full-data inference pass and composes both R and enabled-Q updates.
-
-For a one-off, standalone recompute outside of `train()` entirely -- e.g.
-for manual EM-style alternation -- two standalone functions are available
-for `R` (both unrelated to and unused by `train()` itself): the
-Gaussian-specific [`mstep_gaussian_cov`](mstep_gaussian_cov.md) (supports
-`batch_size`-chunked scanning for datasets too large for a single forward
-pass) and the family-neutral `mstep_observation_cov` (any `Observation`
-overriding `mstep`, no chunking). For `Q`, call `model.mstep(...)`
-directly (it composes both `R` and `Q` in one call; there is no
-`Q`-specific chunked variant).
+All selected plugins consume the same immutable three-value forward output,
+then transform the post-SGD model in explicit order. `msteps=()` is ordinary
+SGD with no plugin-owned freeze paths. The accepted one-step lag means R
+reconstructs deterministic readout quantities from posterior moments and the
+post-SGD readout state; no additional forward output or inference pass is
+introduced.
 
 ## Multi-Device Training
 

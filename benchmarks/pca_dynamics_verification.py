@@ -195,7 +195,6 @@ def nofilt_training_comparison():
             "integrator": "Identity",
             "dropout": 0.0,
             "nofilt_eps": 1e-6,
-            "q_scale": 0.1,
             "dyn_conf": {
                 "input_dim": 0,
                 "context_dim": 0,

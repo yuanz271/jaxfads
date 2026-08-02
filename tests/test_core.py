@@ -15,10 +15,6 @@ class _DummyModel:
         self.conf = SimpleNamespace(mc_size=mc_size)
         self.noise = Noise(
             approx=self.approx,
-            q_scale=1.0,
-            q_prior_fraction=0.1,
-            state_dim=state_dim,
-            mstep_enabled=False,
             free=self.approx.free_from_kw(scale=1.0),
         )
 
@@ -43,7 +39,7 @@ def test_nofilt_shapes_and_finite():
     u = jnp.zeros((T, 0))
     c = jnp.zeros((T, 0))
 
-    nature, moment, moment_p, _transition_stat = core.nofilt(
+    nature, moment, moment_p = core.nofilt(
         model, jr.key(1), jnp.arange(T), alpha, u, c
     )
 

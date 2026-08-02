@@ -20,13 +20,13 @@ from jax.lax import scan
 from .base import Approx
 
 __all__ = [
-    "expected_predictive_moment",
-    "propagate_transition_points",
     "Mode",
-    "filter",
-    "smooth",
     "causal",
+    "expected_predictive_moment",
+    "filter",
     "nofilt",
+    "propagate_transition_points",
+    "smooth",
 ]
 
 
@@ -48,17 +48,10 @@ def propagate_transition_points(
     ``transition_points`` overrides (e.g. unscented-transform sigma
     points) return a fixed count regardless of the requested ``mc_size``.
 
-    Shared by :func:`expected_predictive_moment` (which adds noise
-    afterward via ``approx.predictive_moment``, for the filtering-time
-    predictive distribution ``p(z_t)``) and, via ``approx.
-    transition_stat(zs, weights)`` (see ``_site_filter``/``nofilt``,
-    which reduce this same point set through that method before it is
-    passed along as ``transition_stat``), the generic ``Noise`` component's
-    optional exact-Approx-class M-step strategy -- whichever pairing-specific
-    reduction this point set needs for its own noise-free transition-noise
-    statistic. The transition/process noise ``Q`` is precisely the quantity
-    this function deliberately excludes, since Q is what the Noise strategy
-    may estimate.
+    Shared by :func:`expected_predictive_moment`, which adds noise afterward
+    via ``approx.predictive_moment`` for the filtering-time predictive
+    distribution ``p(z_t)``. The transition/process noise ``Q`` is supplied
+    separately to that predictive-moment operation.
 
     Parameters
     ----------
@@ -164,15 +157,7 @@ def expected_predictive_moment(
 def _average_predictive_moment(
     zs: Array, weights: Array, noise: Array, approx: Approx
 ) -> Array:
-    """The noise-*included* averaging half of :func:`expected_predictive_moment`,
-    given an already-propagated point set (``zs``, ``weights``) -- shared
-    with callers (e.g. ``_site_filter``) that need to reuse the same
-    propagated points for a second, noise-*free* purpose (reduced via
-    ``approx.transition_stat(zs, weights)`` into ``transition_stat``, for
-    an optional Noise M-step strategy to consume according to its exact
-    Approx-family pairing) without calling
-    :func:`propagate_transition_points` a second time.
-    """
+    """Average predictive moments over an already-propagated point set."""
     predictive_moment_samples = jax.vmap(
         partial(approx.predictive_moment, noise=noise)
     )(zs)
@@ -252,22 +237,9 @@ def _site_filter(
         Filtered moment parameters for each time step.
     moment_p : Array, shape (T, param_dim)
         Predicted moment parameters from dynamics.
-    transition_stat : Any, one entry per pair t = 2 ... T
-        ``approx.transition_stat(zs, weights)`` for each pair's
-        noise-*free* propagated point set (from pushing ``q(z_{t-1})``
-        through ``model.transition`` with no noise added -- see
-        :func:`propagate_transition_points`), aligned with
-        ``moment_f[1:]``/``moment_f[:-1]``. This module does not assume
-        any particular reduced shape (e.g. a mean/covariance pair) --
-        that choice belongs entirely to ``approx.transition_stat``
-        (default: identity, i.e. the raw, unreduced ``(zs, weights)``);
-        this recursion only stacks whatever it returns across time steps.
-        Always computed, reusing the same ``propagate_transition_points``
-        call already needed for the noise-included predictive moment
-        (``moment_p``) -- the marginal cost of also reducing those same
-        points via ``transition_stat`` is small relative to evaluating
-        ``model.transition`` at each point in the first place, so this is
-        computed unconditionally rather than gated behind a flag.
+    The recursion returns only natural, posterior-moment, and
+    predictive-moment arrays. Trainer-side M-step policies derive any
+    required statistics from those outputs.
 
     Notes
     -----
@@ -298,12 +270,11 @@ def _site_filter(
         moment_p_t = _average_predictive_moment(zs, weights, noise, approx)
         nature_p_t = approx.moment_to_natural(moment_p_t)
         nature_t = nature_p_t + site_t
-        stat_t = approx.transition_stat(zs, weights)
-        return (key, nature_t), (moment_p_t, nature_p_t, nature_t, stat_t)
+        return (key, nature_t), (moment_p_t, nature_p_t, nature_t)
 
     key, ky = jrnd.split(key)
     scan_body = eqx.filter_checkpoint(ff)
-    _, (moment_p, _, nature_f, transition_stat) = scan(
+    _, (moment_p, _, nature_f) = scan(
         scan_body,
         init=(ky, nature_f_1),
         xs=(site_natural[1:], u[:-1], c[:-1]),  # t = 2 ... T+1
@@ -315,7 +286,7 @@ def _site_filter(
         (approx.natural_to_moment(nature_f_1), moment_p)
     )  # prediction of t=1 is the prior
 
-    return nature_f, moment_f, moment_p, transition_stat
+    return nature_f, moment_f, moment_p
 
 
 def filter(
@@ -330,7 +301,7 @@ def filter(
     Alpha-only filtering posterior recursion.
 
     This returns filtering natural/moment parameters, predictive moments,
-    and a ``transition_stat`` 4th element -- see ``_site_filter``.
+    and three inference arrays; M-step policies derive statistics from them.
     """
     return _site_filter(model, key, _t, alpha, u, c)
 
@@ -371,17 +342,14 @@ def causal(
     Under the paper indexing, this corresponds to
     ``lambda_t = check_lambda_t + beta_{t+1}``.
 
-    The returned ``transition_stat`` is the *filtering*-posterior statistic
-    (from the internal ``filter(...)`` call above), not a statistic over
-    this mode's own beta-reconstructed ``moment`` -- the latter is never
-    computed by any propagation step in this mode, so there is nothing to
-    reuse for it; the filtering statistic is reused instead as a
-    deliberate, accepted trade (see ``docs/mstep_dynamics_noise.md``).
+    This mode returns the filtering posterior, reconstructed posterior, and
+    predictive moments. Trainer policies derive any update statistics from
+    those three outputs.
     """
-    check_nature, _, moment_p, transition_stat = filter(model, key, _t, alpha, u, c)
+    check_nature, _, moment_p = filter(model, key, _t, alpha, u, c)
     nature = check_nature + beta
     moment = jax.vmap(model.approx.natural_to_moment)(nature)
-    return nature, moment, moment_p, transition_stat
+    return nature, moment, moment_p
 
 
 def nofilt(
@@ -397,9 +365,8 @@ def nofilt(
     Posterior natural parameters are set directly by encoder output ``alpha``.
     Predictive moments are computed in parallel for ELBO KL terms.
 
-    Also always returns ``transition_stat`` (``approx.transition_stat(zs,
-    weights)`` per pair -- see ``_site_filter``), reusing the same
-    ``propagate_transition_points`` call.
+    Returns the same three inference arrays as the filtering paths. M-step
+    policies derive any statistics they need from these outputs.
     """
     approx = model.approx
     noise = model.noise.moment()
@@ -416,13 +383,12 @@ def nofilt(
             key_i, moment_tm1_i, u_i, c_i, f, approx, mc_size
         )
         moment_p_t = _average_predictive_moment(zs, weights, noise, approx)
-        stat_t = approx.transition_stat(zs, weights)
-        return moment_p_t, stat_t
+        return moment_p_t
 
-    moment_p_rest, transition_stat = jax.vmap(_step)(keys, moment[:-1], u[:-1], c[:-1])
+    moment_p_rest = jax.vmap(_step)(keys, moment[:-1], u[:-1], c[:-1])
     moment_p = jnp.vstack((moment[0:1], moment_p_rest))
 
-    return nature, moment, moment_p, transition_stat
+    return nature, moment, moment_p
 
 
 # NOTE: _bismooth() requires model.backward (a callable reverse dynamics) which is

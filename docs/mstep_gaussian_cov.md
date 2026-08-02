@@ -1,16 +1,10 @@
-# EM M-step for Gaussian observation covariance (`mstep_gaussian_cov` / `Observation.mstep`)
+# Trainer-owned Gaussian observation covariance M-step
 
-Status: implemented and unit-tested. `R` (the Gaussian observation noise
-covariance) is estimated via a closed-form EM M-step in two forms sharing
-the same underlying math: an **accumulated epoch-local update built directly
-into `train()`** (always on for any `Observation` implementing `mstep` —
-never opt-in — statistics come from the existing pre-SGD minibatch inference
-passes and are finalized once at the epoch boundary without an additional
-inference pass), and **standalone functions** (`mstep_gaussian_cov`,
-`mstep_observation_cov`) for manual, full-dataset, or chunked use outside of
-`train()`. `XFADS.mstep(...)` remains the explicit manual full-data
-recomputation API. Cadence discussion below records the superseded direct
-replacement implementation.
+Status: historical rationale and migration record. The active implementation
+uses the trainer-owned `GaussianObservationMstep` passed explicitly through
+`train(..., msteps=(GaussianObservationMstep(),))`. It performs a direct
+post-SGD minibatch update from the ordinary three-value forward output. The
+former component/model M-step APIs and epoch-accumulation design are removed.
 
 See also: [Training](training.md), [Algorithm](algorithm.md).
 
@@ -59,14 +53,14 @@ exploit **by construction**: the estimate *is* the expected squared residual,
 so it cannot decouple from actual reconstruction quality the way a freely
 gradient-optimized parameter can.
 
-Implementation (`src/jaxfads/base.py`, `src/jaxfads/observations.py`,
-`src/jaxfads/trainer.py`):
+Historical implementation references (`src/jaxfads/base.py`,
+`src/jaxfads/observations.py`, `src/jaxfads/trainer.py`):
 
 - `Gaussian.mstep_stat(t, moment, y, approx, readout)` — the per-(batch,time)
   sufficient statistic above, mirroring `eloglik`'s call signature/conventions
   (dense `(state_dim, state_dim)` covariance from `approx.unpack`, `readout`
   exposing `.weight`). Unchanged since first shipped.
-- `mstep_gaussian_cov(model, data, *, key, batch_size=None)` — runs the model
+- Historical `mstep_gaussian_cov` references below describe the former
   forward (the E-step) over a dataset, aggregates `mstep_stat`, and returns a
   new model with `observation.likelihood.unconstrained_cov` replaced by the
   M-step-optimal value. Dispatch is **duck-typed** on `hasattr(likelihood,
@@ -94,7 +88,11 @@ Implementation (`src/jaxfads/base.py`, `src/jaxfads/observations.py`,
   a single-forward-pass update (`jnp.mean` over the given data, versus
   `mstep_gaussian_cov`'s chunked accumulation) and reports
   `["unconstrained_cov"]` as the path needing exclusion from gradients.
-- `mstep_observation_cov(model, data, *, key)` — the family-neutral,
+- The active replacement is `GaussianObservationMstep()` passed via
+  `train(..., msteps=(GaussianObservationMstep(),))`.
+<!-- Historical API details retained below for context only. They describe
+superseded component/model dispatch and are not supported by the active API. -->
+- `mstep_observation_cov(model, data, *, key)` — the former family-neutral,
   ABC-dispatched, standalone counterpart to `mstep_gaussian_cov`: a single
   full-dataset forward pass, no `batch_size` chunking, works for any
   `Observation` overriding `mstep` (a no-op otherwise, e.g. for `Poisson`).
@@ -132,33 +130,41 @@ belongs at the call site, not duplicated into every implementation.
 
 ## Usage
 
-### Default: automatic accumulated epoch update
+The examples and API names in the historical sections below are retained only
+for provenance. The supported API is the trainer plugin shown above; there is
+no standalone manual observation M-step utility.
 
-Nothing is configured to enable the Gaussian R M-step. Every `train()` call
-collects additive R residual statistics from its ordinary pre-SGD minibatch
-ELBO forward passes, sums them across the epoch, and applies one R update at
-the epoch boundary. The update is epoch-local generalized EM rather than an
-exact final-model full-data M-step because model parameters drift within the
-epoch, but it avoids both replacement-style minibatch covariance estimates
-and an additional full-data inference pass.
+### Active trainer usage
 
-For an exact full-data recomputation, use the standalone functions below or
-call `XFADS.mstep(...)` explicitly.
+```python
+from jaxfads.msteps import GaussianObservationMstep
 
-### Manual, full-dataset, or chunked: `mstep_gaussian_cov` / `mstep_observation_cov`
+trained = train(
+    model,
+    data,
+    conf=conf,
+    msteps=(GaussianObservationMstep(),),
+)
+```
 
-For an exact, full-dataset recompute — e.g. a final correction, validation,
-or classic EM-style alternation — call one of the standalone functions
-directly. Neither is used by `train()` itself.
+The plugin owns the R update and its freeze path. Omit it for ordinary SGD.
+The remaining epoch-cadence discussion below is historical.
+
+### Historical implementation notes
+
+The former exact full-dataset recomputation utilities are no longer public.
+Use an explicit trainer plugin for supported training updates; a future manual
+full-data utility would belong in trainer policy rather than in model or
+component APIs.
 
 ```python
 from jaxfads.trainer import train
-from jaxfads.observations import mstep_gaussian_cov
+from jaxfads.msteps import GaussianObservationMstep
 
 conf.freeze_paths = ["observation.likelihood.unconstrained_cov"]
 for _ in range(n_rounds):
     model = train(model, data, conf=conf)             # gradient-based round (Adam, L-BFGS, ...)
-    model = mstep_gaussian_cov(model, data, key=key)   # closed-form R update
+    model = train(model, data, conf=conf, msteps=(GaussianObservationMstep(),))
 ```
 
 `mstep_gaussian_cov` (Gaussian-specific, `batch_size`-chunked scanning) and

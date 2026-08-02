@@ -25,6 +25,7 @@ from omegaconf import OmegaConf
 
 from jaxfads import XFADS, configure_logging
 from jaxfads.base import Dynamics
+from jaxfads.msteps import GaussianObservationMstep, MVNNoiseMstep
 from jaxfads.nn import make_mlp
 from jaxfads.observations import GLM  # noqa: F401 — registers GLM
 from jaxfads.trainer import EpochHandler, train, train_test_split
@@ -98,7 +99,8 @@ class MLPDynamics(Dynamics):
 
     The MLP learns the continuous-time derivative ``f(z)``,
     and ``eval`` returns that derivative ``f(z)``.
-    Process noise is initialized by XFADS from top-level ``q_scale``.
+    Process-noise initialization and Q prior policy are supplied by
+    ``MVNNoiseMstep``.
     """
 
     net: enn.Sequential
@@ -291,7 +293,7 @@ def evaluate(
     D = latent_states.shape[-1]
 
     # Inference
-    _, means, _, _transition_stat = trained(times, obs, inputs, covs, key=key)
+    _, means, _ = trained(times, obs, inputs, covs, key=key)
     means, post_covs = jax.vmap(jax.vmap(approx.unpack))(means)
 
     # Procrustes alignment
@@ -514,7 +516,6 @@ def main() -> None:
         fb_penalty=0.0,
         noise_penalty=0.01,
         dropout=0.0,
-        q_scale=1.0,
         enc_conf=enc_conf,
         obs_conf=obs_conf,
     )
@@ -572,7 +573,13 @@ def main() -> None:
     model1 = model1.initialize(*train_data)
 
     handler1 = EpochHandler(valid_data=valid_data)
-    train(model1, train_data, conf=trainer_conf_mlp, on_epoch_end=handler1)
+    train(
+        model1,
+        train_data,
+        conf=trainer_conf_mlp,
+        on_epoch_end=handler1,
+        msteps=(GaussianObservationMstep(), MVNNoiseMstep(q_scale=1.0)),
+    )
     trained1 = handler1.best_model
 
     key, k = jr.split(key)
@@ -635,7 +642,13 @@ def main() -> None:
     model2 = model2.initialize(*train_data)
 
     handler2 = EpochHandler(valid_data=valid_data)
-    train(model2, train_data, conf=trainer_conf_ou, on_epoch_end=handler2)
+    train(
+        model2,
+        train_data,
+        conf=trainer_conf_ou,
+        on_epoch_end=handler2,
+        msteps=(GaussianObservationMstep(), MVNNoiseMstep(q_scale=1.0)),
+    )
     trained2 = handler2.best_model
 
     key, k = jr.split(key)
@@ -683,7 +696,6 @@ def main() -> None:
     conf3 = OmegaConf.create(
         {
             **shared_conf,
-            "q_mstep": False,
             "approx": "MVN",
             "approx_kwargs": {"rank": 1},
             "dynamics": "Functional",
@@ -702,7 +714,13 @@ def main() -> None:
     model3 = model3.initialize(*train_data)
 
     handler3 = EpochHandler(valid_data=valid_data)
-    train(model3, train_data, conf=trainer_conf_lora, on_epoch_end=handler3)
+    train(
+        model3,
+        train_data,
+        conf=trainer_conf_lora,
+        on_epoch_end=handler3,
+        msteps=(GaussianObservationMstep(),),
+    )
     trained3 = handler3.best_model
 
     key, k = jr.split(key)

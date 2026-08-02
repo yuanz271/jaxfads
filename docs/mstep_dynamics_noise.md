@@ -1,23 +1,16 @@
 # Plan: M-step for transition/process noise (`mstep` on the noise-owning component)
 
-Status: **implemented and empirically validated on synthetic data
-(known-z and latent-z Lorenz).** Two independent experiments
-(`benchmarks/mstep_known_z_baseline.py`, `benchmarks/mstep_lorenz_latent.py`)
-support the same mechanism: keep `Q` inside the training loss (never fully
-decoupled), update it periodically via a **MAP-shrunk M-step toward a
-genuinely informative prior** rather than either free gradient descent or a
-numerical-safety-only floor. This reverses an earlier draft of this plan
-(see Design) that concluded the prior should be non-informative.
+Status: **historical design and experiment record.** The active architecture
+uses explicit trainer-owned plugins: `GaussianObservationMstep()` and
+`MVNNoiseMstep(q_scale=..., q_prior_fraction=...)` are passed to
+`train(msteps=...)`. The MVN plugin owns `Q_init = q_scale I`, fractional
+prior shrinkage, and freezing `noise.free`; `msteps=()` leaves Q SGD-managed.
+It uses one pre-SGD inference forward and updates the post-SGD model without
+an extra inference pass. See [training](training.md) and
+[mstep_trainer_refactor_plan](mstep_trainer_refactor_plan.md).
 
-The current public configuration is top-level `q_scale` (positive Q
-variance), `q_prior_fraction` (default `0.1`), and `q_mstep` (default
-`true`). `q_scale` initializes and centers Q; each active direct batch MAP
-update blends its residual-covariance estimate with that center using
-`q_prior_fraction`. `q_mstep=false` leaves Q SGD-managed. The default joint R/Q
-Normal training accumulates pre-SGD minibatch R/Q statistics and finalizes
-both at each epoch boundary without an additional inference pass. The old
-configuration names and cadence discussion appearing below are retained only
-as historical design record.
+The configuration names, component APIs, and cadence discussion below describe
+superseded implementations and are retained only as historical record.
 
 See also: [mstep_gaussian_cov](mstep_gaussian_cov.md), [transition_points](transition_points.md).
 
