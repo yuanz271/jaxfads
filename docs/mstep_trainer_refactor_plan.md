@@ -5,50 +5,50 @@ plan file.
 
 ## Goal
 
-Make M-step behavior a configurable trainer transformation rather than part of
-`XFADS`, `Observation`, `Noise`, or `Approx` model architecture.
+Move M-step behavior out of `XFADS`, `Observation`, `Noise`, and `Approx` into
+configurable trainer-owned transformations.
 
-The trainer owns the update ordering and selected M-step policy:
+The active trainer order is:
 
 $$
 M_k
 \xrightarrow{\text{one forward: loss + gradients + outputs}}
-\xrightarrow{\text{M-step and SGD}}
+\xrightarrow{\text{SGD}}
+M_k^{\mathrm{SGD}}
+\xrightarrow{\text{trainer M-step plugins using prior outputs}}
 M_{k+1}.
 $$
 
-The model remains responsible for representing the generative/inference model
-and producing three forward outputs. The M-step plugin interprets those
-outputs and returns an updated model.
+The M-step is intentionally one-step-lagged: plugin statistics come from the
+pre-SGD model's forward outputs but are applied to the post-SGD model. This
+avoids a second inference/transition-propagation pass per batch.
 
 ## Target architecture
 
 ```text
 XFADS
-├── observation: Observation       # model state/inference behavior
-├── noise: Noise                   # model state/inference behavior
+├── observation: Observation       # model/inference state
+├── noise: Noise                   # model/inference state
 │   ├── approx: Approx             # static, array-free distribution config
 │   └── free: Array                # Q parameter leaf
-└── __call__(...) -> ForwardOutput
+└── __call__(...) -> inference outputs
 
 Trainer
-└── mstep: MStep policy/plugin
-    ├── R update
-    ├── Q update
-    ├── optimizer ownership/freeze paths
+└── msteps: Sequence[MStep]        # ordered independent transformations
+    ├── GaussianObservationMstep   # R update
+    ├── MVNNoiseMstep              # Q update
+    ├── root-relative frozen paths
     └── post-SGD update ordering
 ```
 
-Remove M-step strategy registries and M-step execution from `Noise`. `Noise`
-may retain generic inference functionality such as decoding `free` into noise
-moment parameters and delegating predictive moments to its composed `Approx`.
-`Approx` remains distribution-only. Remove `transition_stat` generation,
-storage, and the fourth return value from `core.py`/`XFADS.__call__`; migrate
-all forward-output destructuring sites to the three-value contract.
+`Approx` remains distribution-only. `Noise` retains only static Approx
+composition, Q initialization state, `free`, and generic predictive decoding.
+Remove M-step registries, M-step execution, M-step policy, and freeze-path
+policy from `Noise`.
 
-## 1. Define the forward-output contract
+## 1. Forward-output contract
 
-The active forward output is the existing three-value inference result:
+The model forward pass remains inference-only and returns:
 
 ```python
 natural, moment, predictive_moment = model(
@@ -56,28 +56,25 @@ natural, moment, predictive_moment = model(
 )
 ```
 
-The model forward pass only performs inference and returns these outputs. The
-trainer/plugin computes M-step statistics outside `XFADS.__call__`; the model
-forward pass must not collect, accumulate, or apply M-step statistics.
+The trainer supplies these outputs to all selected plugins. Plugins must not
+invoke `model(...)` themselves.
 
-For the current MVN/additive-Gaussian process-noise model, Q's plugin
-reconstructs the noise-free predictive moments from the predictive output and
-current Noise covariance:
+For the current MVN/additive-Gaussian process noise, `MVNNoiseMstep`
+reconstructs the noise-free predictive covariance from model outputs:
 
 ```python
-mean_f, cov_pred = approx.unpack(predictive_moment[:, 1:])
-_, q = approx.unpack(model.noise.moment())
-cov_f = cov_pred - q
+mean_f, cov_pred = model.approx.unpack(predictive_moment[:, 1:])
+_, q = model.approx.unpack(model.noise.moment())
+cov_f = 0.5 * ((cov_pred - q) + (cov_pred - q).T)
 ```
 
-The subtraction must be symmetrized and numerically stabilized. This is an
-MVN/Noise-strategy operation, not a generic Approx or core operation. Do not
-introduce a fourth `transition_stat` output or a general `aux` bundle yet; add
-another forward hook only when a concrete future Approx strategy requires it.
+This is strategy-specific, not generic `Approx` or `core` behavior. Do not
+add a fourth `transition_stat` output or a general auxiliary-output bundle
+until a concrete future plugin requires one.
 
-## 2. Define the trainer-owned MStep interface
+## 2. Trainer-owned plugin interface
 
-Start with an explicit callable/plugin argument rather than a registry:
+Start with explicit plugin objects, not a config-name registry:
 
 ```python
 class MStep(Protocol):
@@ -95,11 +92,8 @@ class MStep(Protocol):
         ...
 ```
 
-`frozen_paths` returns fully qualified paths relative to the root `XFADS`
-model because the trainer plugin is the root-level policy owner. Components no
-longer declare M-step freeze paths.
-
-The minimal trainer API becomes:
+`frozen_paths` returns fully qualified paths relative to root `XFADS`, since
+the plugin is a root-level trainer policy.
 
 ```python
 train(
@@ -107,139 +101,131 @@ train(
     data,
     *,
     conf,
-    mstep=None,
+    msteps=(),
     ...,
 )
 ```
 
 Semantics:
 
-- `mstep=None`: ordinary SGD; no post-SGD inference pass and no M-step-owned
-  freeze paths;
-- `mstep=JointGaussianMAP(...)`: one forward pass for loss/gradients/outputs,
-  SGD update, then R/Q transformation of the post-SGD model using those
-  already-computed outputs, with plugin-declared frozen paths;
-- future plugins can implement other policies without changing XFADS.
-
-`mstep=None` therefore means neither R nor Q is M-step-owned. This is a
-substantial but intentional policy boundary: closed-form R/Q updates are
-provided by the selected trainer plugin, not unconditionally by the model.
-
-Do not add a config-name registry until a second M-step policy exists. A direct
-plugin object is easier to inspect and avoids import-order configuration magic.
-
-## 3. Implement the joint R/Q plugin
-
-Create a trainer-side implementation, for example:
+- `msteps=()`: ordinary SGD; no plugin-owned freeze paths;
+- each supplied plugin receives the same forward outputs and transforms the
+  post-SGD model in sequence;
+- R-only and Q-only experiments are explicit;
+- current R/Q plugins commute because they read the same immutable outputs and
+  modify disjoint model leaves; sequence order remains explicit for future
+  plugins.
 
 ```python
-class JointGaussianMAP:
+msteps=(
+    GaussianObservationMstep(),
+    MVNNoiseMstep(q_prior_fraction=0.1),
+)
+```
+
+## 3. Independent R and Q plugins
+
+### GaussianObservationMstep
+
+```python
+class GaussianObservationMstep:
     def __call__(self, model, batch, forward, *, key):
+        # Use t, y, posterior moment, observation/readout state.
+        # Replace model.observation.
         ...
 
     def frozen_paths(self, model):
-        ...
+        return ["observation.likelihood.unconstrained_cov"]
 ```
 
-Its `__call__` should:
+It owns only the R residual/covariance update.
 
-1. unpack `batch` as `t, y, u, c`;
-2. unpack `forward` as `natural, moment, predictive_moment`;
-3. compute the Gaussian R statistic/update itself, using `t`, `y`, `moment`,
-   and the model's observation/readout state;
-4. compute Q transition residual covariance from `moment`,
-   `predictive_moment`, and `model.noise.moment()`: for MVN, subtract current
-   Q from the predictive covariance to recover the noise-free covariance,
-   then delegate MVN representation conversion to `model.noise.approx`;
-5. apply the Q fractional shrinkage:
+### MVNNoiseMstep
 
-   $$
-   Q_{\mathrm{new}}
-   =
-   \frac{\widehat Q+\alpha q_{\mathrm{scale}}I}
-   {1+\alpha},
-   \qquad
-   \alpha=\texttt{q\_prior\_fraction};
-   $$
+```python
+class MVNNoiseMstep:
+    q_prior_fraction: float
 
-6. structurally replace `model.observation` and `model.noise.free` and return
-   the updated model.
+    def __call__(self, model, batch, forward, *, key):
+        # Use moment, predictive_moment, model.noise.moment(), and MVN
+        # conversion helpers. Replace model.noise.free.
+        ...
 
-The plugin is the sole owner of joint R/Q policy and update mathematics. It
-may use narrowly scoped distribution/model helpers, but it must not call
-component M-step methods or recursively trigger another M-step. Its model
-outputs are computed by the trainer's one forward pass; the plugin never calls
-`model(...)` itself. The MVN decomposition
-$P_f=P_{\mathrm{pred}}-Q$ uses the Q that generated `predictive_moment`.
-`JointGaussianMAP` declares `noise.free` frozen, so Q is unchanged by SGD and
-that pre-SGD Q equals the post-SGD model's Q before the plugin update. A plugin
-that leaves Q SGD-managed must not use this decomposition without retaining
-the pre-SGD Q explicitly.
+    def frozen_paths(self, model):
+        return ["noise.free"]
+```
 
-## 4. Reuse the loss-and-gradient forward pass
+It owns only the Q update:
 
-The trainer uses one forward pass for the loss, gradients, and M-step outputs.
-The plugin interprets those outputs outside `XFADS.__call__`; no fresh
-post-SGD inference pass is performed:
+$$
+Q_{\mathrm{new}}
+=
+\frac{\widehat Q+\alpha q_{\mathrm{scale}}I}
+{1+\alpha},
+\qquad
+\alpha=\texttt{q\_prior\_fraction}.
+$$
+
+`MVNNoiseMstep` validates its required concrete Approx/noise representation at
+construction or first use and raises a clear error when unsupported. A future
+plugin may intentionally implement a no-op or alternate Q policy.
+
+Plugins may use narrowly scoped distribution/model helpers but must not call
+component M-step methods, recursively trigger another M-step, or invoke
+`model(...)`.
+
+## 4. Exact trainer ordering
+
+Inside the jitted step:
 
 ```python
 (loss, forward), grads = value_and_grad_with_aux(loss_and_forward)(
     model, batch
 )
 params = eqx.filter(model, eqx.is_inexact_array)
-model_sgd = eqx.apply_updates(
-    model,
-    optimizer.update(grads, opt_state, params),
-)
-model = mstep(model_sgd, batch, forward, key=stat_key)
+updates, opt_state = optimizer.update(grads, opt_state, params)
+model = eqx.apply_updates(model, updates)
+
+for mstep in msteps:
+    model = mstep(model, batch, forward, key=stat_key)
 ```
 
-The M-step is applied to the post-SGD model, but its statistic was computed
-under the pre-SGD model. This is an intentional one-step-lagged generalized
-MAP update that avoids repeating inference/transition computation. The
-optimizer receives the original pre-SGD parameter tree corresponding to the
-gradients. Plugin-frozen leaves are not optimizer-owned, so the M-step remains
-their final update. There is no epoch accumulator, delayed epoch M-step, or
-extra full-data pass in normal training.
+`params` is the pre-SGD filtered parameter pytree corresponding to `grads`.
+Plugin-owned frozen leaves are not optimizer-owned, so the plugin update is
+their final update for the batch.
+
+There is no epoch accumulator, delayed epoch M-step, extra full-data pass, or
+extra post-SGD forward pass in normal training.
 
 ## 5. Configuration ownership
 
-Keep `q_scale` as model/Noise initialization configuration because it defines
-initial Q:
+Keep `q_scale` on model/Noise because it defines initial Q and the shrinkage
+center:
 
 ```yaml
 q_scale: 1.0
 ```
 
-Move M-step-specific policy into the plugin:
+Keep M-step-specific policy on the selected plugin:
 
 ```python
-JointGaussianMAP(
-    q_prior_fraction=0.1,
-    q_enabled=True,
-)
+MVNNoiseMstep(q_prior_fraction=0.1)
 ```
 
-`q_scale` is read from the model's Noise state/config as the shrinkage center;
-`q_prior_fraction` and `q_enabled` belong to the selected M-step policy. Do
-not duplicate `q_scale` in the plugin configuration.
+Do not duplicate `q_scale` in the plugin. Q-only behavior is selected by
+including or omitting `MVNNoiseMstep`; R-only behavior uses only
+`GaussianObservationMstep`.
 
-A plugin with `q_enabled=False` updates R only. `JointGaussianMAP` validates
-its required Approx/noise representation at construction or first use and
-raises a clear error for an unsupported Approx; this is explicit plugin policy,
-not an `Approx` responsibility. A future distinct plugin may intentionally use
-a no-op or alternate Q policy.
+## 6. Simplify model components
 
-## 6. Simplify Noise and Approx
-
-`Approx` retains only distribution functionality:
+`Approx` retains only distribution operations:
 
 - natural/moment/canonical/free conversions;
 - sampling and KL;
 - transition-point generation and transition-stat reduction;
 - predictive moment computation given noise moments.
 
-`Noise` retains only model/inference state:
+`Noise` retains only:
 
 ```python
 class Noise(eqx.Module):
@@ -247,20 +233,13 @@ class Noise(eqx.Module):
     free: Array
 ```
 
-Remove from `Noise`:
+Remove from active model code:
 
 - exact Approx M-step registry;
-- `batch_stat`;
-- `mstep`;
-- `mstep_active` / `supports_mstep`;
-- `q_prior_fraction` and `mstep_enabled`; these are trainer-plugin policy,
-  not Noise state.
-
-The selected trainer plugin owns Q M-step strategy, shrinkage fraction, and
-freeze paths. Noise retains only static Approx composition, Q initialization
-state, free storage, and generic predictive decoding.
-
-## 7. Simplify XFADS
+- `batch_stat`, `accumulate_stat`, `mstep`;
+- `mstep_active`, `supports_mstep`;
+- `q_prior_fraction`, `mstep_enabled`;
+- component-level M-step freeze policy.
 
 Remove from XFADS:
 
@@ -268,50 +247,43 @@ Remove from XFADS:
 - `_apply_mstep_stat`;
 - `mstep_from_data`;
 - component M-step dispatch;
-- Q-specific policy predicates;
-- M-step-specific frozen-path composition.
+- Q-specific M-step policy;
+- M-step-specific freeze-path composition.
 
-XFADS should retain:
+XFADS retains model state, `approx` access through the composed Noise Approx,
+inference `__call__`, and save/load/initialization.
 
-- `observation` and `noise` model state;
-- `approx` access through the canonical composed Noise Approx;
-- inference `__call__` and its three named outputs (`natural`, `moment`,
-  `predictive_moment`);
-- structural model initialization/save/load.
-
-If manual full-data M-step use is needed, provide a trainer-side utility:
+If a manual full-data update is needed, use trainer-side utility code:
 
 ```python
-def apply_mstep_from_data(model, data, *, mstep, key):
+def apply_mstep_from_data(model, data, *, msteps, key):
     forward = model(*data, key=key)
-    return mstep(model, data, forward, key=key)
+    for mstep in msteps:
+        model = mstep(model, data, forward, key=key)
+    return model
 ```
 
 This utility is not an XFADS/component method and is not used by normal
-`train()`.
+training.
 
-## 8. Freeze-path ownership
+## 7. Freeze-path ownership
 
-This trainer-plugin architecture replaces component-relative freeze-path
-composition. The selected root-level M-step plugin owns fully qualified
-XFADS-root-relative freeze paths:
+The root-level trainer plugins own fully qualified root-relative paths:
 
 ```python
-class JointGaussianMAP:
-    def frozen_paths(self, model):
-        paths = ["observation.likelihood.unconstrained_cov"]
-        if self.q_enabled:
-            paths.append("noise.free")
-        return paths
+GaussianObservationMstep.frozen_paths(model)
+# -> ["observation.likelihood.unconstrained_cov"]
+
+MVNNoiseMstep.frozen_paths(model)
+# -> ["noise.free"]
 ```
 
-The trainer combines these with user `conf.freeze_paths`. No component needs to
-know the parent member name, and the trainer does not query component-level
-`frozen_paths()` methods.
+The trainer concatenates plugin paths with user `conf.freeze_paths`. Components
+do not expose M-step freeze paths and do not know parent member names.
 
-## 9. Tests to reduce and redirect
+## 8. Tests to remove and redirect
 
-Remove tests for the superseded model-side M-step lifecycle:
+Remove tests for superseded model-side M-step lifecycle:
 
 - `XFADS._batch_stat`;
 - `XFADS._apply_mstep_stat`;
@@ -319,26 +291,28 @@ Remove tests for the superseded model-side M-step lifecycle:
 - component recursive M-step delegation;
 - epoch-stat accumulation/reset.
 
-Retain or add focused tests for:
+Add/retain focused tests for:
 
-1. `Approx` remains array-free/static and `Noise` preserves the composed Approx.
-2. `JointGaussianMAP` updates R and Q from one supplied three-value forward output.
-3. `mstep=None` performs ordinary SGD without a second inference pass.
-4. Unsupported Approx construction/use fails clearly for `JointGaussianMAP`.
-5. No additional post-SGD forward call occurs when a plugin is supplied.
-6. Fractional Q formula matches an independent reference.
-7. `q_enabled=False` leaves `noise.free` SGD-managed while R updates.
-8. Parameter-aware Optax receives pre-SGD parameters while the plugin's frozen
+1. `Approx` remains array-free/static and `Noise` preserves composed Approx.
+2. `GaussianObservationMstep` updates only R from one supplied forward output.
+3. `MVNNoiseMstep` updates only Q from the same supplied forward output.
+4. `msteps=()` performs ordinary SGD without retained plugin outputs.
+5. Unsupported Approx use fails clearly for `MVNNoiseMstep`.
+6. No additional post-SGD forward call occurs when one or more plugins run.
+7. Fractional Q formula matches an independent reference.
+8. Omitting `MVNNoiseMstep` leaves `noise.free` SGD-managed while R can update.
+9. Parameter-aware Optax receives pre-SGD parameters while plugin-frozen
    leaves retain M-step values and Q decomposition uses the frozen pre-SGD Q.
-9. Checkpoint roundtrip preserves the static Approx and Noise state.
-10. VDP MLP regression reports RMSE, aligned covariance, aligned Q, and flow
+10. Checkpoint roundtrip preserves static Approx and Noise state.
+11. VDP MLP regression reports RMSE, aligned covariance, aligned Q, and flow
     metrics.
 
-## 10. Migration and validation order
+## 9. Migration and validation order
 
-1. Add the trainer `MStep` protocol and `mstep=` argument.
-2. Implement `JointGaussianMAP` using existing R/Q formulas.
-3. Wire the loss-and-gradient forward outputs into the plugin call.
+1. Add the trainer `MStep` protocol and `msteps=()` argument.
+2. Implement `GaussianObservationMstep` and `MVNNoiseMstep` using existing
+   R/Q formulas.
+3. Wire loss-and-gradient forward outputs into each plugin call.
 4. Remove XFADS/Noise/Observation M-step orchestration and obsolete APIs.
 5. Migrate freeze paths and configuration/docs.
 6. Remove superseded tests and add plugin/ordering tests.
