@@ -12,10 +12,8 @@ The trainer owns the update ordering and selected M-step policy:
 
 $$
 M_k
-\xrightarrow{\text{loss + gradients}}
-\xrightarrow{\text{SGD}}
-M_k^{\mathrm{SGD}}
-\xrightarrow{\text{fresh forward + M-step}}
+\xrightarrow{\text{one forward: loss + gradients + outputs}}
+\xrightarrow{\text{M-step and SGD}}
 M_{k+1}.
 $$
 
@@ -170,27 +168,30 @@ component M-step methods or recursively trigger another M-step. Its model
 outputs are computed by the trainer's one forward pass; the plugin never calls
 `model(...)` itself.
 
-## 4. Preserve post-SGD M-step ordering
+## 4. Reuse the loss-and-gradient forward pass
 
-The trainer computes gradients under the current model, applies SGD, then
-runs one fresh forward pass on that post-SGD model and applies the plugin:
+The trainer uses one forward pass for the loss, gradients, and M-step outputs.
+The plugin interprets those outputs outside `XFADS.__call__`; no fresh
+post-SGD inference pass is performed:
 
 ```python
-(loss, _unused_forward), grads = value_and_grad(loss_fn)(model, batch)
+(loss, forward), grads = value_and_grad_with_aux(loss_and_forward)(
+    model, batch
+)
 params = eqx.filter(model, eqx.is_inexact_array)
-updates, opt_state = optimizer.update(grads, opt_state, params)
-model = eqx.apply_updates(model, updates)
-
-forward = model(*batch, key=stat_key)
-model = mstep(model, batch, forward, key=stat_key)
+model_sgd = eqx.apply_updates(
+    model,
+    optimizer.update(grads, opt_state, params),
+)
+model = mstep(model_sgd, batch, forward, key=stat_key)
 ```
 
-The optimizer receives the parameter tree corresponding to the gradients. The
-M-step receives outputs from the updated post-SGD model, matching the
-historical direct-minibatch timing. Plugin-frozen leaves are excluded from the
-optimizer, so the subsequent M-step owns their final values. This costs one
-additional inference pass per batch; it is intentional and unavoidable for a
-post-SGD statistic. There is no epoch accumulator, delayed epoch M-step, or
+The M-step is applied to the post-SGD model, but its statistic was computed
+under the pre-SGD model. This is an intentional one-step-lagged generalized
+MAP update that avoids repeating inference/transition computation. The
+optimizer receives the original pre-SGD parameter tree corresponding to the
+gradients. Plugin-frozen leaves are not optimizer-owned, so the M-step remains
+their final update. There is no epoch accumulator, delayed epoch M-step, or
 extra full-data pass in normal training.
 
 ## 5. Configuration ownership
