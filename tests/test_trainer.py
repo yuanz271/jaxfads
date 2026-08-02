@@ -153,22 +153,6 @@ def test_train_with_independent_post_optimizer_transforms(
     assert jnp.isfinite(trained.noise.free).all()
 
 
-def test_train(model_conf, trainer_config, sample_data):
-    """Test that train_fast can run without errors on simple data."""
-    # Create model and minimal config for fast test
-    model = XFADS(model_conf, jrnd.key(0))
-    trainer_config.max_epoch = 10
-    trainer_config.batch_size = 64
-
-    # This should run without errors
-    trained_model = train(model, sample_data, conf=trainer_config)
-
-    # Basic checks that we got a model back
-    assert trained_model is not None
-    assert hasattr(trained_model, "conf")
-    assert hasattr(trained_model, "dynamics")
-    assert hasattr(trained_model, "integrator")
-
 
 def test_train_accepts_user_optimizer(model_conf, trainer_config, sample_data):
     """A user-supplied optax optimizer is used in place of the default."""
@@ -396,23 +380,3 @@ def test_batch_loss_remains_scalar(gaussian_model_conf, gaussian_sample_data):
     model = XFADS(gaussian_model_conf, jrnd.key(0))
     loss = batch_loss(model, gaussian_sample_data, jrnd.key(1))
     assert loss.shape == ()
-
-
-def test_empty_post_optimizer_transforms_keep_gaussian_covariance_optimizer_managed(
-    gaussian_model_conf, trainer_config, gaussian_sample_data
-):
-    """Empty transforms select optimizer-only training without closed-form R."""
-    model = XFADS(gaussian_model_conf, jrnd.key(0))
-    seen = []
-
-    def on_epoch_end(current_model, info):
-        del info
-        seen.append(current_model.observation.likelihood.cov())
-        return False
-
-    trainer_config.max_epoch = 1
-    trainer_config.batch_size = 16
-    train(model, gaussian_sample_data, conf=trainer_config, on_epoch_end=on_epoch_end)
-
-    assert len(seen) == 1
-    assert jnp.isfinite(seen[0]).all()

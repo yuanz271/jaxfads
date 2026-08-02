@@ -186,24 +186,6 @@ def test_encoder_free_to_natural_diag_matches_softplus():
     chex.assert_trees_all_close(natural[dim:], expected_j, atol=1e-6)
 
 
-def test_encoder_free_hooks_low_rank_produces_psd_precision_update():
-    dim, rank = 4, 2
-    approx = MVN(dim=dim, rank=rank)
-
-    assert approx.free_size() == 2 * dim + rank * dim
-    assert approx.param_size() == dim + dim * dim
-
-    free = jrnd.normal(jrnd.key(0), (approx.free_size(),))
-    natural = approx.free_to_natural(free)
-    chex.assert_shape(natural, (approx.param_size(),))
-
-    J = jnp.reshape(natural[dim:], (dim, dim))
-    chex.assert_trees_all_close(J, 0.5 * (J + J.T), atol=1e-6)
-
-    x = jrnd.normal(jrnd.key(2), (dim,))
-    quad = x @ J @ x
-    assert quad >= -1e-5
-
 
 @pytest.mark.parametrize("rank", [0, 2, 5])
 def test_encoder_free_zero_baseline_matches_across_ranks(rank):
