@@ -7,10 +7,10 @@ longer opt-in; validated to be as-good-or-better than MC at every scale
 tested (D=8, 16, 32), never worse on the accuracy metric that matters
 most (latent recovery), and often cheaper or comparable in wall-clock
 cost despite doing more point-evaluations. Lower risk than the Q plan (no
-feedback loop); implemented first since the Q plan
-(`mstep_dynamics_noise.md`) wants to reuse this.
+feedback loop); implemented first because the Q process-noise transform
+uses this propagation interface.
 
-See also: [mstep_gaussian_cov](mstep_gaussian_cov.md), [mstep_dynamics_noise](mstep_dynamics_noise.md).
+See also: [post_optimizer_transforms](post_optimizer_transforms.md).
 
 ## Problem
 
@@ -515,6 +515,5 @@ Implementer / caller summary:
 
 ## Dependencies
 
-None (self-contained). `mstep_dynamics_noise.md` (the Q plan) wants to reuse
-this same mechanism for its "spread of `f(z_{t-1})`" sufficient-statistic
-term, so should land after or alongside this plan.
+None (self-contained). The Q process-noise transform uses this same
+mechanism for its "spread of `f(z_{t-1})`" residual-covariance term.

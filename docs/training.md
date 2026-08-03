@@ -195,7 +195,7 @@ through the intended constrained space.
 For a Gaussian-likelihood model, the observation noise covariance `R` is
 driven by a closed-form EM M-step instead of gradient descent, avoiding a
 Heywood-case degeneracy that plain gradient-based MLE of `R` is prone to
-(see [`mstep_gaussian_cov`](mstep_gaussian_cov.md) for the full rationale).
+(see [`post_optimizer_transforms`](post_optimizer_transforms.md) for the full specification).
 Select the R policy explicitly with `GaussianObservationMstep()`. During
 every minibatch's existing **pre-SGD** ELBO forward pass, the plugin derives
 an R statistic from the same posterior moments and applies it after SGD,

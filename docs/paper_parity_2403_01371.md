@@ -54,7 +54,7 @@ paper's method.
   `R`/`Q` are ever updated this way, never `θ`/`ψ`/`φ` as a whole, and
   gradient descent on the remaining parameters continues throughout
   (`Q`, in particular, stays "in the loss" -- see
-  `docs/mstep_dynamics_noise.md`'s "Required safeguards" -- scaling `f`'s
+  the post-optimizer transform specification's "Required safeguards" -- scaling `f`'s
   gradient by `1/Q` even while `Q` itself is closed-form-updated, not
   decoupled the way a literal M-step's generative-model-only phase would
   imply).
@@ -67,7 +67,7 @@ paper's method.
   in `Gaussian.mstep_stat`'s docstring) and, for `Q`, an empirically
   dominant overestimation tendency under joint MLE plus better
   downstream dynamics-accuracy from MAP-shrunk alternating updates
-  (`docs/mstep_dynamics_noise.md`'s Design section, both known-`z` and
+  (the post-optimizer transform design's safeguards section, both known-`z` and
   latent-`z` Lorenz experiments). The paper does not report or address
   either failure mode; these mechanisms are this codebase's own response
   to them, not a paper-parity gap.

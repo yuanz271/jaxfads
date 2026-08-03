@@ -1,4 +1,4 @@
-"""Known-z clean baseline for docs/mstep_dynamics_noise.md's Step 1.
+"""Known-z clean baseline for the post-optimizer transform design's Q update.
 
 Tests the joint-MLE-degeneracy claim directly, with z fully known (no
 latent inference, no XFADS model at all -- isolates this from the
@@ -12,7 +12,7 @@ latent-z entanglement risk, per the doc's Step 1):
   Heywood-style degeneracy this whole plan is about, in its simplest form.
 - Approach B (decoupled): fit f via plain MSE only (Q never enters this
   loss at all), then separately estimate Q from the residual with a
-  numerical-safety floor only (mstep_dynamics_noise.md's v1 design: no
+  numerical-safety floor only (the historical v1 design: no
   cross-covariance term needed here since z is fully known, so
   Cov(z_{t-1})=Cov(z_t)=0 and the M-step statistic reduces to the plain
   mean squared residual).
@@ -180,7 +180,7 @@ def train_decoupled(key, z_prev, z_next, *, epochs, lr, batch_size):
 
 def mstep_q_known_z(f, z_prev, z_next, *, floor):
     """v1 M-step statistic with z fully known: Cov(z_prev)=Cov(z_next)=0,
-    so the formula in docs/mstep_dynamics_noise.md reduces to the plain
+    so the formula in the Q update reduces to the plain
     mean squared residual (no Jacobian/covariance-propagation term needed
     -- that term only matters under posterior uncertainty, absent here)."""
     pred = jax.vmap(f)(z_prev)

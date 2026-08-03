@@ -20,7 +20,7 @@
   before optimizer state creation. Model/component M-step APIs, epoch-local
   M-step accumulation, top-level `q_scale`, `q_mstep`, and
   `q_prior_fraction` configuration have been removed. See
-  `docs/training.md` and `docs/mstep_trainer_refactor_plan.md`.
+  `docs/training.md` and `docs/post_optimizer_transforms.md`.
 * Added `cuda12`/`cuda13` optional-dependency extras
   (`pip install jaxfads[cuda12]` or `jaxfads[cuda13]`) for one-step GPU
   installs; the base `jax` dependency stays CPU-only. The two extras are

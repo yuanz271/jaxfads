@@ -1,4 +1,4 @@
-"""Latent-z case for docs/mstep_dynamics_noise.md's Step 1 -- a real XFADS
+"""Latent-z case for the post-optimizer transform design's Q update -- a real XFADS
 model doing posterior inference, not the known-z clean baseline
 (benchmarks/mstep_known_z_baseline.py).
 
@@ -160,7 +160,7 @@ DT = 0.01
 
 
 # ---------------------------------------------------------------------------
-# v1 mstep_transition_stat (docs/mstep_dynamics_noise.md), applied against a
+# Historical transition-stat experiment, applied against a
 # real XFADS model's own smoothed moments -- decoupled from
 # Approx.transition_points entirely.
 # ---------------------------------------------------------------------------
