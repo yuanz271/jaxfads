@@ -104,8 +104,7 @@ class MVNNoiseMstep:
         q_hat = jnp.mean(raw, axis=(0, 1))
         d = q_hat.shape[-1]
         prior = self.q_scale * jnp.eye(d, dtype=q_hat.dtype)
-        alpha = jnp.asarray(self.q_prior_fraction, dtype=q_hat.dtype)
-        cov = (q_hat + alpha * prior) / (1.0 + alpha)
+        cov = (q_hat + self.q_prior_fraction * prior) / (1.0 + self.q_prior_fraction)
         cov = 0.5 * (cov + cov.T)
         if approx._layout.is_diag:
             cov = jnp.diag(jnp.diagonal(cov))
