@@ -29,36 +29,19 @@ from __future__ import annotations
 
 import argparse
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jax.random as jr
 import numpy as np
 import optax
-import equinox as eqx
+from _utils import DT, rk4_step
 
 from jaxfads.nn import make_mlp
-
 
 # ---------------------------------------------------------------------------
 # Lorenz system + noisy discrete-time simulation
 # ---------------------------------------------------------------------------
-
-
-def lorenz_rhs(state: jax.Array, *, sigma: float = 10.0, rho: float = 28.0,
-                beta: float = 8.0 / 3.0) -> jax.Array:
-    x, y, z = state[0], state[1], state[2]
-    dx = sigma * (y - x)
-    dy = x * (rho - z) - y
-    dz = x * y - beta * z
-    return jnp.stack([dx, dy, dz])
-
-
-def rk4_step(state: jax.Array, dt: float) -> jax.Array:
-    k1 = lorenz_rhs(state)
-    k2 = lorenz_rhs(state + 0.5 * dt * k1)
-    k3 = lorenz_rhs(state + 0.5 * dt * k2)
-    k4 = lorenz_rhs(state + dt * k3)
-    return state + (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
 
 
 def simulate_lorenz_pairs(key, *, n_trials, n_steps, dt, q_true, burn_in=200):
@@ -262,9 +245,6 @@ def vector_field_error(f, eval_points):
     true_next = jax.vmap(lambda z: rk4_step(z, dt=DT))(eval_points)
     pred_next = jax.vmap(f)(eval_points)
     return float(jnp.sqrt(jnp.mean((true_next - pred_next) ** 2)))
-
-
-DT = 0.01
 
 
 def main():

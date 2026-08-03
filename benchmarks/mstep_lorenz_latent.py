@@ -28,6 +28,7 @@ import jax
 import jax.numpy as jnp
 import jax.random as jr
 import numpy as np
+from _utils import DT, rk4_step
 from omegaconf import OmegaConf
 
 from jaxfads import XFADS, configure_logging
@@ -45,19 +46,6 @@ from jaxfads.training import (
 # Lorenz simulation with known process noise, plus a linear-Gaussian
 # observation model
 # ---------------------------------------------------------------------------
-
-
-def lorenz_rhs(state, *, sigma=10.0, rho=28.0, beta=8.0 / 3.0):
-    x, y, z = state[0], state[1], state[2]
-    return jnp.stack([sigma * (y - x), x * (rho - z) - y, x * y - beta * z])
-
-
-def rk4_step(state, dt):
-    k1 = lorenz_rhs(state)
-    k2 = lorenz_rhs(state + 0.5 * dt * k1)
-    k3 = lorenz_rhs(state + 0.5 * dt * k2)
-    k4 = lorenz_rhs(state + dt * k3)
-    return state + (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
 
 
 def simulate_lorenz_trajectories(key, *, n_trials, n_steps, dt, q_true, burn_in=200):
@@ -159,9 +147,6 @@ def flow_field_rmse(model, aff: AffineAlignment, eval_points_true_coords):
     pred_next_true_coords = eval_points_true_coords + dt * (rhs_model_coords @ aff.A.T)
     true_next = jax.vmap(lambda z: rk4_step(z, dt))(eval_points_true_coords)
     return float(jnp.sqrt(jnp.mean((pred_next_true_coords - true_next) ** 2)))
-
-
-DT = 0.01
 
 
 # ---------------------------------------------------------------------------
