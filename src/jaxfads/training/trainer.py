@@ -171,6 +171,25 @@ def batch_elbo(
     return _elbo(keys, times, posterior_moments, predicted_moments, observations)
 
 
+def _loss_and_forward(model, batch, model_key, elbo_key, *, beta):
+    times, observations, controls, covariates = batch
+    forward = model(times, observations, controls, covariates, key=model_key)
+    _natural, posterior_moments, prior_moments = forward
+
+    loss = -jnp.mean(
+        batch_elbo(
+            model,
+            elbo_key,
+            times,
+            posterior_moments,
+            prior_moments,
+            observations,
+            beta=beta,
+        )
+    )
+    return loss, forward
+
+
 def batch_loss(
     model,
     batch,
@@ -204,25 +223,12 @@ def batch_loss(
     Array
         Scalar mean negative ELBO over the batch.
     """
-    times, observations, controls, covariates = batch
-
     key, model_key = jr.split(key)
-    _, posterior_moments, prior_moments = model(
-        times, observations, controls, covariates, key=model_key
-    )
-
     key, elbo_key = jr.split(key)
-    free_energy = -batch_elbo(
-        model,
-        elbo_key,
-        times,
-        posterior_moments,
-        prior_moments,
-        observations,
-        beta=beta,
+    loss, _forward = _loss_and_forward(
+        model, batch, model_key, elbo_key, beta=beta
     )
-
-    return jnp.mean(free_energy)
+    return loss
 
 
 def dataloader(arrays, batch_size, num_epochs, key, shuffle=True):
@@ -492,12 +498,9 @@ def _run_training_loop(
 
         def loss_fn(current_model):
             key_loss, key_forward = jr.split(key)
-            t, y, u, c = batch
-            forward = current_model(t, y, u, c, key=key_forward)
-            _natural, moment, predictive = forward
             elbo_key = jr.fold_in(key_loss, 0)
-            loss = -jnp.mean(
-                batch_elbo(current_model, elbo_key, t, moment, predictive, y, beta=beta)
+            loss, forward = _loss_and_forward(
+                current_model, batch, key_forward, elbo_key, beta=beta
             )
             if regularizer is not None:
                 loss = loss + regularizer(current_model)

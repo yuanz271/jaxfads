@@ -242,9 +242,6 @@ class XFADS(ConfModule):
             key, ky = jrnd.split(key)
             self.beta_encoder = encoders.BetaEncoder(enc_conf, ky)
 
-        # if "s" in static_params:
-        #     self.dynamics.set_static()
-
         self.unconstrained_prior_natural = self.approx.free_from_kw(scale=1.0)
 
     def transition(self, z: Array, u: Array, c: Array, *, key=None) -> Array:
