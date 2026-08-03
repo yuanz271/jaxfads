@@ -117,7 +117,7 @@ This freezes:
 
 Trainable parameters are then only:
 - dynamics (`dynamics`)
-- state noise (`noise.free`)
+- state noise (`noise`)
 - encoders (`alpha_encoder`, `beta_encoder`)
 - prior (`unconstrained_prior_natural`)
 

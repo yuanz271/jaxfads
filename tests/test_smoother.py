@@ -1,7 +1,6 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-import chex
 import equinox as eqx
 import pytest
 from conftest import MockDynamics  # noqa: F401 - class registration side-effect
@@ -11,13 +10,7 @@ from jax import random as jr
 from omegaconf import DictConfig, OmegaConf
 
 from jaxfads.base import Encoder
-from jaxfads.distributions.mvn import MVN
-from jaxfads.msteps import MVNNoiseMstep
 from jaxfads.smoother import XFADS
-
-
-class UnregisteredMVN(MVN):
-    """Exact-class Noise lookup must not inherit MVN's registered strategy."""
 
 
 class IdentityEncoder(Encoder):
@@ -61,7 +54,7 @@ def test_constructor():
             fb_penalty=0,
             noise_penalty=0,
             dropout=dropout,
-                    dyn_conf=OmegaConf.create(
+            dyn_conf=OmegaConf.create(
                 dict(
                     width=width,
                     depth=depth,
@@ -69,7 +62,7 @@ def test_constructor():
                     dropout=dropout,
                     input_dim=u_size,
                     context_dim=0,
-                        )
+                )
             ),
             enc_conf=OmegaConf.create(
                 dict(
@@ -92,9 +85,9 @@ def test_constructor():
 
     model = XFADS(model_conf, jr.key(seed))
 
-    # Verify noise is on the model, not on the dynamics module
-    assert model.noise.free is not None
-    assert not hasattr(model.dynamics, "noise.free")
+    # Verify process noise is model state, not dynamics state.
+    assert model.noise is not None
+    assert not hasattr(model.dynamics, "noise")
 
     with TemporaryDirectory() as tmp_dir:
         path = Path(tmp_dir) / "model.zip"
@@ -102,7 +95,6 @@ def test_constructor():
         loaded_model = XFADS.load(path)
 
         eqx.tree_equal(model, loaded_model)
-
 
 
 def test_top_level_dims_override_subconfig_dims():
@@ -137,7 +129,7 @@ def test_top_level_dims_override_subconfig_dims():
                     observation_dim=999,
                     input_dim=u_size,
                     context_dim=0,
-                        )
+                )
             ),
             enc_conf=OmegaConf.create(
                 dict(
@@ -405,90 +397,3 @@ def test_xfads_nofilt_mode():
     assert jnp.isfinite(nature).all()
     assert jnp.isfinite(post_mom).all()
     assert jnp.isfinite(prior_mom).all()
-
-
-def _gaussian_model(
-    T,
-    y_size,
-    z_size,
-    *,
-    approx="MVN",
-    rank=None,
-):
-    model_conf = OmegaConf.create(
-        dict(
-            mode="smooth",
-            observation_dim=y_size,
-            state_dim=z_size,
-            dynamics="MockDynamics",
-            integrator="Identity",
-            approx=approx,
-            approx_kwargs={} if rank is None else {"rank": rank},
-            mc_size=2,
-            seed=0,
-            n_steps=T,
-            fb_penalty=0,
-            noise_penalty=0,
-            dropout=0.0,
-            dyn_conf=dict(input_dim=0, context_dim=0),
-            enc_conf=dict(width=8, depth=1, dropout=0.0),
-            obs_conf=dict(
-                model="GLM",
-                likelihood="Gaussian",
-                cov=[1e-3] * y_size,
-                norm_readout=False,
-                readout_init="fa",
-                readout_init_conf=dict(obs_noise_var=0.0),
-            ),
-        )
-    )
-    return XFADS(model_conf, jr.key(0))
-
-
-def test_q_scale_initializes_isotropic_q():
-    """q_scale initializes Q to q_scale times identity."""
-    model = _gaussian_model(5, 4, 3)
-    model = MVNNoiseMstep(q_scale=0.25).initialize(model, key=jr.key(1))
-    _mean, q = model.approx.unpack(
-        model.approx.canon_to_moment(model.approx.free_to_canon(model.noise.free))
-    )
-    chex.assert_trees_all_close(q, 0.25 * jnp.eye(3), atol=1e-5)
-
-@pytest.mark.parametrize("rank", [0, 3])
-def test_mvn_noise_mstep_matches_fractional_q_prior(rank):
-    """The Q update uses the plugin's initializer and fractional prior center."""
-    d = 3
-    plugin = MVNNoiseMstep(q_scale=0.25, q_prior_fraction=0.5)
-    model = plugin.initialize(_gaussian_model(2, 4, d, rank=rank), key=jr.key(1))
-    approx = model.approx
-    mean_t = jnp.array([1.0, -2.0, 0.5])
-    mean_f = jnp.zeros(d)
-    cov_t = jnp.diag(jnp.array([0.2, 0.3, 0.4]))
-    cov_f = jnp.diag(jnp.array([0.4, 0.5, 0.6]))
-    _mean_q, q = approx.unpack(model.noise.moment())
-    posterior = jnp.stack(
-        (approx.pack(jnp.zeros(d), cov_t), approx.pack(mean_t, cov_t))
-    )[None]
-    predictive = jnp.stack(
-        (approx.pack(jnp.zeros(d), cov_f + q), approx.pack(mean_f, cov_f + q))
-    )[None]
-
-    updated = plugin(
-        model,
-        (None, None, None, None),
-        (jnp.zeros_like(posterior), posterior, predictive),
-        key=jr.key(2),
-    )
-    _mean, q_updated = approx.unpack(updated.noise.moment())
-    q_hat = jnp.outer(mean_t - mean_f, mean_t - mean_f) + cov_t + cov_f
-    expected = (q_hat + 0.5 * 0.25 * jnp.eye(d)) / 1.5
-    if rank == 0:
-        expected = jnp.diag(jnp.diagonal(expected))
-    chex.assert_trees_all_close(q_updated, expected, atol=1e-5)
-
-
-@pytest.mark.parametrize("q_scale", [0.0, -1.0, float("nan"), float("inf")])
-def test_q_scale_must_be_positive_and_finite(q_scale):
-    """q_scale is a scalar process variance, not an arbitrary scale."""
-    with pytest.raises(ValueError, match="finite and positive"):
-        MVNNoiseMstep(q_scale=q_scale)

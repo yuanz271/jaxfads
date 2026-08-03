@@ -31,7 +31,6 @@ from .base import Approx, Dynamics, Encoder, Integrator, Observation
 from .core import Mode
 from .logging import get_logger
 from .nn import DataMasker
-from .noise import Noise
 from .util import vmap_with_key
 
 logger = get_logger(__name__)
@@ -76,9 +75,10 @@ class XFADS(ConfModule):
         Dropout masker for pseudo-observations during training.
     unconstrained_prior_natural : Array
         Free-form prior parameters (constrained to natural at inference).
-    noise : Noise
-        Generic transition-noise component holding static Approx configuration
-        and free process-noise parameters.
+    approx : Approx
+        Static exponential-family approximation configuration.
+    noise : Array
+        Free-form process-noise parameters.
 
     Notes
     -----
@@ -130,7 +130,8 @@ class XFADS(ConfModule):
     beta_encoder: Callable | None
     masker: DataMasker
     unconstrained_prior_natural: Any
-    noise: Noise
+    approx: Approx = eqx.field(static=True)
+    noise: Array
 
     def __init__(
         self, conf, key=None
@@ -195,10 +196,8 @@ class XFADS(ConfModule):
         approx_kwargs = dict(self.conf.approx_kwargs)
         approx_kwargs.setdefault("rank", self.conf.state_dim)
         approx = approx_cls(dim=self.conf.state_dim, **approx_kwargs)
-        self.noise = Noise(
-            approx=approx,
-            free=approx.free_from_kw(scale=1.0),
-        )
+        self.approx = approx
+        self.noise = approx.free_from_kw(scale=1.0)
 
         obs_conf = OmegaConf.merge(
             self.conf.obs_conf,
@@ -311,19 +310,6 @@ class XFADS(ConfModule):
         """
         logger.info("XFADS save: path=%s", str(path))
         save_model(path, model)
-
-    @property
-    def approx(self):
-        """
-        Exponential-family approximation instance.
-
-        Returns
-        -------
-        Approx
-            An approximation instance configured from ``approx`` and
-            ``approx_kwargs``.
-        """
-        return self.noise.approx
 
     def prior_natural(self) -> Array:
         """

@@ -30,47 +30,39 @@ def sample_data():
 
 @pytest.fixture
 def model_conf():
-    return OmegaConf.create(
-        {
-            "mode": "smooth",
-            "observation_dim": 10,
-            "state_dim": 2,
-            "dynamics": "MockDynamics",
-            "integrator": "Identity",
-            "approx": "MVN",
-            "approx_kwargs": {},
-            "mc_size": 1,
-            "seed": 0,
-            "n_steps": 10,
-            "fb_penalty": 0,
-            "noise_penalty": 0.0,
+    return OmegaConf.create({
+        "mode": "smooth",
+        "observation_dim": 10,
+        "state_dim": 2,
+        "dynamics": "MockDynamics",
+        "integrator": "Identity",
+        "approx": "MVN",
+        "approx_kwargs": {},
+        "mc_size": 1,
+        "seed": 0,
+        "n_steps": 10,
+        "fb_penalty": 0,
+        "noise_penalty": 0.0,
+        "dropout": 0.0,
+        "dyn_conf": OmegaConf.create({
+            "width": 8,
+            "depth": 1,
+            "input_dim": 1,
+            "context_dim": 0,
+        }),
+        "enc_conf": OmegaConf.create({
+            "width": 8,
+            "depth": 1,
             "dropout": 0.0,
-            "dyn_conf": OmegaConf.create(
-                {
-                    "width": 8,
-                    "depth": 1,
-                    "input_dim": 1,
-                    "context_dim": 0,
-                                }
-            ),
-            "enc_conf": OmegaConf.create(
-                {
-                    "width": 8,
-                    "depth": 1,
-                    "dropout": 0.0,
-                }
-            ),
-            "obs_conf": OmegaConf.create(
-                {
-                    "model": "GLM",
-                    "emission_noise": 1.0,
-                    "norm_readout": False,
-                    "dropout": 0.0,
-                    "likelihood": "Poisson",
-                }
-            ),
-        }
-    )
+        }),
+        "obs_conf": OmegaConf.create({
+            "model": "GLM",
+            "emission_noise": 1.0,
+            "norm_readout": False,
+            "dropout": 0.0,
+            "likelihood": "Poisson",
+        }),
+    })
 
 
 def test_regularizer_adds_its_gradient(model_conf, sample_data):
@@ -87,7 +79,7 @@ def test_regularizer_adds_its_gradient(model_conf, sample_data):
     lam = jnp.array(1e-3)
 
     def l2_reg(m):
-        return lam * jnp.sum(m.noise.free**2)
+        return lam * jnp.sum(m.noise**2)
 
     g_obj = eqx.filter_grad(lambda m: batch_loss(m, sample_data, key, beta=1.0))(model)
     g_both = eqx.filter_grad(
@@ -95,9 +87,7 @@ def test_regularizer_adds_its_gradient(model_conf, sample_data):
     )(model)
     g_reg = eqx.filter_grad(l2_reg)(model)
 
-    chex.assert_trees_all_close(
-        (g_both.noise.free - g_obj.noise.free), g_reg.noise.free, atol=1e-6
-    )
+    chex.assert_trees_all_close((g_both.noise - g_obj.noise), g_reg.noise, atol=1e-6)
 
 
 def test_train_applies_regularizer(model_conf, sample_data):
@@ -105,7 +95,7 @@ def test_train_applies_regularizer(model_conf, sample_data):
     conf = OmegaConf.create({"max_epoch": 3, "batch_size": 5, "seed": 0})
 
     def strong_reg(m):
-        return 1e2 * jnp.sum(m.noise.free**2)
+        return 1e2 * jnp.sum(m.noise**2)
 
     # train() donates its input model's buffers, so use a fresh (identical)
     # model for each run.
@@ -115,5 +105,5 @@ def test_train_applies_regularizer(model_conf, sample_data):
     base = train(fresh_model(), sample_data, conf=conf)
     reg = train(fresh_model(), sample_data, conf=conf, regularizer=strong_reg)
 
-    # A strong penalty on noise.free changes the optimization outcome.
-    assert jnp.any(base.noise.free != reg.noise.free)
+    # A strong penalty on noise changes the optimization outcome.
+    assert jnp.any(base.noise != reg.noise)

@@ -253,7 +253,7 @@ def _site_filter(
     approx = model.approx
     nature_p_1 = model.prior_natural()
 
-    noise = model.noise.moment()
+    noise = approx.canon_to_moment(approx.free_to_canon(model.noise))
     f = model.transition
     mc_size = model.conf.mc_size
 
@@ -282,9 +282,10 @@ def _site_filter(
     nature_f = jnp.vstack((nature_f_1, nature_f))  # 1...T
 
     moment_f = jax.vmap(approx.natural_to_moment)(nature_f)
-    moment_p = jnp.vstack(
-        (approx.natural_to_moment(nature_f_1), moment_p)
-    )  # prediction of t=1 is the prior
+    moment_p = jnp.vstack((
+        approx.natural_to_moment(nature_f_1),
+        moment_p,
+    ))  # prediction of t=1 is the prior
 
     return nature_f, moment_f, moment_p
 
@@ -369,7 +370,7 @@ def nofilt(
     policies derive any statistics they need from these outputs.
     """
     approx = model.approx
-    noise = model.noise.moment()
+    noise = approx.canon_to_moment(approx.free_to_canon(model.noise))
     f = model.transition
     mc_size = model.conf.mc_size
 
@@ -454,7 +455,7 @@ def _bismooth(
     approx = model.approx
     nature_prior = model.prior_natural()
 
-    noise = model.noise.moment()
+    noise = approx.canon_to_moment(approx.free_to_canon(model.noise))
 
     natural_to_moment = jax.vmap(approx.natural_to_moment)
     expected_moment_forward = partial(

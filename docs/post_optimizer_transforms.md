@@ -82,7 +82,7 @@ class PostOptimizerTransform(Protocol):
 `initialize()` runs for each selected transform before freeze-mask
 construction and `optimizer.init`. This ensures that optimizer state is built
 from the actual initialized parameter arrays. `frozen_paths()` returns fully
-qualified, root-relative paths such as `"noise.free"`; the trainer combines
+qualified, root-relative paths such as `"noise"`; the trainer combines
 these with user-configured `conf.freeze_paths`.
 
 `post_optimizer_transforms=()` performs ordinary optimizer-managed training:
@@ -116,7 +116,7 @@ $$
 Q_0 = Q_{\mathrm{init}} = q_{\mathrm{scale}} I.
 $$
 
-The initializer encodes this covariance into `model.noise.free` before
+The initializer encodes this covariance into `model.noise` before
 optimizer initialization. On each transform call, it reconstructs the
 noise-free predictive covariance for the current MVN representation by
 subtracting the Q that produced the predictive output:
@@ -136,7 +136,7 @@ Q_{\mathrm{new}}
 \alpha = \texttt{q\_prior\_fraction}.
 $$
 
-It replaces `noise.free` and declares `noise.free` frozen from optimizer
+It replaces `noise` and declares `noise` frozen from optimizer
 updates. `MVNNoiseMstep` requires the concrete `MVN` Approx representation;
 unsupported representations fail explicitly. Omitting this transform leaves
 Q optimizer-managed.
@@ -149,9 +149,9 @@ readout quantities from the posterior `moment` and the current post-optimizer
 readout state. This accepted one-step-lagged approximation avoids a second
 inference pass and keeps the forward-output contract minimal.
 
-`XFADS`, `Observation`, `Noise`, and `Approx` remain model/inference and
-distribution components. They do not own transform policy, transform
-registries, M-step dispatch, accumulation, or transform-specific freeze paths.
-`Noise` contains its static `Approx` and trainable `free` representation.
-Trainer policy owns initialization, update mathematics, ordering, and
-optimizer freeze composition.
+`XFADS`, `Observation`, and `Approx` remain model/inference and distribution
+components. They do not own transform policy, transform registries, M-step
+dispatch, accumulation, or transform-specific freeze paths. `XFADS.noise` is
+the free-form process-noise array; `XFADS.approx` is static distribution
+configuration. Trainer policy owns initialization, update mathematics,
+ordering, and optimizer freeze composition.

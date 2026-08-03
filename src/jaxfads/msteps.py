@@ -48,9 +48,7 @@ class GaussianObservationMstep:
         _natural, moment, _predictive = forward
         observation = model.observation
         likelihood = observation.likelihood
-        if not hasattr(likelihood, "unconstrained_cov") or not hasattr(
-            likelihood, "cov"
-        ):
+        if not hasattr(likelihood, "unconstrained_cov"):
             return model
         stat = gaussian_observation_stat(
             t, y, moment, model.approx, observation.readout
@@ -96,8 +94,7 @@ class MVNNoiseMstep:
                 "MVNNoiseMstep requires model.approx to be an MVN instance"
             )
         free = approx.free_from_kw(scale=self.q_scale)
-        noise = eqx.tree_at(lambda leaf: leaf.free, model.noise, free)
-        return eqx.tree_at(lambda leaf: leaf.noise, model, noise)
+        return eqx.tree_at(lambda leaf: leaf.noise, model, free)
 
     def __call__(self, model, batch, forward, *, key):
         del batch, key
@@ -110,7 +107,7 @@ class MVNNoiseMstep:
         unpack = jax.vmap(jax.vmap(approx.unpack))
         mean_t, cov_t = unpack(moment[:, 1:])
         mean_f, cov_pred = unpack(predictive_moment[:, 1:])
-        _, q = approx.unpack(model.noise.moment())
+        _, q = approx.unpack(approx.canon_to_moment(approx.free_to_canon(model.noise)))
         cov_f = cov_pred - q
         cov_f = 0.5 * (cov_f + jnp.swapaxes(cov_f, -1, -2))
         residual = mean_t - mean_f
@@ -127,12 +124,11 @@ class MVNNoiseMstep:
         free = approx.canon_to_free(
             approx.moment_to_canon(approx.pack(jnp.zeros(d, dtype=cov.dtype), cov))
         )
-        noise = eqx.tree_at(lambda leaf: leaf.free, model.noise, free)
-        return eqx.tree_at(lambda leaf: leaf.noise, model, noise)
+        return eqx.tree_at(lambda leaf: leaf.noise, model, free)
 
     def frozen_paths(self, model) -> list[str]:
         if not isinstance(model.approx, MVN):
             raise NotImplementedError(
                 "MVNNoiseMstep requires model.approx to be an MVN instance"
             )
-        return ["noise.free"]
+        return ["noise"]

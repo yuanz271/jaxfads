@@ -171,8 +171,9 @@ Quick reference (public API):
 ### Usage in XFADS
 
 ```python
-# Construction — stored as free-form flat arrays on the module
-self.noise = Noise(approx=approx, free=approx.free_from_kw(scale=1.0))
+# Construction — static Approx plus free-form flat arrays on the module
+self.approx = approx
+self.noise = approx.free_from_kw(scale=1.0)
 self.unconstrained_prior_natural = self.approx.free_from_kw(scale=1.0)
 
 # Inference — derive natural/moment on the fly
@@ -181,7 +182,7 @@ prior_natural = self.approx.moment_to_natural(
         self.approx.free_to_canon(self.unconstrained_prior_natural)
     )
 )
-noise = self.noise.moment()
+noise = self.approx.canon_to_moment(self.approx.free_to_canon(self.noise))
 
 # Encoder outputs are flat arrays → additive natural updates
 # (encoders output flat unconstrained updates for additive filtering)

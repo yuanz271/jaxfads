@@ -22,7 +22,6 @@ from jax import random as jr
 from jaxfads import core
 from jaxfads.base import Dynamics
 from jaxfads.core import expected_predictive_moment
-from jaxfads.noise import Noise
 from jaxfads.vi import elbo
 
 # -----------------------------------------------------------------------------
@@ -47,10 +46,7 @@ class _DummyModel:
         self.conf = SimpleNamespace(mc_size=mc_size)
         self.transition = _Identity(state_dim)
         self.backward = _Identity(state_dim)
-        self.noise = Noise(
-            approx=approx,
-            free=approx.free_from_kw(scale=cov),
-        )
+        self.noise = approx.free_from_kw(scale=cov)
 
     def prior_natural(self):
         return self.approx.moment_to_natural(
@@ -70,9 +66,7 @@ def test_filter_shapes_and_finite(diag):
     u = jnp.zeros((T, 0))
     c = jnp.zeros((T, 0))
 
-    nature_f, moment_f, moment_p = core.filter(
-        model, key, jnp.arange(T), alpha, u, c
-    )
+    nature_f, moment_f, moment_p = core.filter(model, key, jnp.arange(T), alpha, u, c)
 
     for arr in (nature_f, moment_f, moment_p):
         chex.assert_shape(arr, (T, param_dim))
@@ -122,12 +116,8 @@ def test_causal_reindexed_identity(diag):
     u = jnp.zeros((T, 0))
     c = jnp.zeros((T, 0))
 
-    check_nature, _, _ = core.filter(
-        model, key, jnp.arange(T), alpha, u, c
-    )
-    nature, moment, moment_p = core.causal(
-        model, key, jnp.arange(T), alpha, beta, u, c
-    )
+    check_nature, _, _ = core.filter(model, key, jnp.arange(T), alpha, u, c)
+    nature, moment, moment_p = core.causal(model, key, jnp.arange(T), alpha, beta, u, c)
 
     chex.assert_trees_all_close(nature, check_nature + beta, atol=1e-6)
     chex.assert_shape(moment, (T, param_dim))
@@ -151,9 +141,7 @@ def test_causal_zero_beta_reduces_to_alpha_filter(diag):
     check_nature, check_moment, check_moment_p = core.filter(
         model, key, jnp.arange(T), alpha, u, c
     )
-    nature, moment, moment_p = core.causal(
-        model, key, jnp.arange(T), alpha, beta, u, c
-    )
+    nature, moment, moment_p = core.causal(model, key, jnp.arange(T), alpha, beta, u, c)
 
     chex.assert_trees_all_close(nature, check_nature, atol=1e-6)
     chex.assert_trees_all_close(moment, check_moment, atol=1e-6)

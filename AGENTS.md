@@ -102,8 +102,8 @@ Invariant for callers:
     regularizer(model)`).
   - `batch_loss` stays a pure objective; the trainer composes the penalty.
   - Penalize the intended quantity in its own space (e.g. decode
-    `model.noise.free` through `model.noise.moment()` to regularize Q; do not
-    penalize the raw free parameters).
+    `model.noise` through `model.approx` to regularize Q; do not penalize the
+    raw free parameters).
 - Optimizer policy is user-ownable. The default optimizer applies **no weight
   decay**: in a plugin framework the trainer cannot know which leaves are
   weight matrices vs variances/biases, so it makes no decay assumption. Pass
@@ -112,7 +112,7 @@ Invariant for callers:
   no `weight_decay` config field.
 - Parameter freezing is configured declaratively via:
   - `trainer_conf.freeze_paths: list[str]` (dot-separated model attribute paths,
-    e.g. `["noise.free"]`); applied on top of the default or a supplied
+    e.g. `["noise"]`); applied on top of the default or a supplied
     optimizer.
 - M-step policy is trainer-owned and explicit: pass ordered
   `post_optimizer_transforms` to `train()`. An empty
@@ -121,8 +121,8 @@ Invariant for callers:
   `GaussianObservationMstep()` owns the Gaussian R update.
   `MVNNoiseMstep(q_scale=..., q_prior_fraction=...)` owns both the isotropic
   Q-prior initializer (`Q_init = q_scale I`) and its fractional Q update; it
-  initializes `noise.free` before freeze-mask and optimizer-state creation,
-  then freezes that leaf. Omitting `MVNNoiseMstep` leaves Q SGD-managed.
+  initializes `noise` before freeze-mask and optimizer-state creation, then
+  freezes that array. Omitting `MVNNoiseMstep` leaves Q SGD-managed.
 - Each batch uses one pre-SGD inference forward for loss, gradients, and the
   selected plugins' statistics; plugins update the post-SGD model with no
   extra inference pass. Model/component M-step APIs are unsupported.

@@ -26,34 +26,30 @@ def _split(data, valid_size=4):
 
 
 def _model_conf(obs_dim=6, state_dim=2):
-    return OmegaConf.create(
-        {
-            "mode": "smooth",
-            "observation_dim": obs_dim,
-            "state_dim": state_dim,
-            "dynamics": "MockDynamics",
-            "integrator": "Identity",
-            "approx": "MVN",
-            "approx_kwargs": {},
-            "mc_size": 1,
-            "seed": 0,
-            "n_steps": 8,
-            "fb_penalty": 0,
-            "noise_penalty": 0.0,
+    return OmegaConf.create({
+        "mode": "smooth",
+        "observation_dim": obs_dim,
+        "state_dim": state_dim,
+        "dynamics": "MockDynamics",
+        "integrator": "Identity",
+        "approx": "MVN",
+        "approx_kwargs": {},
+        "mc_size": 1,
+        "seed": 0,
+        "n_steps": 8,
+        "fb_penalty": 0,
+        "noise_penalty": 0.0,
+        "dropout": 0.0,
+        "dyn_conf": OmegaConf.create({"input_dim": 0, "context_dim": 0}),
+        "enc_conf": OmegaConf.create({"width": 8, "depth": 1, "dropout": 0.0}),
+        "obs_conf": OmegaConf.create({
+            "model": "GLM",
+            "emission_noise": 1.0,
+            "norm_readout": False,
             "dropout": 0.0,
-            "dyn_conf": OmegaConf.create({"input_dim": 0, "context_dim": 0}),
-            "enc_conf": OmegaConf.create({"width": 8, "depth": 1, "dropout": 0.0}),
-            "obs_conf": OmegaConf.create(
-                {
-                    "model": "GLM",
-                    "emission_noise": 1.0,
-                    "norm_readout": False,
-                    "dropout": 0.0,
-                    "likelihood": "Poisson",
-                }
-            ),
-        }
-    )
+            "likelihood": "Poisson",
+        }),
+    })
 
 
 def _trainer_conf(**overrides):
@@ -77,7 +73,7 @@ def _assert_loadable_checkpoint(path, batch):
     from jaxfads.smoother import XFADS
 
     loaded = XFADS.load(path)
-    assert loaded.approx is loaded.noise.approx
+    assert loaded.noise is not None
     free_energy, post_moments, prior_moments = loaded(*batch, key=jrnd.key(123))
     assert jnp.isfinite(free_energy).all()
     assert jnp.isfinite(post_moments).all()
@@ -167,9 +163,7 @@ def test_callback_receives_train_only_info():
         seen.append(info)
         return False
 
-    train(
-        model, train_data, conf=_trainer_conf(max_epoch=2), on_epoch_end=on_epoch_end
-    )
+    train(model, train_data, conf=_trainer_conf(max_epoch=2), on_epoch_end=on_epoch_end)
 
     assert [d["epoch"] for d in seen] == [0, 1]
     for d in seen:

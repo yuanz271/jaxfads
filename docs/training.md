@@ -45,7 +45,7 @@ Pass a `DictConfig` (or plain dict) as `conf`. Missing keys are filled from
 | `max_epoch` | `50` | Number of training epochs (always run in full unless a callback stops early) |
 | `batch_size` | `1` | Mini-batch size (must be divisible by device count) |
 | `seed` | `0` | Random seed for shuffling |
-| `freeze_paths` | `[]` | Optional list of dot-separated model attribute paths to freeze (e.g. `["noise.free"]`) |
+| `freeze_paths` | `[]` | Optional list of dot-separated model attribute paths to freeze (e.g. `["noise"]`) |
 
 The default optimizer is **vanilla Adam** and `learning_rate` is its only
 knob. It applies **no gradient clipping, no gradient noise, and no weight
@@ -87,7 +87,7 @@ an `optax` optimizer with a model-derived mask and pass it to `train`:
 import jax, equinox as eqx, optax
 
 # Decay only 2-D leaves (weight matrices); skip biases, scales, and the
-# free-form covariance parameters (noise.free, unconstrained_prior_natural).
+# free-form covariance parameters (noise, unconstrained_prior_natural).
 wd_mask = jax.tree.map(lambda p: eqx.is_inexact_array(p) and p.ndim >= 2, model)
 
 optimizer = optax.chain(
@@ -124,7 +124,7 @@ configs:
 
 ```python
 trainer_conf = {
-    "freeze_paths": ["noise.free"],  # freeze process noise
+    "freeze_paths": ["noise"],  # freeze process noise
 }
 ```
 
@@ -160,7 +160,7 @@ the loss is evaluated on and what persists in the returned model. It is a
 general mechanism — the trainer only calls the function and does not
 interpret what it changes.
 
-Do **not** schedule `noise.free` while `MVNNoiseMstep` is selected. That
+Do **not** schedule `noise` while `MVNNoiseMstep` is selected. That
 plugin owns Q and would overwrite a scheduled value. With `post_optimizer_transforms=()`, Q is
 SGD-managed and may be scheduled explicitly if the path is also frozen from
 optimizer updates.
@@ -201,12 +201,12 @@ every minibatch's existing **pre-SGD** ELBO forward pass, the plugin derives
 an R statistic from the same posterior moments and applies it after SGD,
 without an extra inference pass.
 
-The transition/process-noise covariance `Q` (`model.noise.free`) is
+The transition/process-noise covariance `Q` (`model.noise`) is
 initialized by `MVNNoiseMstep(q_scale=...)` before freeze-mask and optimizer
 state creation. That plugin owns the complete Q prior policy: its initializer
 sets `Q_init = q_scale * I`, and its additive MAP statistic uses the same
-`q_scale` with `q_prior_fraction`; `noise.free` is automatically frozen from
-SGD. Omit `MVNNoiseMstep` to leave `noise.free` SGD-managed.
+`q_scale` with `q_prior_fraction`; `noise` is automatically frozen from
+SGD. Omit `MVNNoiseMstep` to leave `noise` SGD-managed.
 
 All selected transforms consume the same immutable three-value forward output,
 then transform the post-optimizer model in explicit order.
@@ -310,8 +310,8 @@ agnostic to the latent family (not every `Approx` has a covariance-like noise).
 ### Example: regularizing the process-noise covariance Q
 
 The penalty must be written in the quantity you intend to regularize. To
-regularize the process-noise covariance Q, decode `noise.free` through the
-Approx rather than penalizing the raw free parameters (which live in a
+regularize the process-noise covariance Q, decode `model.noise` through
+`model.approx` rather than penalizing the raw free parameters (which live in a
 nonlinear chart and are not a meaningful function of Q):
 
 ```python
@@ -319,7 +319,7 @@ import jax.numpy as jnp
 
 def q_regularizer(model):
     approx = model.approx
-    moment = model.noise.moment()
+    moment = approx.canon_to_moment(approx.free_to_canon(model.noise))
     _, Q = approx.unpack(moment)          # full (D, D) covariance
     return 1e-4 * jnp.trace(Q)            # well-defined function of Q
 

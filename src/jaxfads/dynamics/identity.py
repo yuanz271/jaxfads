@@ -11,7 +11,7 @@ class Identity(Dynamics):
     """Discrete random-walk mean dynamics: ``z_{t+1} = z_t + noise``.
 
     This dynamics contributes the deterministic identity mean map
-    ``f(z_t) = z_t``; process noise is held by the composed model Noise state.
+    ``f(z_t) = z_t``; process noise is held by the model's `noise` array.
 
     Notes
     -----

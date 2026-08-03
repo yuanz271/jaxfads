@@ -60,7 +60,7 @@ DEFAULT_TRAINER_CONFIG = DictConfig({
     "seed": 0,
     "kl_warmup_steps": 0,
     # Optional list of dot-separated attribute paths to freeze.
-    # Example: ["noise.free", "unconstrained_prior_natural"]
+    # Example: ["noise", "unconstrained_prior_natural"]
     "freeze_paths": [],
 })
 
@@ -620,8 +620,8 @@ def train(
         per-batch objective (``loss = -ELBO + regularizer(model)``). It is a
         pure function of the model, so any parameter penalty must be written
         in the relevant parameter space (e.g. a penalty on the process-noise
-        covariance Q must decode ``noise.free`` through ``model.noise``, not act on
-        the raw free parameters).
+        covariance Q must decode ``model.noise`` through ``model.approx``, not
+        act on the raw free parameters).
     optimizer : optax.GradientTransformation or None, optional
         Optimizer to use. When ``None`` (default), the built-in optimizer is
         **vanilla Adam** (``optax.adam(conf.learning_rate)``) -- no gradient

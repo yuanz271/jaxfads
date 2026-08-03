@@ -112,7 +112,7 @@ def test_post_optimizer_transform_initialization_precedes_optimizer_init(
     seen = []
 
     def init_fn(params):
-        seen.append(params.noise.free)
+        seen.append(params.noise)
         return ()
 
     def update_fn(updates, state, params=None):
@@ -150,8 +150,65 @@ def test_train_with_independent_post_optimizer_transforms(
         ),
     )
     assert jnp.isfinite(trained.observation.likelihood.cov()).all()
-    assert jnp.isfinite(trained.noise.free).all()
+    assert jnp.isfinite(trained.noise).all()
 
+
+def test_mvn_noise_mstep_initializes_isotropic_q(gaussian_model_conf):
+    """q_scale initializes Q to q_scale times identity."""
+    gaussian_model_conf.state_dim = 3
+    model = XFADS(gaussian_model_conf, jrnd.key(0))
+    model = MVNNoiseMstep(q_scale=0.25).initialize(model, key=jrnd.key(1))
+    approx = model.approx
+    _mean, q = approx.unpack(approx.canon_to_moment(approx.free_to_canon(model.noise)))
+    chex.assert_trees_all_close(q, 0.25 * jnp.eye(3), atol=1e-5)
+
+
+@pytest.mark.parametrize("rank", [0, 3])
+def test_mvn_noise_mstep_matches_fractional_q_prior(gaussian_model_conf, rank):
+    """The Q update uses the plugin's initializer and fractional prior center."""
+    d = 3
+    gaussian_model_conf.state_dim = d
+    gaussian_model_conf.approx_kwargs = {"rank": rank}
+    plugin = MVNNoiseMstep(q_scale=0.25, q_prior_fraction=0.5)
+    model = plugin.initialize(XFADS(gaussian_model_conf, jrnd.key(0)), key=jrnd.key(1))
+    approx = model.approx
+    mean_t = jnp.array([1.0, -2.0, 0.5])
+    mean_f = jnp.zeros(d)
+    cov_t = jnp.diag(jnp.array([0.2, 0.3, 0.4]))
+    cov_f = jnp.diag(jnp.array([0.4, 0.5, 0.6]))
+    _mean_q, q = approx.unpack(
+        approx.canon_to_moment(approx.free_to_canon(model.noise))
+    )
+    posterior = jnp.stack((
+        approx.pack(jnp.zeros(d), cov_t),
+        approx.pack(mean_t, cov_t),
+    ))[None]
+    predictive = jnp.stack((
+        approx.pack(jnp.zeros(d), cov_f + q),
+        approx.pack(mean_f, cov_f + q),
+    ))[None]
+
+    updated = plugin(
+        model,
+        (None, None, None, None),
+        (jnp.zeros_like(posterior), posterior, predictive),
+        key=jrnd.key(2),
+    )
+    _mean, q_updated = approx.unpack(
+        approx.canon_to_moment(approx.free_to_canon(updated.noise))
+    )
+    q_hat = jnp.outer(mean_t - mean_f, mean_t - mean_f) + cov_t + cov_f
+    expected = (q_hat + 0.5 * 0.25 * jnp.eye(d)) / 1.5
+    if rank == 0:
+        expected = jnp.diag(jnp.diagonal(expected))
+    chex.assert_trees_all_close(q_updated, expected, atol=1e-5)
+
+
+@pytest.mark.parametrize("q_scale", [0.0, -1.0, float("nan"), float("inf")])
+def test_mvn_noise_mstep_q_scale_must_be_positive_and_finite(q_scale):
+    """q_scale is a scalar process variance, not an arbitrary scale."""
+    with pytest.raises(ValueError, match="finite and positive"):
+        MVNNoiseMstep(q_scale=q_scale)
 
 
 def test_train_accepts_user_optimizer(model_conf, trainer_config, sample_data):
@@ -167,7 +224,7 @@ def test_train_accepts_user_optimizer(model_conf, trainer_config, sample_data):
     custom = run(optax.sgd(1e-2))  # very different update rule than the default
 
     # A different optimizer yields a different trained model.
-    assert jnp.any(default.noise.free != custom.noise.free)
+    assert jnp.any(default.noise != custom.noise)
 
 
 @pytest.mark.parametrize(
@@ -196,15 +253,15 @@ def test_train_with_params_aware_optimizer(
     }
 
     model = XFADS(model_conf, jrnd.key(0))
-    before = np.asarray(model.noise.free)  # snapshot: train() donates buffers
+    before = np.asarray(model.noise)  # snapshot: train() donates buffers
     trained = train(
         model, sample_data, conf=trainer_config, optimizer=optimizers[opt_name]
     )
 
     assert trained is not None
-    assert jnp.all(jnp.isfinite(trained.noise.free))
+    assert jnp.all(jnp.isfinite(trained.noise))
     # The optimizer actually updated the model.
-    assert np.any(np.asarray(trained.noise.free) != before)
+    assert np.any(np.asarray(trained.noise) != before)
 
 
 def test_user_optimizer_composes_with_freeze_paths(
@@ -213,14 +270,14 @@ def test_user_optimizer_composes_with_freeze_paths(
     """``freeze_paths`` is applied on top of a user-supplied optimizer."""
     trainer_config.max_epoch = 5
     trainer_config.batch_size = 64
-    trainer_config.freeze_paths = ["noise.free"]
+    trainer_config.freeze_paths = ["noise"]
 
     model = XFADS(model_conf, jrnd.key(0))
     # Snapshot to host: train() donates the input model's buffers.
-    before = np.asarray(model.noise.free)
+    before = np.asarray(model.noise)
     trained = train(model, sample_data, conf=trainer_config, optimizer=optax.sgd(1e-1))
 
-    np.testing.assert_allclose(np.asarray(trained.noise.free), before, atol=0.0)
+    np.testing.assert_allclose(np.asarray(trained.noise), before, atol=0.0)
 
 
 def test_train_lora_rank1_end_to_end(trainer_config, sample_data):
@@ -279,18 +336,16 @@ def test_train_lora_rank1_end_to_end(trainer_config, sample_data):
     assert jnp.isfinite(prior_mom).all()
 
 
-def test_train_freeze_paths_keeps_noise_free_fixed(
-    model_conf, trainer_config, sample_data
-):
-    """freeze_paths can freeze model.noise.free updates."""
+def test_train_freeze_paths_keeps_noise_fixed(model_conf, trainer_config, sample_data):
+    """freeze_paths can freeze model.noise updates."""
     model = XFADS(model_conf, jrnd.key(0))
-    noise0 = jax.device_get(model.noise.free)
+    noise0 = jax.device_get(model.noise)
 
     trainer_config.max_epoch = 3
     trainer_config.batch_size = 64
-    trainer_config.freeze_paths = ["noise.free"]
+    trainer_config.freeze_paths = ["noise"]
     trained_model = train(model, sample_data, conf=trainer_config)
-    noise_trained = jax.device_get(trained_model.noise.free)
+    noise_trained = jax.device_get(trained_model.noise)
     chex.assert_trees_all_close(noise_trained, noise0, atol=0.0)
 
 
