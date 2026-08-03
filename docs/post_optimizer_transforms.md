@@ -1,5 +1,8 @@
 # Post-optimizer transforms
 
+The reproducibility requirements for built-in and custom transforms are defined
+in [Reproducibility](reproducibility.md).
+
 This document specifies the trainer-owned interface for non-gradient model
 transformations applied after the optimizer. Gaussian observation-noise and MVN
 process-noise updates are the initial implementations; the interface is not

@@ -27,6 +27,7 @@ All dependencies—including `gearax` (pinned to a specific commit)—are resolv
 - [Quickstart](docs/quickstart.md)
 - [Writing Custom Dynamics and Integrators](docs/dynamics.md)
 - [Training Configuration](docs/training.md)
+- [Reproducibility](docs/reproducibility.md)
 - [Algorithm Overview](docs/algorithm.md)
 - [API and Architecture Design](docs/design.md)
 - [Mathematical Notation](docs/notation.md)

@@ -1,5 +1,8 @@
 # Distribution Design
 
+For the configuration and artifact reproducibility contract, see
+[Reproducibility](reproducibility.md).
+
 ## Overview
 
 The distribution system follows a two-layer design:

@@ -3,7 +3,7 @@
 This guide explains how to configure and run XFADS training.
 
 See also: [Quickstart](quickstart.md), [Dynamics](dynamics.md),
-[Algorithm](algorithm.md).
+[Algorithm](algorithm.md), and [Reproducibility](reproducibility.md).
 
 ## Overview
 
@@ -347,6 +347,9 @@ configure_logging("DEBUG", file_path="train.log")  # + file output
 ```
 
 ## Checkpointing
+
+For the normative distinction between self-contained model saves and
+resumable training checkpoints, see [Reproducibility](reproducibility.md).
 
 Save and load trained models:
 
