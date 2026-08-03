@@ -22,9 +22,9 @@ import numpy as np
 from omegaconf import OmegaConf
 
 from jaxfads import XFADS, configure_logging
-from jaxfads.msteps import GaussianObservationMstep, MVNNoiseMstep
+from jaxfads.training import GaussianObservationMstep, MVNNoiseMstep
 from jaxfads.observations import GLM  # noqa: F401 (register GLM)
-from jaxfads.trainer import EpochHandler, train, train_test_split
+from jaxfads.training import EpochHandler, train, train_test_split
 
 # Import helpers from the VDP example (sibling directory).
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "examples"))

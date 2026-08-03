@@ -7,7 +7,7 @@ from jax import random as jrnd
 from omegaconf import OmegaConf
 
 import jaxfads.observations  # noqa: F401 — register GLM subclass
-from jaxfads.trainer import EpochHandler, train, train_test_split
+from jaxfads.training import EpochHandler, train, train_test_split
 
 
 def _sample_data():

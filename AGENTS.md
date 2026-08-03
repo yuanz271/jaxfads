@@ -42,7 +42,7 @@ jaxfads/
 | Approx posterior families | `src/jaxfads/distributions/` | currently `MVN` |
 | Observation models | `src/jaxfads/observations.py` | `GLM`, `Poisson`, `Gaussian` |
 | Encoders | `src/jaxfads/encoders.py` | `AlphaEncoder`, `BetaEncoder`; user-defined for NOFILT |
-| Training | `src/jaxfads/trainer.py` | `train()`, `batch_loss()`, `DEFAULT_TRAINER_CONFIG` |
+| Training | `src/jaxfads/training/` | `train()`, `batch_loss()`, `DEFAULT_TRAINER_CONFIG`, post-optimizer transforms |
 | Abstract interfaces | `src/jaxfads/base.py` | `Approx`, `Dynamics`, `Integrator`, `Observation`, `Encoder` |
 
 ## Core Design Notes

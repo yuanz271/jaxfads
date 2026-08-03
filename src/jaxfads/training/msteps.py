@@ -1,27 +1,16 @@
-"""Trainer-owned closed-form M-step policies."""
+"""Concrete trainer-owned closed-form M-step transformations."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from math import isfinite
-from typing import Any, Protocol
 
 import equinox as eqx
 import jax
 from jax import numpy as jnp
 
-from .constraints import _EPS, _MIN_VARIANCE, unconstrain_positive
-from .distributions.mvn import MVN
-
-
-class PostOptimizerTransform(Protocol):
-    """One ordered, trainer-owned model transformation."""
-
-    def initialize(self, model, *, key) -> Any: ...
-
-    def __call__(self, model, batch, forward, *, key) -> Any: ...
-
-    def frozen_paths(self, model) -> list[str]: ...
+from ..constraints import _EPS, _MIN_VARIANCE, unconstrain_positive
+from ..distributions.mvn import MVN
 
 
 def gaussian_observation_stat(t, y, moment, approx, readout):

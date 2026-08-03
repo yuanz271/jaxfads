@@ -16,7 +16,7 @@ stopping are epoch-level policy supplied via an `on_epoch_end` callback (see
 train/validation split.
 
 ```python
-from jaxfads.trainer import train
+from jaxfads.training import train
 
 trained_model = train(model, train_data, conf=trainer_conf)
 ```
@@ -242,12 +242,12 @@ final-epoch model and has no notion of "best".
 
 ### EpochHandler
 
-`jaxfads.trainer.EpochHandler` is a self-contained handler that bundles the common
+`jaxfads.training.EpochHandler` is a self-contained handler that bundles the common
 policy. You construct it with the validation set and read `best_model`
 afterwards:
 
 ```python
-from jaxfads.trainer import EpochHandler, train, train_test_split
+from jaxfads.training import EpochHandler, train, train_test_split
 import numpy as np
 
 train_data, valid_data = train_test_split(
@@ -278,11 +278,11 @@ EpochHandler is fully opt-in:
 ## Train/Validation Split
 
 The trainer does not split data. Split it yourself (the helper
-`jaxfads.trainer.train_test_split` is provided) and pass the validation set to
+`jaxfads.training.train_test_split` is provided) and pass the validation set to
 an `EpochHandler`:
 
 ```python
-from jaxfads.trainer import train_test_split
+from jaxfads.training import train_test_split
 import numpy as np
 
 train_data, valid_data = train_test_split(

@@ -25,10 +25,10 @@ from omegaconf import OmegaConf
 
 from jaxfads import XFADS, configure_logging
 from jaxfads.base import Dynamics
-from jaxfads.msteps import GaussianObservationMstep, MVNNoiseMstep
+from jaxfads.training import GaussianObservationMstep, MVNNoiseMstep
 from jaxfads.nn import make_mlp
 from jaxfads.observations import GLM  # noqa: F401 — registers GLM
-from jaxfads.trainer import EpochHandler, train, train_test_split
+from jaxfads.training import EpochHandler, train, train_test_split
 
 # ---------------------------------------------------------------------------
 # Van der Pol dynamics

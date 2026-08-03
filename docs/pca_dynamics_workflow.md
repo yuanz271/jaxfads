@@ -27,7 +27,7 @@ posterior is **dynamics-smoothed**, yielding more robust estimates.
 
 ```python
 from omegaconf import OmegaConf
-from jaxfads.msteps import MVNNoiseMstep
+from jaxfads.training import MVNNoiseMstep
 
 state_dim = 4       # PCA rank
 obs_dim = 50        # observation dimensionality
@@ -127,7 +127,7 @@ Trainable parameters are then only:
 import numpy as np
 import jax.random as jr
 from jaxfads import XFADS
-from jaxfads.trainer import EpochHandler, train, train_test_split
+from jaxfads.training import EpochHandler, train, train_test_split
 from jaxfads.observations import GLM  # noqa: F401
 
 train_data, valid_data = train_test_split(

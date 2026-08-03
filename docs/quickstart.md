@@ -11,7 +11,7 @@ import jax.random as jr
 import jax.numpy as jnp
 
 from jaxfads import XFADS
-from jaxfads.trainer import MVNNoiseMstep, GaussianObservationMstep, train
+from jaxfads.training import MVNNoiseMstep, GaussianObservationMstep, train
 
 # Ensure built-in subclasses are imported/registered as needed.
 from jaxfads.observations import GLM  # noqa: F401

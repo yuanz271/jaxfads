@@ -22,7 +22,7 @@ from omegaconf import OmegaConf
 from jaxfads import XFADS
 from jaxfads.base import Approx, Dynamics, Encoder, Observation
 from jaxfads.distributions import MVN
-from jaxfads.trainer import EpochHandler, train, train_test_split
+from jaxfads.training import EpochHandler, train, train_test_split
 
 
 class PCAEncoder(Encoder):

@@ -8,7 +8,7 @@ from omegaconf import OmegaConf
 
 import jaxfads.observations  # noqa: F401 — register GLM subclass
 from jaxfads.smoother import XFADS
-from jaxfads.trainer import train
+from jaxfads.training import train
 
 
 @pytest.fixture
