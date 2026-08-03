@@ -32,10 +32,15 @@ from omegaconf import OmegaConf
 
 from jaxfads import XFADS, configure_logging
 from jaxfads.base import Dynamics
-from jaxfads.training import GaussianObservationMstep, MVNNoiseMstep
 from jaxfads.nn import make_mlp
 from jaxfads.observations import GLM  # noqa: F401 -- registers GLM
-from jaxfads.training import EpochHandler, train, train_test_split
+from jaxfads.training import (
+    EpochHandler,
+    GaussianObservationMstep,
+    MVNNoiseMstep,
+    train,
+    train_test_split,
+)
 
 # ---------------------------------------------------------------------------
 # Lorenz simulation with known process noise, plus a linear-Gaussian
@@ -227,8 +232,6 @@ def main():
         "mc_size": 4,
         "seed": args.seed,
         "n_steps": args.n_steps,
-        "fb_penalty": 0.0,
-        "noise_penalty": 0.0,
         "dropout": 0.0,
         "dyn_conf": {"width": 64, "depth": 2, "input_dim": 0, "context_dim": 0,
                      "dt": DT},

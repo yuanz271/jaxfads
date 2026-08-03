@@ -23,9 +23,14 @@ import numpy as np
 from omegaconf import OmegaConf
 
 from jaxfads import XFADS, configure_logging
-from jaxfads.training import GaussianObservationMstep, MVNNoiseMstep
 from jaxfads.observations import GLM  # noqa: F401 (register GLM)
-from jaxfads.training import EpochHandler, train, train_test_split
+from jaxfads.training import (
+    EpochHandler,
+    GaussianObservationMstep,
+    MVNNoiseMstep,
+    train,
+    train_test_split,
+)
 
 
 def oscillator_bank_dynamics(z, u, c, *, omega=1.2, gamma=0.15, beta=0.02):
@@ -130,6 +135,10 @@ def main() -> None:
     dims = [int(s) for s in args.dims.split(",") if s.strip()]
     ranks = [int(s) for s in args.lora_ranks.split(",") if s.strip()]
     seeds = [int(s) for s in args.seeds.split(",") if s.strip()]
+    if any(dim <= 0 or dim % 2 for dim in dims):
+        p.error("--dims values must be positive even integers")
+    if any(rank < 0 for rank in ranks):
+        p.error("--lora-ranks values must be nonnegative")
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -212,8 +221,6 @@ def main() -> None:
                         "approx_kwargs": approx_kwargs,
                         "seed": seed,
                         "n_steps": args.n_steps,
-                        "fb_penalty": 0.0,
-                        "noise_penalty": 0.01,
                         "dropout": 0.0,
                         # Safe margin against the transition_points
                         # rank-deficiency warning (mc_size <= state_dim):

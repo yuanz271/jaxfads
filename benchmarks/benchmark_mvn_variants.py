@@ -22,13 +22,18 @@ import numpy as np
 from omegaconf import OmegaConf
 
 from jaxfads import XFADS, configure_logging
-from jaxfads.training import GaussianObservationMstep, MVNNoiseMstep
 from jaxfads.observations import GLM  # noqa: F401 (register GLM)
-from jaxfads.training import EpochHandler, train, train_test_split
+from jaxfads.training import (
+    EpochHandler,
+    GaussianObservationMstep,
+    MVNNoiseMstep,
+    train,
+    train_test_split,
+)
 
 # Import helpers from the VDP example (sibling directory).
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "examples"))
-from vdp_example import evaluate, simulate_vdp  # noqa: E402
+from vdp_example import evaluate, simulate_vdp
 
 
 def _build_data(*, n_trials: int, n_steps: int, dt: float, mu: float, obs_dim: int):
@@ -80,7 +85,6 @@ def main() -> None:
     parser.add_argument("--n-trials", type=int, default=64)
     parser.add_argument("--n-steps", type=int, default=300)
     parser.add_argument("--obs-dim", type=int, default=10)
-    parser.add_argument("--state-dim", type=int, default=2)
     parser.add_argument("--dt", type=float, default=0.04)
     parser.add_argument("--mu", type=float, default=2.0)
     parser.add_argument("--max-epoch", type=int, default=80)
@@ -99,6 +103,8 @@ def main() -> None:
 
     seeds = [int(s) for s in args.seeds.split(",") if s.strip()]
     lora_ranks = [int(s) for s in args.lora_ranks.split(",") if s.strip()]
+    if any(rank < 0 or rank > 2 for rank in lora_ranks):
+        parser.error("--lora-ranks values must satisfy 0 <= rank <= 2")
 
     data, latent, observations, c_true, b_true, sigma_obs = _build_data(
         n_trials=args.n_trials,
@@ -113,13 +119,11 @@ def main() -> None:
     base_conf = dict(
         mode="smooth",
         observation_dim=args.obs_dim,
-        state_dim=args.state_dim,
+        state_dim=2,
         dynamics="Functional",
         integrator="RK4",
         seed=0,
         n_steps=args.n_steps,
-        fb_penalty=0.0,
-        noise_penalty=0.01,
         dropout=0.0,
         mc_size=4,
         dyn_conf=dict(
