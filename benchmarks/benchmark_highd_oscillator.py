@@ -27,7 +27,6 @@ from jaxfads.observations import GLM  # noqa: F401 (register GLM)
 from jaxfads.training import (
     EpochHandler,
     GaussianObservationMstep,
-    MVNNoiseMstep,
     train,
     train_test_split,
 )
@@ -210,61 +209,58 @@ def main() -> None:
 
         for variant_name, approx_name, approx_kwargs, mc_size_override in variants:
             for seed in seeds:
-                conf = OmegaConf.create(
-                    {
-                        "mode": "smooth",
-                        "observation_dim": args.obs_dim,
-                        "state_dim": dim,
-                        "dynamics": "Functional",
-                        "integrator": "RK4",
-                        "approx": approx_name,
-                        "approx_kwargs": approx_kwargs,
-                        "seed": seed,
-                        "n_steps": args.n_steps,
+                conf = OmegaConf.create({
+                    "mode": "smooth",
+                    "observation_dim": args.obs_dim,
+                    "state_dim": dim,
+                    "dynamics": "Functional",
+                    "integrator": "RK4",
+                    "approx": approx_name,
+                    "approx_kwargs": approx_kwargs,
+                    "seed": seed,
+                    "n_steps": args.n_steps,
+                    "dropout": 0.0,
+                    # Safe margin against the transition_points
+                    # rank-deficiency warning (mc_size <= state_dim):
+                    # the MC spread term needs mc_size >= dim + 1 to be
+                    # full rank, scaled per dim rather than one fixed
+                    # value across the sweep. mc_size_override lets
+                    # specific variants (the deliberate "unsafe" MC
+                    # comparison point) opt out of this safety margin.
+                    "mc_size": (
+                        mc_size_override if mc_size_override is not None else dim + 1
+                    ),
+                    "dyn_conf": {
+                        "input_dim": 0,
+                        "context_dim": 0,
+                        "fn_path": "benchmark_highd_oscillator:oscillator_bank_dynamics",
+                        "fn_kwargs": {},
+                        "dt": args.dt,
+                    },
+                    "enc_conf": {
+                        "width": 64,
+                        "depth": 2,
+                        "dropout": None,
+                    },
+                    "obs_conf": {
+                        "model": "GLM",
+                        "likelihood": "Gaussian",
+                        "cov": [float(sigma_obs**2)] * args.obs_dim,
+                        "norm_readout": False,
                         "dropout": 0.0,
-                        # Safe margin against the transition_points
-                        # rank-deficiency warning (mc_size <= state_dim):
-                        # the MC spread term needs mc_size >= dim + 1 to be
-                        # full rank, scaled per dim rather than one fixed
-                        # value across the sweep. mc_size_override lets
-                        # specific variants (the deliberate "unsafe" MC
-                        # comparison point) opt out of this safety margin.
-                        "mc_size": (
-                            mc_size_override
-                            if mc_size_override is not None
-                            else dim + 1
-                        ),
-                        "dyn_conf": {
-                            "input_dim": 0,
-                            "context_dim": 0,
-                            "fn_path": "benchmark_highd_oscillator:oscillator_bank_dynamics",
-                            "fn_kwargs": {},
-                            "dt": args.dt,
-                        },
-                        "enc_conf": {
-                            "width": 64,
-                            "depth": 2,
-                            "dropout": None,
-                        },
-                        "obs_conf": {
-                            "model": "GLM",
-                            "likelihood": "Gaussian",
-                            "cov": [float(sigma_obs**2)] * args.obs_dim,
-                            "norm_readout": False,
-                            "dropout": 0.0,
-                            "readout_init_conf": {"obs_noise_var": float(sigma_obs**2)},
-                        },
-                    }
-                )
+                        "readout_init_conf": {"obs_noise_var": float(sigma_obs**2)},
+                    },
+                })
 
-                trainer_conf = OmegaConf.create(
-                    {
-                        "seed": seed,
-                        "learning_rate": 1e-3,
-                        "max_epoch": args.max_epoch,
-                        "batch_size": args.batch_size,
-                    }
-                )
+                trainer_conf = OmegaConf.create({
+                    "seed": seed,
+                    "learning_rate": 1e-3,
+                    "max_epoch": args.max_epoch,
+                    "batch_size": args.batch_size,
+                    "q_mstep": args.q_mstep,
+                    "q_scale": 0.1,
+                    "q_prior_fraction": 0.1,
+                })
 
                 train_data, valid_data = train_test_split(
                     data, rng=np.random.default_rng(0), test_size=args.batch_size
@@ -278,14 +274,7 @@ def main() -> None:
                     train_data,
                     conf=trainer_conf,
                     on_epoch_end=handler,
-                    post_optimizer_transforms=(
-                        GaussianObservationMstep(),
-                        *(
-                            (MVNNoiseMstep(q_scale=0.1),)
-                            if args.q_mstep
-                            else ()
-                        ),
-                    ),
+                    post_optimizer_transforms=(GaussianObservationMstep(),),
                 )
                 trained = handler.best_model
                 train_s = time.perf_counter() - t0
@@ -293,18 +282,16 @@ def main() -> None:
                 metrics = evaluate_model(trained, data, latent)
                 approx = trained.approx
 
-                raw_rows.append(
-                    {
-                        "state_dim": dim,
-                        "variant": variant_name,
-                        "seed": seed,
-                        "train_seconds": float(train_s),
-                        "natural_size": int(approx.param_size()),
-                        "encoder_free_size": int(approx.free_size()),
-                        "post_rmse": float(metrics["post_rmse"]),
-                        "obs_rmse": float(metrics["obs_rmse"]),
-                    }
-                )
+                raw_rows.append({
+                    "state_dim": dim,
+                    "variant": variant_name,
+                    "seed": seed,
+                    "train_seconds": float(train_s),
+                    "natural_size": int(approx.param_size()),
+                    "encoder_free_size": int(approx.free_size()),
+                    "post_rmse": float(metrics["post_rmse"]),
+                    "obs_rmse": float(metrics["obs_rmse"]),
+                })
 
     # aggregate
     groups: dict[tuple[int, str], list[dict]] = {}
@@ -315,21 +302,19 @@ def main() -> None:
     for (dim, variant), rows in sorted(
         groups.items(), key=lambda x: (x[0][0], x[0][1])
     ):
-        summary_rows.append(
-            {
-                "state_dim": dim,
-                "variant": variant,
-                "n_runs": len(rows),
-                "natural_size": rows[0]["natural_size"],
-                "encoder_free_size": rows[0]["encoder_free_size"],
-                "train_seconds_mean": mean_std(rows, "train_seconds")[0],
-                "train_seconds_std": mean_std(rows, "train_seconds")[1],
-                "post_rmse_mean": mean_std(rows, "post_rmse")[0],
-                "post_rmse_std": mean_std(rows, "post_rmse")[1],
-                "obs_rmse_mean": mean_std(rows, "obs_rmse")[0],
-                "obs_rmse_std": mean_std(rows, "obs_rmse")[1],
-            }
-        )
+        summary_rows.append({
+            "state_dim": dim,
+            "variant": variant,
+            "n_runs": len(rows),
+            "natural_size": rows[0]["natural_size"],
+            "encoder_free_size": rows[0]["encoder_free_size"],
+            "train_seconds_mean": mean_std(rows, "train_seconds")[0],
+            "train_seconds_std": mean_std(rows, "train_seconds")[1],
+            "post_rmse_mean": mean_std(rows, "post_rmse")[0],
+            "post_rmse_std": mean_std(rows, "post_rmse")[1],
+            "obs_rmse_mean": mean_std(rows, "obs_rmse")[0],
+            "obs_rmse_std": mean_std(rows, "obs_rmse")[1],
+        })
 
     raw_path = out_dir / "highd_oscillator_raw.json"
     summary_path = out_dir / "highd_oscillator_summary.json"

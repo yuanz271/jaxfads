@@ -11,15 +11,13 @@
   Monte Carlo behavior exactly, bit-for-bit. Real-data validation across
   `state_dim` 8/16/32 showed UT is never worse, and often better/cheaper,
   than Monte Carlo on posterior-RMSE. See `docs/transition_points.md`.
-* **Breaking:** M-step updates are now explicit, ordered trainer plugins:
-  pass `GaussianObservationMstep()` and/or
-  `MVNNoiseMstep(q_scale=..., q_prior_fraction=...)` to
-  `train(post_optimizer_transforms=...)`. An empty
-  `post_optimizer_transforms=()` is optimizer-only training. The MVN Q plugin owns both
-  `Q_init = q_scale I` and fractional Q-prior shrinkage, and initializes Q
-  before optimizer state creation. Model/component M-step APIs, epoch-local
-  M-step accumulation, top-level `q_scale`, `q_mstep`, and
-  `q_prior_fraction` configuration have been removed. See
+* **Breaking:** M-step updates are now trainer-owned post-optimizer
+  transformations. Gaussian R updates are selected with
+  `post_optimizer_transforms=(GaussianObservationMstep(),)`. The built-in MVN Q
+  policy is configured through serializable trainer fields `q_mstep`,
+  `q_scale`, and `q_prior_fraction`; when enabled, the trainer constructs and
+  initializes `MVNNoiseMstep` before optimizer state creation. Model/component
+  M-step APIs and epoch-local M-step accumulation have been removed. See
   `docs/training.md` and `docs/post_optimizer_transforms.md`.
 * Added `cuda12`/`cuda13` optional-dependency extras
   (`pip install jaxfads[cuda12]` or `jaxfads[cuda13]`) for one-step GPU

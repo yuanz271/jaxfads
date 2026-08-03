@@ -27,7 +27,6 @@ posterior is **dynamics-smoothed**, yielding more robust estimates.
 
 ```python
 from omegaconf import OmegaConf
-from jaxfads.training import MVNNoiseMstep
 
 state_dim = 4       # PCA rank
 obs_dim = 50        # observation dimensionality
@@ -103,6 +102,9 @@ trainer_conf = OmegaConf.create(
         "learning_rate": 1e-3,
         "max_epoch": 200,
         "batch_size": 32,
+        "q_mstep": True,
+        "q_scale": 1.0,
+        "q_prior_fraction": 0.1,
         "freeze_paths": [
             "observation.readout",
             "observation.likelihood",
@@ -141,7 +143,6 @@ train(
     train_data,
     conf=trainer_conf,
     on_epoch_end=handler,
-    post_optimizer_transforms=(MVNNoiseMstep(q_scale=1.0),),
 )
 trained = handler.best_model
 

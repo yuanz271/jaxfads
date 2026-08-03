@@ -14,10 +14,7 @@ train(
     model,
     data,
     conf=trainer_conf,
-    post_optimizer_transforms=(
-        GaussianObservationMstep(),
-        MVNNoiseMstep(q_scale=0.01, q_prior_fraction=1.0),
-    ),
+    post_optimizer_transforms=(GaussianObservationMstep(),),
 )
 ```
 
@@ -110,7 +107,9 @@ models without a Gaussian covariance parameter.
 ## MVN process-noise transform
 
 `MVNNoiseMstep(q_scale, q_prior_fraction)` owns the complete isotropic Q prior.
-Its initializer sets:
+It is enabled declaratively with `conf.q_mstep=True`; the trainer constructs it
+from serializable `conf.q_scale` and `conf.q_prior_fraction` values. The
+transform's initializer sets:
 
 $$
 Q_0 = Q_{\mathrm{init}} = q_{\mathrm{scale}} I.
@@ -138,8 +137,10 @@ $$
 
 It replaces `noise` and declares `noise` frozen from optimizer
 updates. `MVNNoiseMstep` requires the concrete `MVN` Approx representation;
-unsupported representations fail explicitly. Omitting this transform leaves
-Q optimizer-managed.
+unsupported representations fail explicitly. With `conf.q_mstep=False`, Q is
+optimizer-managed. Directly supplying `MVNNoiseMstep(...)` in
+`post_optimizer_transforms` remains available for custom composition, but the
+serializable trainer configuration is the reproducible built-in policy.
 
 ## One-step-lagged update and ownership
 

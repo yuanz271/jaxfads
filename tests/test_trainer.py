@@ -106,13 +106,15 @@ def model_conf():
     })
 
 
-def test_post_optimizer_transform_initialization_precedes_optimizer_init(
+def test_q_config_initialization_precedes_optimizer_init(
     gaussian_model_conf, trainer_config, gaussian_sample_data
 ):
-    """The optimizer receives the Q value installed by the selected transform."""
+    """The optimizer receives Q initialized from serializable trainer config."""
     model = XFADS(gaussian_model_conf, jrnd.key(0)).initialize(*gaussian_sample_data)
-    transform = MVNNoiseMstep(q_scale=0.25)
     expected_free = model.approx.free_from_kw(scale=0.25)
+    trainer_config.q_mstep = True
+    trainer_config.q_scale = 0.25
+    trainer_config.q_prior_fraction = 0.1
     seen = []
 
     def init_fn(params):
@@ -130,7 +132,6 @@ def test_post_optimizer_transform_initialization_precedes_optimizer_init(
         gaussian_sample_data,
         conf=trainer_config,
         optimizer=optax.GradientTransformation(init_fn, update_fn),
-        post_optimizer_transforms=(transform,),
     )
 
     assert len(seen) == 1

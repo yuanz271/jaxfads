@@ -45,6 +45,9 @@ Pass a `DictConfig` (or plain dict) as `conf`. Missing keys are filled from
 | `max_epoch` | `50` | Number of training epochs (always run in full unless a callback stops early) |
 | `batch_size` | `1` | Mini-batch size (must be divisible by device count) |
 | `seed` | `0` | Random seed for shuffling |
+| `q_scale` | `1.0` | Isotropic Q-prior scale used when `q_mstep` is enabled |
+| `q_prior_fraction` | `0.1` | Fractional Q-prior weight used when `q_mstep` is enabled |
+| `q_mstep` | `false` | Append the built-in `MVNNoiseMstep` using the Q settings above |
 | `freeze_paths` | `[]` | Optional list of dot-separated model attribute paths to freeze (e.g. `["noise"]`) |
 
 The default optimizer is **vanilla Adam** and `learning_rate` is its only
@@ -74,6 +77,9 @@ trainer_conf = OmegaConf.create(dict(
     learning_rate=5e-4,
     max_epoch=200,
     batch_size=64,
+    q_mstep=True,
+    q_scale=1.0,
+    q_prior_fraction=0.1,
 ))
 ```
 
@@ -201,12 +207,13 @@ every minibatch's existing **pre-SGD** ELBO forward pass, the plugin derives
 an R statistic from the same posterior moments and applies it after SGD,
 without an extra inference pass.
 
-The transition/process-noise covariance `Q` (`model.noise`) is
-initialized by `MVNNoiseMstep(q_scale=...)` before freeze-mask and optimizer
-state creation. That plugin owns the complete Q prior policy: its initializer
-sets `Q_init = q_scale * I`, and its additive MAP statistic uses the same
-`q_scale` with `q_prior_fraction`; `noise` is automatically frozen from
-SGD. Omit `MVNNoiseMstep` to leave `noise` SGD-managed.
+The transition/process-noise covariance `Q` (`model.noise`) is controlled by
+serializable trainer configuration. With `q_mstep=True`, the trainer appends
+`MVNNoiseMstep(q_scale=conf.q_scale,
+q_prior_fraction=conf.q_prior_fraction)` before freeze-mask and optimizer state
+creation. Its initializer sets `Q_init = q_scale * I`, and its additive MAP
+statistic uses the same `q_scale` with `q_prior_fraction`; `noise` is
+automatically frozen from SGD. With `q_mstep=False`, Q remains SGD-managed.
 
 All selected transforms consume the same immutable three-value forward output,
 then transform the post-optimizer model in explicit order.

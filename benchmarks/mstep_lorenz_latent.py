@@ -37,7 +37,6 @@ from jaxfads.observations import GLM  # noqa: F401 -- registers GLM
 from jaxfads.training import (
     EpochHandler,
     GaussianObservationMstep,
-    MVNNoiseMstep,
     train,
     train_test_split,
 )
@@ -110,8 +109,9 @@ class MLPDynamics(Dynamics):
 
     def __init__(self, conf, key):
         self.conf = conf
-        self.net = make_mlp(conf.state_dim, conf.state_dim, width=conf.width,
-                             depth=conf.depth, key=key)
+        self.net = make_mlp(
+            conf.state_dim, conf.state_dim, width=conf.width, depth=conf.depth, key=key
+        )
 
     def eval(self, z, u, c, *, key=None):
         del u, c, key
@@ -214,8 +214,13 @@ def main():
     key_data, key_model = jr.split(key)
 
     data, latent, c_true, b_true = build_dataset(
-        key_data, n_trials=args.n_trials, n_steps=args.n_steps, dt=DT,
-        q_true=args.q_true, obs_dim=args.obs_dim, sigma_obs=args.sigma_obs,
+        key_data,
+        n_trials=args.n_trials,
+        n_steps=args.n_steps,
+        dt=DT,
+        q_true=args.q_true,
+        obs_dim=args.obs_dim,
+        sigma_obs=args.sigma_obs,
     )
     train_data, valid_data = train_test_split(
         data, rng=np.random.default_rng(0), test_size=args.batch_size
@@ -233,12 +238,21 @@ def main():
         "seed": args.seed,
         "n_steps": args.n_steps,
         "dropout": 0.0,
-        "dyn_conf": {"width": 64, "depth": 2, "input_dim": 0, "context_dim": 0,
-                     "dt": DT},
+        "dyn_conf": {
+            "width": 64,
+            "depth": 2,
+            "input_dim": 0,
+            "context_dim": 0,
+            "dt": DT,
+        },
         "enc_conf": {"width": 64, "depth": 2, "dropout": None},
-        "obs_conf": {"model": "GLM", "likelihood": "Gaussian",
-                     "cov": [float(args.sigma_obs**2)] * args.obs_dim,
-                     "norm_readout": False, "dropout": 0.0},
+        "obs_conf": {
+            "model": "GLM",
+            "likelihood": "Gaussian",
+            "cov": [float(args.sigma_obs**2)] * args.obs_dim,
+            "norm_readout": False,
+            "dropout": 0.0,
+        },
     })
 
     def run(name, *, freeze_q, use_mstep):
@@ -247,9 +261,7 @@ def main():
         q_trace = []
 
         def on_epoch_end(m, info):
-            _, Q = approx.unpack(
-                approx.canon_to_moment(approx.free_to_canon(m.noise))
-            )
+            _, Q = approx.unpack(approx.canon_to_moment(approx.free_to_canon(m.noise)))
             q_trace.append(np.asarray(jnp.diag(Q)))
             return False
 
@@ -260,7 +272,9 @@ def main():
             return handler(m, info)
 
         trainer_conf = OmegaConf.create({
-            "seed": args.seed, "learning_rate": 1e-3, "max_epoch": args.max_epoch,
+            "seed": args.seed,
+            "learning_rate": 1e-3,
+            "max_epoch": args.max_epoch,
             "batch_size": args.batch_size,
         })
         if freeze_q:
@@ -273,36 +287,50 @@ def main():
         # used by the automatic MAP-Q comparison below.
         trained = train(model, train_data, conf=trainer_conf, on_epoch_end=combined_cb)
         if use_mstep:
-            q_diag_final = mstep_transition_diag(trained, train_data, approx, floor=1e-6)
+            q_diag_final = mstep_transition_diag(
+                trained, train_data, approx, floor=1e-6
+            )
             trained = eqx.tree_at(
                 lambda mm: mm.noise, trained, approx.free_from_kw(scale=q_diag_final)
             )
 
         print(f"\n=== {name} ===")
-        print("Q diag trace (per epoch, from training-time free param, "
-              "NOT the post-hoc mstep estimate):")
+        print(
+            "Q diag trace (per epoch, from training-time free param, "
+            "NOT the post-hoc mstep estimate):"
+        )
         for i, q in enumerate(q_trace):
             print(f"  epoch {i}: {q}")
         _, Q_final = approx.unpack(
             approx.canon_to_moment(approx.free_to_canon(trained.noise))
         )
-        print(f"Q_final diag (applied to model): {jnp.diag(Q_final)} (true={args.q_true})")
+        print(
+            f"Q_final diag (applied to model): {jnp.diag(Q_final)} (true={args.q_true})"
+        )
 
         t, y, u, c = data
         _, means, _ = trained(t, y, u, c, key=jr.key(123))
         means, _ = jax.vmap(jax.vmap(approx.unpack))(means)
         aff = procrustes_affine(latent.reshape(-1, 3), means.reshape(-1, 3))
 
-        eval_pts = latent.reshape(-1, 3)[:: max(1, latent.reshape(-1, 3).shape[0] // 2000)]
+        eval_pts = latent.reshape(-1, 3)[
+            :: max(1, latent.reshape(-1, 3).shape[0] // 2000)
+        ]
         rmse = flow_field_rmse(trained, aff, eval_pts)
-        print(f"flow-field RMSE vs true Lorenz one-step map (aligned, "
-              f"n_eval_pts={eval_pts.shape[0]}): {rmse:.5f}")
+        print(
+            f"flow-field RMSE vs true Lorenz one-step map (aligned, "
+            f"n_eval_pts={eval_pts.shape[0]}): {rmse:.5f}"
+        )
 
         aligned_means = align(aff, means)
         post_rmse = float(jnp.sqrt(jnp.mean((aligned_means - latent) ** 2)))
         print(f"posterior-mean RMSE (aligned) vs true latent: {post_rmse:.5f}")
-        return dict(name=name, q_final=np.asarray(jnp.diag(Q_final)),
-                    flow_rmse=rmse, post_rmse=post_rmse)
+        return dict(
+            name=name,
+            q_final=np.asarray(jnp.diag(Q_final)),
+            flow_rmse=rmse,
+            post_rmse=post_rmse,
+        )
 
     def run_alternating_em(name, *, n_rounds, epochs_per_round, prior, prior_dof_frac):
         """Q stays IN the ELBO/KL loss throughout (never frozen -- unlike
@@ -317,8 +345,10 @@ def main():
 
         for round_idx in range(n_rounds):
             trainer_conf = OmegaConf.create({
-                "seed": args.seed, "learning_rate": 1e-3,
-                "max_epoch": epochs_per_round, "batch_size": args.batch_size,
+                "seed": args.seed,
+                "learning_rate": 1e-3,
+                "max_epoch": epochs_per_round,
+                "batch_size": args.batch_size,
                 "freeze_paths": ["noise"],
             })
             model = train(model, train_data, conf=trainer_conf)
@@ -343,10 +373,14 @@ def main():
         means, _ = jax.vmap(jax.vmap(approx.unpack))(means)
         aff = procrustes_affine(latent.reshape(-1, 3), means.reshape(-1, 3))
 
-        eval_pts = latent.reshape(-1, 3)[:: max(1, latent.reshape(-1, 3).shape[0] // 2000)]
+        eval_pts = latent.reshape(-1, 3)[
+            :: max(1, latent.reshape(-1, 3).shape[0] // 2000)
+        ]
         rmse = flow_field_rmse(model, aff, eval_pts)
-        print(f"flow-field RMSE vs true Lorenz one-step map (aligned, "
-              f"n_eval_pts={eval_pts.shape[0]}): {rmse:.5f}")
+        print(
+            f"flow-field RMSE vs true Lorenz one-step map (aligned, "
+            f"n_eval_pts={eval_pts.shape[0]}): {rmse:.5f}"
+        )
 
         aligned_means = align(aff, means)
         post_rmse = float(jnp.sqrt(jnp.mean((aligned_means - latent) ** 2)))
@@ -359,14 +393,19 @@ def main():
         approx = model.approx
 
         trainer_conf = OmegaConf.create({
-            "seed": args.seed, "learning_rate": 1e-3,
-            "max_epoch": args.max_epoch, "batch_size": args.batch_size,
+            "seed": args.seed,
+            "learning_rate": 1e-3,
+            "max_epoch": args.max_epoch,
+            "batch_size": args.batch_size,
+            "q_mstep": True,
+            "q_scale": q_scale,
+            "q_prior_fraction": 0.1,
         })
         model = train(
             model,
             train_data,
             conf=trainer_conf,
-            post_optimizer_transforms=(GaussianObservationMstep(), MVNNoiseMstep(q_scale=q_scale)),
+            post_optimizer_transforms=(GaussianObservationMstep(),),
         )
 
         _, Q_final = approx.unpack(
@@ -380,23 +419,37 @@ def main():
         means, _ = jax.vmap(jax.vmap(approx.unpack))(means)
         aff = procrustes_affine(latent.reshape(-1, 3), means.reshape(-1, 3))
 
-        eval_pts = latent.reshape(-1, 3)[:: max(1, latent.reshape(-1, 3).shape[0] // 2000)]
+        eval_pts = latent.reshape(-1, 3)[
+            :: max(1, latent.reshape(-1, 3).shape[0] // 2000)
+        ]
         rmse = flow_field_rmse(model, aff, eval_pts)
-        print(f"flow-field RMSE vs true Lorenz one-step map (aligned, "
-              f"n_eval_pts={eval_pts.shape[0]}): {rmse:.5f}")
+        print(
+            f"flow-field RMSE vs true Lorenz one-step map (aligned, "
+            f"n_eval_pts={eval_pts.shape[0]}): {rmse:.5f}"
+        )
 
         aligned_means = align(aff, means)
         post_rmse = float(jnp.sqrt(jnp.mean((aligned_means - latent) ** 2)))
         print(f"posterior-mean RMSE (aligned) vs true latent: {post_rmse:.5f}")
-        return dict(name=name, q_final=np.asarray(jnp.diag(Q_final)),
-                    flow_rmse=rmse, post_rmse=post_rmse)
+        return dict(
+            name=name,
+            q_final=np.asarray(jnp.diag(Q_final)),
+            flow_rmse=rmse,
+            post_rmse=post_rmse,
+        )
 
-    result_a = run("A: joint gradient training (baseline)", freeze_q=False, use_mstep=False)
-    result_b = run("B: Q frozen + mstep_transition_stat (decoupled)", freeze_q=True, use_mstep=True)
+    result_a = run(
+        "A: joint gradient training (baseline)", freeze_q=False, use_mstep=False
+    )
+    result_b = run(
+        "B: Q frozen + mstep_transition_stat (decoupled)", freeze_q=True, use_mstep=True
+    )
     result_c = run_alternating_em(
         "C: alternating EM (Q in loss, MAP-shrunk rounds) -- prototype math",
-        n_rounds=5, epochs_per_round=max(1, args.max_epoch // 5),
-        prior=1.0, prior_dof_frac=0.1,
+        n_rounds=5,
+        epochs_per_round=max(1, args.max_epoch // 5),
+        prior=1.0,
+        prior_dof_frac=0.1,
     )
     result_d = run_train_integrated(
         "D: automatic accumulated epoch-local train() MAP-Q",
@@ -404,15 +457,23 @@ def main():
     )
 
     print("\n=== Summary ===")
-    header = (f"{'metric':<20}{'A (joint)':<20}{'B (mstep)':<20}"
-              f"{'C (prototype alt. EM)':<25}{'D (epoch MAP-Q)':<22}")
+    header = (
+        f"{'metric':<20}{'A (joint)':<20}{'B (mstep)':<20}"
+        f"{'C (prototype alt. EM)':<25}{'D (epoch MAP-Q)':<22}"
+    )
     print(header)
-    print(f"{'Q_final mean':<20}{result_a['q_final'].mean():<20.5f}{result_b['q_final'].mean():<20.5f}"
-          f"{result_c['q_final'].mean():<25.5f}{result_d['q_final'].mean():<22.5f}")
-    print(f"{'flow RMSE':<20}{result_a['flow_rmse']:<20.5f}{result_b['flow_rmse']:<20.5f}"
-          f"{result_c['flow_rmse']:<25.5f}{result_d['flow_rmse']:<22.5f}")
-    print(f"{'post RMSE':<20}{result_a['post_rmse']:<20.5f}{result_b['post_rmse']:<20.5f}"
-          f"{result_c['post_rmse']:<25.5f}{result_d['post_rmse']:<22.5f}")
+    print(
+        f"{'Q_final mean':<20}{result_a['q_final'].mean():<20.5f}{result_b['q_final'].mean():<20.5f}"
+        f"{result_c['q_final'].mean():<25.5f}{result_d['q_final'].mean():<22.5f}"
+    )
+    print(
+        f"{'flow RMSE':<20}{result_a['flow_rmse']:<20.5f}{result_b['flow_rmse']:<20.5f}"
+        f"{result_c['flow_rmse']:<25.5f}{result_d['flow_rmse']:<22.5f}"
+    )
+    print(
+        f"{'post RMSE':<20}{result_a['post_rmse']:<20.5f}{result_b['post_rmse']:<20.5f}"
+        f"{result_c['post_rmse']:<25.5f}{result_d['post_rmse']:<22.5f}"
+    )
 
 
 if __name__ == "__main__":

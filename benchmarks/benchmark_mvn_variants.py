@@ -26,7 +26,6 @@ from jaxfads.observations import GLM  # noqa: F401 (register GLM)
 from jaxfads.training import (
     EpochHandler,
     GaussianObservationMstep,
-    MVNNoiseMstep,
     train,
     train_test_split,
 )
@@ -61,7 +60,11 @@ def _variant_rows(rank_list: list[int]):
     # method (that's a different question, covered by
     # benchmarks/benchmark_highd_oscillator.py).
     rows = [
-        dict(name="DiagMVN", approx="MVN", approx_kwargs={"rank": 0, "use_sigma_points": False}),
+        dict(
+            name="DiagMVN",
+            approx="MVN",
+            approx_kwargs={"rank": 0, "use_sigma_points": False},
+        ),
         dict(name="FullMVN", approx="MVN", approx_kwargs={"use_sigma_points": False}),
     ]
     for r in rank_list:
@@ -149,6 +152,9 @@ def main() -> None:
         learning_rate=1e-3,
         max_epoch=args.max_epoch,
         batch_size=args.batch_size,
+        q_mstep=args.q_mstep,
+        q_scale=0.1,
+        q_prior_fraction=0.1,
     )
 
     train_data, valid_data = train_test_split(
@@ -160,14 +166,12 @@ def main() -> None:
 
     for variant in variants:
         for seed in seeds:
-            conf = OmegaConf.create(
-                {
-                    **base_conf,
-                    "seed": seed,
-                    "approx": variant["approx"],
-                    "approx_kwargs": variant["approx_kwargs"],
-                }
-            )
+            conf = OmegaConf.create({
+                **base_conf,
+                "seed": seed,
+                "approx": variant["approx"],
+                "approx_kwargs": variant["approx_kwargs"],
+            })
             model = XFADS(conf, jr.key(seed)).initialize(*train_data)
 
             t0 = time.perf_counter()
@@ -177,14 +181,7 @@ def main() -> None:
                 train_data,
                 conf=OmegaConf.create({**trainer_conf, "seed": seed}),
                 on_epoch_end=handler,
-                post_optimizer_transforms=(
-                    GaussianObservationMstep(),
-                    *(
-                        (MVNNoiseMstep(q_scale=0.1),)
-                        if args.q_mstep
-                        else ()
-                    ),
-                ),
+                post_optimizer_transforms=(GaussianObservationMstep(),),
             )
             trained = handler.best_model
             dt_train = time.perf_counter() - t0

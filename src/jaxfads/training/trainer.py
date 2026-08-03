@@ -34,16 +34,17 @@ from rich.progress import (
 
 from .. import vi
 from ..logging import get_logger
+from .msteps import MVNNoiseMstep
 
 __all__ = ["batch_loss", "train"]
 
 logger = get_logger(__name__)
 
 #: Default configuration for XFADS training hyperparameters.
-#: Contains the single default-optimizer setting (learning_rate), the training
-#: schedule (max_epoch, batch_size), and KL warm-up (kl_warmup_steps). The
-#: default optimizer is vanilla Adam; pass ``optimizer=`` to :func:`train` for
-#: anything else (gradient clipping, weight decay, custom schedules).
+#: Contains optimizer settings, training schedule, KL warm-up, and the
+#: serializable built-in Q policy. The default optimizer is vanilla Adam; pass
+#: ``optimizer=`` to :func:`train` for anything else (gradient clipping, weight
+#: decay, custom schedules).
 #: Validation, checkpointing, and early stopping are not part of training
 #: config; they live in handlers (see :class:`EpochHandler`).
 DEFAULT_TRAINER_CONFIG = DictConfig({
@@ -52,6 +53,9 @@ DEFAULT_TRAINER_CONFIG = DictConfig({
     "batch_size": 1,
     "seed": 0,
     "kl_warmup_steps": 0,
+    "q_scale": 1.0,
+    "q_prior_fraction": 0.1,
+    "q_mstep": False,
     # Optional list of dot-separated attribute paths to freeze.
     # Example: ["noise", "unconstrained_prior_natural"]
     "freeze_paths": [],
@@ -225,9 +229,7 @@ def batch_loss(
     """
     key, model_key = jr.split(key)
     key, elbo_key = jr.split(key)
-    loss, _forward = _loss_and_forward(
-        model, batch, model_key, elbo_key, beta=beta
-    )
+    loss, _forward = _loss_and_forward(model, batch, model_key, elbo_key, beta=beta)
     return loss
 
 
@@ -630,6 +632,10 @@ def train(
         is then ignored. ``conf.freeze_paths`` is still applied on top.
     post_optimizer_transforms : Sequence[PostOptimizerTransform], optional
         Ordered trainer-owned model transformations. Defaults to ``()``.
+        When ``conf.q_mstep`` is true, the trainer appends its built-in
+        ``MVNNoiseMstep`` after these transforms using ``conf.q_scale`` and
+        ``conf.q_prior_fraction``. Do not also pass an explicit
+        ``MVNNoiseMstep`` when ``q_mstep`` is enabled.
     param_schedule : Callable or None, optional
         Optional ``param_schedule(model, step) -> model`` applied at the start
         of every step (before the loss/gradient computation), for driving a
@@ -647,6 +653,14 @@ def train(
         The final-epoch model.
     """
     conf = OmegaConf.merge(DEFAULT_TRAINER_CONFIG, conf)
+    post_optimizer_transforms = tuple(post_optimizer_transforms)
+    if conf.q_mstep:
+        post_optimizer_transforms += (
+            MVNNoiseMstep(
+                q_scale=conf.q_scale,
+                q_prior_fraction=conf.q_prior_fraction,
+            ),
+        )
 
     t0 = time.perf_counter()
 

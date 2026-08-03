@@ -114,20 +114,19 @@ Invariant for callers:
   - `trainer_conf.freeze_paths: list[str]` (dot-separated model attribute paths,
     e.g. `["noise"]`); applied on top of the default or a supplied
     optimizer.
-- M-step policy is trainer-owned and explicit: pass ordered
-  `post_optimizer_transforms` to `train()`. An empty
-  `post_optimizer_transforms=()` is optimizer-only training with no
-  transform-owned freeze paths.
-  `GaussianObservationMstep()` owns the Gaussian R update.
-  `MVNNoiseMstep(q_scale=..., q_prior_fraction=...)` owns both the isotropic
-  Q-prior initializer (`Q_init = q_scale I`) and its fractional Q update; it
-  initializes `noise` before freeze-mask and optimizer-state creation, then
-  freezes that array. Omitting `MVNNoiseMstep` leaves Q SGD-managed.
+- M-step policy is trainer-owned and serializable: `trainer_conf.q_mstep`,
+  `trainer_conf.q_scale`, and `trainer_conf.q_prior_fraction` configure the
+  built-in Q transform. `q_mstep=false` leaves Q optimizer-managed; when true,
+  the trainer constructs `MVNNoiseMstep` before freeze-mask and optimizer-state
+  creation, initializes `noise`, applies the fractional Q update, and freezes
+  that array. Ordered `post_optimizer_transforms` remains the extension point
+  for R and custom transformations. An empty tuple with `q_mstep=false` is
+  optimizer-only training.
 - Each batch uses one pre-SGD inference forward for loss, gradients, and the
   selected plugins' statistics; plugins update the post-SGD model with no
   extra inference pass. Model/component M-step APIs are unsupported.
-- `state_noise`, `noise_prior`, `noise_prior_dof`, `q_mstep`, and model-level
-  `q_scale`/`q_prior_fraction` are unsupported.
+- `state_noise`, `noise_prior`, and `noise_prior_dof` are unsupported. Q
+  policy fields belong to the serializable trainer config, not the model config.
 - No built-in covariance-based noise regularization is applied by default.
 
 ## Testing Workflow

@@ -11,7 +11,7 @@ import jax.random as jr
 import jax.numpy as jnp
 
 from jaxfads import XFADS
-from jaxfads.training import MVNNoiseMstep, GaussianObservationMstep, train
+from jaxfads.training import GaussianObservationMstep, train
 
 # Ensure built-in subclasses are imported/registered as needed.
 from jaxfads.observations import GLM  # noqa: F401
@@ -66,6 +66,9 @@ trainer_conf = OmegaConf.create(
         "learning_rate": 1e-3,
         "max_epoch": 50,
         "batch_size": 16,
+        "q_mstep": True,
+        "q_scale": 1.0,
+        "q_prior_fraction": 0.1,
         "freeze_paths": [],
     }
 )
@@ -76,10 +79,7 @@ trained = train(
     model,
     data,
     conf=trainer_conf,
-    post_optimizer_transforms=(
-        GaussianObservationMstep(),
-        MVNNoiseMstep(q_scale=1.0, q_prior_fraction=0.1),
-    ),
+    post_optimizer_transforms=(GaussianObservationMstep(),),
 )
 
 natural_params, moment_params, predictions = trained(
