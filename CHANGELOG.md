@@ -18,7 +18,7 @@
   `q_scale`, and `q_prior_fraction`; when enabled, the trainer constructs and
   initializes `MVNNoiseMstep` before optimizer state creation. Model/component
   M-step APIs and epoch-local M-step accumulation have been removed. See
-  `docs/training.md` and `docs/post_optimizer_transforms.md`.
+  `docs/training.md`.
 * Added `cuda12`/`cuda13` optional-dependency extras
   (`pip install jaxfads[cuda12]` or `jaxfads[cuda13]`) for one-step GPU
   installs; the base `jax` dependency stays CPU-only. The two extras are

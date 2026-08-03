@@ -121,5 +121,4 @@ conditioning and point geometry.
 - Process noise remains part of `Approx.predictive_moment`, not the point
   selection policy.
 
-See also: [Design](design.md) and
-[post-optimizer transforms](post_optimizer_transforms.md).
+See also: [Design](design.md) and [Training](training.md).

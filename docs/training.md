@@ -196,32 +196,145 @@ encoding is typically nonlinear (e.g. a sqrt or inverse-softplus transform),
 so interpolating free-form values directly traces a different, distorted path
 through the intended constrained space.
 
-## Trainer-owned Observation-Noise and Transition-Noise Updates (`post_optimizer_transforms`)
+## Post-optimizer transforms
 
-For a Gaussian-likelihood model, the observation noise covariance `R` is
-driven by a closed-form EM M-step instead of gradient descent, avoiding a
-Heywood-case degeneracy that plain gradient-based MLE of `R` is prone to
-(see [`post_optimizer_transforms`](post_optimizer_transforms.md) for the full specification).
-Select the R policy explicitly with `GaussianObservationMstep()`. During
-every minibatch's existing **pre-SGD** ELBO forward pass, the plugin derives
-an R statistic from the same posterior moments and applies it after SGD,
-without an extra inference pass.
+Post-optimizer transforms are trainer-owned model transformations applied after
+one optimizer update. Gaussian observation-noise and MVN process-noise updates
+are the initial implementations; the interface is not limited to EM-style
+M-steps.
+
+### Training order
+
+Each batch follows this order:
+
+1. Run one model forward pass while evaluating the loss.
+2. Differentiate the scalar loss and obtain optimizer gradients.
+3. Apply the single Optax optimizer transformation.
+4. Apply each `post_optimizer_transforms` item in sequence.
+
+The optimizer is typically gradient-based, but the contract does not require
+that assumption. Transforms are model-level operations, not a second optimizer.
+
+### Loss and forward contract
+
+The differentiated function returns a scalar loss and the forward output as
+auxiliary data:
+
+```python
+def loss_and_forward(model):
+    forward = model(t, y, u, c, key=forward_key)
+    loss = ...
+    return loss, forward
+
+(loss, forward), grads = eqx.filter_value_and_grad(
+    loss_and_forward,
+    has_aux=True,
+)(model)
+```
+
+`grads` is the gradient of scalar `loss` only. The forward output is carried as
+auxiliary data for the transforms. The model forward contract is exactly:
+
+```python
+natural, moment, predictive_moment = model(t, y, u, c, key=key)
+```
+
+Transforms consume these outputs and must not invoke the model themselves. No
+fourth transition-statistic output or M-step-specific forward bundle is part
+of the interface.
+
+### Transform interface
+
+A transform may initialize model state, update the post-optimizer model, and
+declare model leaves that the optimizer must not update:
+
+```python
+class PostOptimizerTransform(Protocol):
+    def initialize(self, model, *, key):
+        ...
+
+    def __call__(self, model, batch, forward, *, key):
+        ...
+
+    def frozen_paths(self, model) -> list[str]:
+        ...
+```
+
+`initialize()` runs for each selected transform before freeze-mask
+construction and optimizer initialization. This ensures that optimizer state
+is built from the actual initialized parameter arrays. `frozen_paths()`
+returns fully qualified, root-relative paths such as `"noise"`; the trainer
+combines these with `conf.freeze_paths`.
+
+`post_optimizer_transforms=()` performs ordinary optimizer-managed training:
+there are no transform initializers, transform-owned freeze paths, or
+post-optimizer model updates.
+
+### Gaussian observation-noise update
+
+For a Gaussian-likelihood model, `GaussianObservationMstep` updates only the
+diagonal observation covariance `R`. For posterior mean and covariance from
+`moment`, readout `C`, and observations `y`, it computes:
+
+$$
+R_d = \operatorname{mean}_{n,t}
+\left[
+(y_{n,t,d} - E[Cz_{n,t}]_d)^2
++ \operatorname{diag}\left(C\operatorname{Cov}(z_{n,t})C^\mathsf{T}\right)_d
+\right].
+$$
+
+The transform replaces `observation.likelihood.unconstrained_cov` and
+declares that root-relative path frozen from optimizer updates. It is a no-op
+for likelihood models without a Gaussian covariance parameter. During every
+minibatch's existing pre-optimizer ELBO forward pass, it derives the statistic
+from the same posterior moments and applies it after the optimizer, without an
+extra inference pass.
+
+### MVN process-noise update
 
 The transition/process-noise covariance `Q` (`model.noise`) is controlled by
 serializable trainer configuration. With `q_mstep=True`, the trainer appends
-`MVNNoiseMstep(q_scale=conf.q_scale,
-q_prior_fraction=conf.q_prior_fraction)` before freeze-mask and optimizer state
-creation. Its initializer sets `Q_init = q_scale * I`, and its additive MAP
-statistic uses the same `q_scale` with `q_prior_fraction`; `noise` is
-automatically frozen from SGD. With `q_mstep=False`, Q remains SGD-managed.
+`MVNNoiseMstep` using `conf.q_scale` and `conf.q_prior_fraction` before
+freeze-mask and optimizer-state creation. Its initializer sets:
+
+$$
+Q_0 = Q_{\mathrm{init}} = q_{\mathrm{scale}} I.
+$$
+
+On each transform call, it reconstructs the noise-free predictive covariance
+for the current MVN representation by subtracting the Q that produced the
+predictive output:
+
+$$
+P_f = P_{\mathrm{pred}} - Q.
+$$
+
+Using posterior covariance, noise-free predictive covariance, and transition
+mean residuals, it forms the residual covariance estimate $\widehat Q$ and
+applies:
+
+$$
+Q_{\mathrm{new}}
+= \frac{\widehat Q + \alpha Q_0}{1 + \alpha},
+\qquad
+\alpha = \texttt{q\_prior\_fraction}.
+$$
+
+It replaces `noise` and declares `noise` frozen from optimizer updates. The
+built-in transform requires the concrete MVN approximation; unsupported
+representations fail explicitly. With `q_mstep=False`, Q remains
+optimizer-managed.
+
+### Ordering and lagged statistics
 
 All selected transforms consume the same immutable three-value forward output,
-then transform the post-optimizer model in explicit order.
-`post_optimizer_transforms=()` is optimizer-only training with no
-transform-owned freeze paths. The accepted one-step lag means R
-reconstructs deterministic readout quantities from posterior moments and the
-post-SGD readout state; no additional forward output or inference pass is
-introduced.
+then transform the post-optimizer model in explicit order. Statistics come
+from the pre-optimizer forward output but are applied to the post-optimizer
+model. In particular, the Gaussian transform reconstructs readout quantities
+from posterior moments and the current post-optimizer readout state. This
+accepted one-step-lagged approximation avoids a second inference pass and keeps
+the forward-output contract minimal.
 
 ## Multi-Device Training
 
