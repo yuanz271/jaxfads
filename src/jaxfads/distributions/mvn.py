@@ -506,8 +506,9 @@ def _unscented_transition_points(
     Standalone, composable, independently testable -- ``MVN.
     transition_points`` merely delegates to it when ``use_sigma_points=True``.
     Ignores ``key`` and ``mc_size`` (point count is always ``2*dim + 1``, not
-    ``mc_size``-controlled). See ``docs/transition_points.md`` for the
-    derivation and the reasoning behind using a single weight set (no
+    ``mc_size``-controlled). See
+    ``docs/algorithm.md#transition-point-propagation`` for the derivation and
+    the reasoning behind using a single weight set (no
     separate covariance/``beta`` weights) and the ``alpha=1.0, kappa=0.0``
     default (chosen for float32 numerical stability, not the smaller
     ``alpha`` common in the UKF literature).

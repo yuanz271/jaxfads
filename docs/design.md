@@ -127,7 +127,7 @@ Quick reference (public API):
 | `free_size()` | `() → int` | Size of encoder free-form output vector (defaults to `param_size()`). |
 | `free_to_natural(free)` | `free → natural` | Convert free-form output into an additive natural update. |
 | `sample_by_moment(key, moment, n)` | `moment → samples` | Sampling from the distribution parameterized by `moment`. |
-| `transition_points(key, moment, mc_size)` | `moment → (points, weights)` | Representative points/weights for propagation through the transition (defaults to plain Monte Carlo via `sample_by_moment`; `MVN` overrides with deterministic unscented-transform sigma points by default — see `docs/transition_points.md`). |
+| `transition_points(key, moment, mc_size)` | `moment → (points, weights)` | Representative points/weights for prediction-step propagation; see [Algorithm](algorithm.md#transition-point-propagation). |
 | `predictive_moment(z, noise)` | `(z, noise) → moment` | Computes a noise-included conditional moment. |
 | `kl(moment1, moment2)` | `moment × moment → scalar` | KL between two distributions. |
 

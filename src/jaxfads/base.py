@@ -32,7 +32,7 @@ def _monte_carlo_transition_points(
     transition_points`` merely delegates to it. Warns when ``mc_size`` is
     small enough relative to the ambient state dimension that the
     between-sample "spread" term is rank-deficient (see
-    ``docs/transition_points.md``).
+    ``docs/algorithm.md#transition-point-propagation``).
     """
     points = approx.sample_by_moment(key, moment, mc_size)
     dim = points.shape[-1]  # ambient state dim, read off sample_by_moment's
@@ -200,7 +200,7 @@ class Approx(SubclassRegistryMixin, ABC):
         (today's behavior, bit-for-bit). Approximations may override this
         with a deterministic point set (e.g. unscented-transform sigma
         points) -- see ``MVN(use_sigma_points=True)`` and
-        ``docs/transition_points.md``.
+        ``docs/algorithm.md#transition-point-propagation``.
         """
         return _monte_carlo_transition_points(self, key, moment, mc_size)
 

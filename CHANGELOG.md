@@ -10,7 +10,8 @@
   propagation step); `MVN(use_sigma_points=False)` restores the previous
   Monte Carlo behavior exactly, bit-for-bit. Real-data validation across
   `state_dim` 8/16/32 showed UT is never worse, and often better/cheaper,
-  than Monte Carlo on posterior-RMSE. See `docs/transition_points.md`.
+  than Monte Carlo on posterior-RMSE. See the prediction-step propagation
+  section in `docs/algorithm.md`.
 * **Breaking:** M-step updates are now trainer-owned post-optimizer
   transformations. Gaussian R updates are selected with
   `post_optimizer_transforms=(GaussianObservationMstep(),)`. The built-in MVN Q

@@ -304,7 +304,7 @@ def test_expected_predictive_moment_all_invalid(diag):
 
 
 def test_transition_points_unscented_exact_for_linear_transition():
-    """Discriminative test for docs/transition_points.md: for a linear
+    """Discriminative test for the transition-point propagation policy: for a linear
     transition, the unscented transform's predicted mean/covariance
     exactly matches the true linear-Gaussian pushforward
     (mean_true = A @ mean + b, cov_true = A @ cov @ A.T + Q); plain MC at

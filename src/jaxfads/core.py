@@ -103,7 +103,8 @@ def expected_predictive_moment(
     Compute expected predictive moment via a weighted point set from
     ``approx.transition_points`` (default: Monte Carlo; some ``Approx``
     implementations may override with a deterministic point set, e.g.
-    unscented-transform sigma points -- see ``docs/transition_points.md``).
+    unscented-transform sigma points -- see
+    ``docs/algorithm.md#transition-point-propagation``).
 
     Implements Eq (12): ``μ̄_t = E_{π(z_{t-1})}[μ_θ(z_{t-1})]``
     where ``μ_θ`` is the predictive moment function (Eq 4)
