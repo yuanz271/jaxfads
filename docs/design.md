@@ -125,10 +125,8 @@ Quick reference (public API):
 | `free_to_natural(free)` | `free → natural` | Convert free-form output into an additive natural update. |
 | `sample_by_moment(key, moment, n)` | `moment → samples` | Sampling from the distribution parameterized by `moment`. |
 | `transition_points(key, moment, mc_size)` | `moment → (points, weights)` | Representative points/weights for propagation through the transition (defaults to plain Monte Carlo via `sample_by_moment`; `MVN` overrides with deterministic unscented-transform sigma points by default — see `docs/transition_points.md`). |
-| `predictive_moment(z, noise)` | `(z, noise) → moment` | Computes a noise-included predictive moment. M-step plugins may reconstruct strategy-specific statistics from the three forward outputs. |
+| `predictive_moment(z, noise)` | `(z, noise) → moment` | Computes a noise-included conditional moment. |
 | `kl(moment1, moment2)` | `moment × moment → scalar` | KL between two distributions. |
-| `predictive_moment(z, noise)` | `(z, noise) → moment` | Conditional moment parameters `E[T(z_t) | z_{t-1}]`. |
-| `MVNNoiseMstep` | `(model, batch, forward) → model` | Trainer-owned Q initialization and fractional MAP update. It reconstructs noise-free predictive covariance from `predictive_moment - Q`; it is not an Approx or XFADS method. |
 
 ### Initialization
 

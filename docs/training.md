@@ -8,7 +8,7 @@ See also: [Quickstart](quickstart.md), [Dynamics](dynamics.md),
 ## Overview
 
 Training maximises the Evidence Lower Bound (ELBO) over mini-batches using
-Optax optimizers, with multi-device data parallelism and gradient clipping.
+Optax optimizers and multi-device data parallelism.
 The trainer is a pure mechanism: it runs the full `max_epoch` and returns the
 final-epoch model. Validation, checkpointing, best-model tracking, and early
 stopping are epoch-level policy supplied via an `on_epoch_end` callback (see
@@ -160,10 +160,10 @@ the loss is evaluated on and what persists in the returned model. It is a
 general mechanism — the trainer only calls the function and does not
 interpret what it changes.
 
-Do **not** schedule `noise` while `MVNNoiseMstep` is selected. That
-plugin owns Q and would overwrite a scheduled value. With `post_optimizer_transforms=()`, Q is
-SGD-managed and may be scheduled explicitly if the path is also frozen from
-optimizer updates.
+Do **not** schedule `noise` while `MVNNoiseMstep` is selected. That plugin
+owns Q and would overwrite a scheduled value. With
+`post_optimizer_transforms=()`, Q is SGD-managed and may be scheduled
+explicitly if the path is also frozen from optimizer updates.
 
 **`freeze_paths` is required, not optional, when using `param_schedule`.**
 Without it, the optimizer's own gradient-based update (plus gradient noise

@@ -47,28 +47,26 @@ paper's method.
   transition/process noise (`Q`)**: the trainer-owned
   `GaussianObservationMstep` and `MVNNoiseMstep` provide an opt-in alternative
   to the paper's joint-gradient-descent treatment of `R`/`Q`. `R` and `Q` are
-  independently selected through `train(..., post_optimizer_transforms=...)`; Q initialization
-  and prior shrinkage are owned by `MVNNoiseMstep(q_scale=...,
-  q_prior_fraction=...)`. This is
+  independently selected through
+  `train(..., post_optimizer_transforms=...)`; Q initialization and prior
+  shrinkage are owned by `MVNNoiseMstep(q_scale=..., q_prior_fraction=...)`.
+  This is
   narrower than the classical vEM the paper considers and rejects: only
   `R`/`Q` are ever updated this way, never `θ`/`ψ`/`φ` as a whole, and
   gradient descent on the remaining parameters continues throughout
-  (`Q`, in particular, stays "in the loss" -- see
-  the post-optimizer transform specification's "Required safeguards" -- scaling `f`'s
-  gradient by `1/Q` even while `Q` itself is closed-form-updated, not
-  decoupled the way a literal M-step's generative-model-only phase would
-  imply).
+  (`Q`, in particular, stays "in the loss" while the transform updates its
+  stored value after the optimizer step, rather than decoupling the dynamics
+  objective as a literal generative-model-only M-step would).
 - **Motivation, not paper fidelity**: these mechanisms exist because
   joint gradient descent on `R`/`Q` was empirically found to have real
   failure modes in this codebase's own testing -- a Heywood-case
   degeneracy for `R` (a component's fitted covariance reaching the
   numerical floor while its true residual variance was ~10⁶x larger, a
-  known failure mode of factor-analysis-structured joint MLE, documented
-  in `Gaussian.mstep_stat`'s docstring) and, for `Q`, an empirically
+  known failure mode of factor-analysis-structured joint MLE, addressed by
+  the trainer's Gaussian observation transform) and, for `Q`, an empirically
   dominant overestimation tendency under joint MLE plus better
-  downstream dynamics-accuracy from MAP-shrunk alternating updates
-  (the post-optimizer transform design's safeguards section, both known-`z` and
-  latent-`z` Lorenz experiments). The paper does not report or address
+  downstream dynamics-accuracy from MAP-shrunk updates. The paper does not
+  report or address
   either failure mode; these mechanisms are this codebase's own response
   to them, not a paper-parity gap.
 
