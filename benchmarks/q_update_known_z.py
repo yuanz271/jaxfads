@@ -22,7 +22,7 @@ against the TRUE Lorenz vector field on a held-out grid, not Q's value.
 Q's recovered value is reported as a diagnostic only.
 
 Run with:
-    JAX_PLATFORMS=cpu uv run python benchmarks/mstep_known_z_baseline.py
+    JAX_PLATFORMS=cpu uv run python benchmarks/q_update_known_z.py
 """
 
 from __future__ import annotations

@@ -1,6 +1,6 @@
 """Latent-z case for the post-optimizer transform design's Q update -- a real XFADS
 model doing posterior inference, not the known-z clean baseline
-(benchmarks/mstep_known_z_baseline.py).
+(benchmarks/q_update_known_z.py).
 
 Simulates synthetic Lorenz trajectories with a KNOWN Q_true injected into
 the latent dynamics and a linear-Gaussian observation model, trains XFADS
@@ -14,7 +14,7 @@ and reports:
   (avoids curse-of-dimensionality issues a 2D-style grid would have in 3D).
 
 Run with:
-    JAX_PLATFORMS=cpu uv run python benchmarks/mstep_lorenz_latent.py
+    JAX_PLATFORMS=cpu uv run python benchmarks/q_update_lorenz_latent.py
 """
 
 from __future__ import annotations
@@ -321,7 +321,7 @@ def main():
         """Q stays IN the ELBO/KL loss throughout (never frozen -- unlike
         condition B), but is updated between rounds via a MAP-shrunk
         mstep_transition_stat estimate instead of free gradient descent.
-        Matches Approach C's design in benchmarks/mstep_known_z_baseline.py."""
+        Matches Approach C's design in benchmarks/q_update_known_z.py."""
         model = XFADS(conf, key_model).initialize(*train_data)
         approx = model.approx
         n_pairs = train_data[0].shape[0] * (train_data[0].shape[1] - 1)
