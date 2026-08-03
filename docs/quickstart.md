@@ -116,4 +116,4 @@ natural_params, moment_params, predictions = trained(
 - [Training Configuration](training.md)
 - [Algorithm Overview](algorithm.md)
 - [Paper Parity Review](paper_parity_2403_01371.md)
-- [Learning Dynamics from PCA Coordinates](pca_dynamics_workflow.md)
+- [PCA dynamics verification](../benchmarks/pca_dynamics_verification.md)

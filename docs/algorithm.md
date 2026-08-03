@@ -271,6 +271,26 @@ with shapes `(N, T, param_dim)`, `(N, T, param_dim)`, `(N, T, param_dim)`.
 | `filter` | `alpha` | filtering natural parameters (`λ̆_t`) |
 | `smooth` | `alpha + beta` | smoothing-side natural parameters (`λ_t`) |
 | `causal` | `alpha`, `beta` | reconstructed smoothing natural parameters (`λ_t = λ̆_t + b_t`) |
+| `nofilt` | custom encoder | posterior moments set directly from encoder outputs; no filtering recursion |
+
+## NOFILT inference
+
+`mode="nofilt"` bypasses the sequential filtering recursion. A user-defined
+encoder maps each observation to a latent point estimate. The framework wraps
+the estimate as a small-covariance approximation, computes dynamics predictions
+in parallel, and uses the same three-value forward contract as the filtering
+modes:
+
+```python
+natural, moment, predictive_moment = model(t, y, u, c, key=key)
+```
+
+The encoder is responsible for defining the latent coordinates. No beta encoder
+is constructed, and dynamics are trained through the predictive objective
+rather than through a filtering recursion. The approximation must support
+packing a point and covariance into its moment representation; the covariance
+scale is an explicit inference setting. This mode is useful for pretrained
+representations such as PCA or autoencoders, but the semantics are general.
 
 ## End-to-End Learning (Algorithm 1)
 
