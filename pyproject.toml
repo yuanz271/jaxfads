@@ -72,6 +72,11 @@ preview = true
 ignore = ["E501", "F722"]
 extend-select = ["FURB"]
 
+[tool.pytest.ini_options]
+markers = [
+    "integration: opt-in end-to-end integration tests",
+]
+
 [tool.numpydoc_validation]
 checks = ["GL01", "SS02", "PR01", "PR10", "RT01"]
 override_GL01 = "See base class"
