@@ -38,46 +38,6 @@ from ..base import Approx
 from ..constraints import _EPS, constrain_positive, unconstrain_positive
 
 
-def _weighted_moments(zs: Array, weights: Array) -> tuple[Array, Array]:
-    """Non-finite-safe weighted mean and covariance of a raw point set.
-
-    This helper remains available for distribution-specific transition-point
-    calculations, but is not part of the model forward-output contract.
-
-    ``zs`` : shape ``(n_points, dim)``, ``weights`` : shape ``(n_points,)``,
-    summing to 1 by convention (not required to be nonnegative, so this
-    also works for signed unscented-transform weights).
-
-    Any point containing NaN/Inf is masked out (its weight zeroed) before
-    the weighted reduction. If every point is non-finite, both outputs are
-    themselves non-finite.
-
-    Returns
-    -------
-    mean : Array, shape (dim,)
-    cov : Array, shape (dim, dim)
-        The weighted covariance about ``mean`` (not about any other
-        reference point).
-    """
-    dim = zs.shape[-1]
-    valid = jnp.all(jnp.isfinite(zs), axis=-1)
-    safe = jnp.where(valid[:, None], zs, 0.0)
-    w_valid = jnp.where(valid, weights, 0.0)
-    w_sum = jnp.sum(w_valid)
-    mean = jnp.where(
-        w_sum > 0,
-        jnp.sum(w_valid[:, None] * safe, axis=0) / w_sum,
-        jnp.full((dim,), jnp.nan, dtype=zs.dtype),
-    )
-    centered = safe - mean
-    cov = jnp.where(
-        w_sum > 0,
-        jnp.einsum("i,ij,ik->jk", w_valid, centered, centered) / w_sum,
-        jnp.full((dim, dim), jnp.nan, dtype=zs.dtype),
-    )
-    return mean, cov
-
-
 class _Layout(NamedTuple):
     """Internal MVN layout helper.
 
@@ -170,19 +130,6 @@ def _unconstrain_chol_full(chol: Array) -> Array:
     diag = jnp.diag(tril)
     diag_free = unconstrain_positive(diag)
     return tril - jnp.diag(diag) + jnp.diag(diag_free)
-
-
-def _constrain_chol_diag(diag_free: Array) -> Array:
-    """Map unconstrained diagonal vector to a valid diagonal Cholesky factor."""
-    diag_pos = constrain_positive(diag_free)
-    return jnp.diag(diag_pos)
-
-
-def _unconstrain_chol_diag(chol: Array) -> Array:
-    """Inverse of :func:`_constrain_chol_diag` (up to numerical roundoff)."""
-    diag = jnp.diag(chol)
-    diag_free = unconstrain_positive(diag)
-    return diag_free
 
 
 class MVN(Approx):

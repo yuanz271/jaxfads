@@ -317,26 +317,6 @@ def arg_first_less_than(array, value):
     return lax.cond(jnp.any(arr), jnp.argmax, lambda _: -1, arr)
 
 
-def arg_smallest_less_than(array, value):
-    """
-    Return index of smallest element less than a value or -1 if none.
-
-    Parameters
-    ----------
-    array : Array, shape (N,)
-        Input array.
-    value : float
-        Comparison threshold.
-
-    Returns
-    -------
-    int
-        Index of smallest element < value, or -1 if none.
-    """
-    arr = array < value
-    return lax.cond(jnp.any(arr), jnp.argmin, lambda _: -1, array)
-
-
 def ilqr(x0, u, c, target, Q, R, f, Df, max_iter=100, tol=1e-6, verbose=False):
     """
     Iterative Linear-Quadratic Regulator (iLQR) optimization.
@@ -410,7 +390,6 @@ def ilqr(x0, u, c, target, Q, R, f, Df, max_iter=100, tol=1e-6, verbose=False):
         )(alphas)
 
         idx = arg_first_less_than(new_costs, cost)  # stable, prefer large alpha
-        # idx = arg_smallest_less_than(new_costs, cost)  # unstable, prefer large improvement
 
         def on_failure(idx, alphas, cost, new_costs, x_new, u_new):
             return False, cost, jnp.nan, x_optimal, u_optimal

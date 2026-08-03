@@ -405,10 +405,7 @@ class XFADS(ConfModule):
         """
         approx = self.approx
 
-        def _free_to_natural(free_flat: Array) -> Array:
-            return approx.free_to_natural(free_flat)
-
-        batch_free_to_natural = vmap(vmap(_free_to_natural))
+        batch_free_to_natural = vmap(vmap(approx.free_to_natural))
         batch_alpha_encode = vmap_with_key(vmap_with_key(self.alpha_encoder))
         batch_beta_encode = (
             None if self.beta_encoder is None else vmap_with_key(self.beta_encoder)

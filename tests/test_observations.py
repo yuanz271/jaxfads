@@ -8,7 +8,6 @@ from omegaconf import OmegaConf
 
 from jaxfads.distributions import MVN
 from jaxfads.observations import GLM
-from jaxfads.smoother import XFADS
 
 
 def _poisson_conf(state_dim: int, observation_dim: int, *, n_steps: int = 0):
@@ -133,38 +132,6 @@ def test_set_readout_stationary_smoke():
     updated = observation.set_readout(weight=weight, bias=bias)
     chex.assert_trees_all_close(updated.readout.weight, weight)
     chex.assert_trees_all_close(updated.readout.layer.bias, bias)
-
-
-def _xfads_gaussian_model(*, state_dim, observation_dim, T, seed=0):
-    model_conf = OmegaConf.create(
-        dict(
-            mode="smooth",
-            observation_dim=observation_dim,
-            state_dim=state_dim,
-            dynamics="MockDynamics",
-            integrator="Identity",
-            approx="MVN",
-            approx_kwargs={},
-            mc_size=2,
-            seed=seed,
-            n_steps=T,
-            fb_penalty=0,
-            noise_penalty=0,
-            dropout=0.0,
-            dyn_conf=OmegaConf.create(dict(input_dim=0, context_dim=0)),
-            enc_conf=OmegaConf.create(dict(width=8, depth=1, dropout=0.0)),
-            obs_conf=OmegaConf.create(
-                dict(
-                    model="GLM",
-                    cov=[1.0] * observation_dim,
-                    norm_readout=False,
-                    dropout=0.0,
-                    likelihood="Gaussian",
-                )
-            ),
-        )
-    )
-    return XFADS(model_conf, jrnd.key(seed))
 
 
 def test_removed_manual_mstep_api_is_not_imported():

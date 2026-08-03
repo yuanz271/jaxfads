@@ -3,7 +3,6 @@ from functools import partial
 import numpy as np
 import jax
 from jax import numpy as jnp
-# import matplotlib.pyplot as plt
 
 from jaxfads.ilqr import ilqr, cost_function, backward_pass
 
@@ -51,21 +50,6 @@ def test_ilqr_smoke():
     u_opt, x_opt, _ = pilqr(x0, u_init)
     assert jnp.all(jnp.isfinite(u_opt))
     assert jnp.all(jnp.isfinite(x_opt))
-
-    # Plotting position tracking
-    # time = np.linspace(0, T * dt, T + 1)
-    # plt.figure(figsize=(10, 5))
-    # plt.plot(*target.T, label="Target Trajectory", linewidth=1)
-    # for x in x_opt:
-    #     plt.plot(*x.T, label="Optimized Trajectory", linewidth=1)
-    # # plt.plot(*x_opt.T, label="Optimized Trajectory", linewidth=1)
-    # plt.xlim(-2, 2)
-    # plt.ylim(-2, 2)
-    # plt.title("Trajectory Tracking (Higher-Dimensional System)")
-    # plt.legend()
-    # plt.grid(True)
-    # plt.savefig("test_copilot.pdf")
-    # plt.close()
 
 
 def test_cost_function_matches_quadratic_form():
