@@ -15,7 +15,7 @@ from omegaconf import OmegaConf
 
 from jaxfads import XFADS
 from jaxfads.observations import GLM  # noqa: F401 - register observation
-from jaxfads.training import GaussianObservationMstep, batch_loss, train
+from jaxfads.training import batch_loss, train
 
 
 def _model_conf():
@@ -49,9 +49,10 @@ def _trainer_conf():
         "batch_size": 4,
         "learning_rate": 1e-3,
         "seed": 23,
-        "q_mstep": True,
-        "q_scale": 0.25,
-        "q_prior_fraction": 0.1,
+        "post_optimizer_transforms": [
+            {"name": "gaussian_observation"},
+            {"name": "mvn_noise", "q_scale": 0.25, "q_prior_fraction": 0.1},
+        ],
     })
 
 
@@ -105,12 +106,7 @@ def main():
     data = _data()
 
     model = XFADS(model_conf, jr.key(41)).initialize(*data)
-    trained = train(
-        model,
-        data,
-        conf=trainer_conf,
-        post_optimizer_transforms=(GaussianObservationMstep(),),
-    )
+    trained = train(model, data, conf=trainer_conf)
     test_batch = tuple(value[:2] for value in data)
     inference = trained(*test_batch, key=jr.key(43))
     loss = batch_loss(trained, test_batch, jr.key(47))

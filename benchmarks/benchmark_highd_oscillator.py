@@ -24,12 +24,7 @@ from omegaconf import OmegaConf
 
 from jaxfads import XFADS, configure_logging
 from jaxfads.observations import GLM  # noqa: F401 (register GLM)
-from jaxfads.training import (
-    EpochHandler,
-    GaussianObservationMstep,
-    train,
-    train_test_split,
-)
+from jaxfads.training import EpochHandler, train, train_test_split
 
 
 def oscillator_bank_dynamics(z, u, c, *, omega=1.2, gamma=0.15, beta=0.02):
@@ -125,7 +120,6 @@ def main() -> None:
     p.add_argument("--max-epoch", type=int, default=40)
     p.add_argument("--batch-size", type=int, default=32)
     p.add_argument("--out-dir", type=str, default="benchmarks/results/highd_oscillator")
-    p.add_argument("--q-mstep", action="store_true")
     args = p.parse_args()
 
     configure_logging("INFO")
@@ -257,9 +251,10 @@ def main() -> None:
                     "learning_rate": 1e-3,
                     "max_epoch": args.max_epoch,
                     "batch_size": args.batch_size,
-                    "q_mstep": args.q_mstep,
-                    "q_scale": 0.1,
-                    "q_prior_fraction": 0.1,
+                    "post_optimizer_transforms": [
+                        {"name": "gaussian_observation"},
+                        {"name": "mvn_noise", "q_scale": 0.1, "q_prior_fraction": 0.1},
+                    ],
                 })
 
                 train_data, valid_data = train_test_split(
@@ -274,7 +269,7 @@ def main() -> None:
                     train_data,
                     conf=trainer_conf,
                     on_epoch_end=handler,
-                    post_optimizer_transforms=(GaussianObservationMstep(),),
+                    post_optimizer_transforms=(),
                 )
                 trained = handler.best_model
                 train_s = time.perf_counter() - t0

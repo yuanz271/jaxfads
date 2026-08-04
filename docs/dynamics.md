@@ -66,8 +66,8 @@ Example:
 ```yaml
 dynamics: Functional
 integrator: Identity
-# Optional Q initialization/update: set q_mstep, q_scale, and
-# q_prior_fraction in the serializable trainer configuration.
+# Optional Q initialization/update: add a mvn_noise entry to
+# trainer_conf.post_optimizer_transforms.
 
 dyn_conf:
   fn_path: my_pkg.my_maps:my_transition
@@ -81,8 +81,8 @@ dyn_conf:
 ```yaml
 dynamics: OU
 integrator: Euler
-# Optional Q initialization/update: set q_mstep, q_scale, and
-# q_prior_fraction in the serializable trainer configuration.
+# Optional Q initialization/update: add a mvn_noise entry to
+# trainer_conf.post_optimizer_transforms.
 
 dyn_conf:
   theta: 2.0
@@ -96,8 +96,8 @@ dyn_conf:
 ```yaml
 dynamics: Identity
 integrator: Identity
-# Optional Q initialization/update: set q_mstep, q_scale, and
-# q_prior_fraction in the serializable trainer configuration.
+# Optional Q initialization/update: add a mvn_noise entry to
+# trainer_conf.post_optimizer_transforms.
 
 dyn_conf:
   input_dim: 0
@@ -112,8 +112,8 @@ Use this as the weakest built-in dynamics prior when you want
 ```yaml
 dynamics: MyDynamics
 integrator: Identity
-# Optional Q initialization/update: set q_mstep, q_scale, and
-# q_prior_fraction in the serializable trainer configuration.
+# Optional Q initialization/update: add a mvn_noise entry to
+# trainer_conf.post_optimizer_transforms.
 
 dyn_conf:
   input_dim: 0

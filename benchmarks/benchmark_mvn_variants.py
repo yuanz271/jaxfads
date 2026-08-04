@@ -23,12 +23,7 @@ from omegaconf import OmegaConf
 
 from jaxfads import XFADS, configure_logging
 from jaxfads.observations import GLM  # noqa: F401 (register GLM)
-from jaxfads.training import (
-    EpochHandler,
-    GaussianObservationMstep,
-    train,
-    train_test_split,
-)
+from jaxfads.training import EpochHandler, train, train_test_split
 
 # Import helpers from the VDP example (sibling directory).
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "examples"))
@@ -95,7 +90,6 @@ def main() -> None:
     parser.add_argument("--seeds", type=str, default="0,1")
     parser.add_argument("--lora-ranks", type=str, default="1")
     parser.add_argument("--out-dir", type=str, default="benchmarks/results/vdp_smoke")
-    parser.add_argument("--q-mstep", action="store_true")
     args = parser.parse_args()
 
     configure_logging("INFO")
@@ -152,9 +146,10 @@ def main() -> None:
         learning_rate=1e-3,
         max_epoch=args.max_epoch,
         batch_size=args.batch_size,
-        q_mstep=args.q_mstep,
-        q_scale=0.1,
-        q_prior_fraction=0.1,
+        post_optimizer_transforms=[
+            {"name": "gaussian_observation"},
+            {"name": "mvn_noise", "q_scale": 0.1, "q_prior_fraction": 0.1},
+        ],
     )
 
     train_data, valid_data = train_test_split(
@@ -179,9 +174,15 @@ def main() -> None:
             train(
                 model,
                 train_data,
-                conf=OmegaConf.create({**trainer_conf, "seed": seed}),
+                conf=OmegaConf.create({
+                    **trainer_conf,
+                    "seed": seed,
+                    "post_optimizer_transforms": trainer_conf[
+                        "post_optimizer_transforms"
+                    ],
+                }),
                 on_epoch_end=handler,
-                post_optimizer_transforms=(GaussianObservationMstep(),),
+                post_optimizer_transforms=(),
             )
             trained = handler.best_model
             dt_train = time.perf_counter() - t0

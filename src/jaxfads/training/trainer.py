@@ -34,7 +34,7 @@ from rich.progress import (
 
 from .. import vi
 from ..logging import get_logger
-from .msteps import MVNNoiseMstep
+from .msteps import GaussianObservationMstep, MVNNoiseMstep
 
 __all__ = ["batch_loss", "train"]
 
@@ -53,13 +53,31 @@ DEFAULT_TRAINER_CONFIG = DictConfig({
     "batch_size": 1,
     "seed": 0,
     "kl_warmup_steps": 0,
-    "q_scale": 1.0,
-    "q_prior_fraction": 0.1,
-    "q_mstep": False,
+    # Ordered built-in transform specifications. Runtime transform objects may
+    # be supplied separately for custom policies.
+    "post_optimizer_transforms": [
+        {"name": "gaussian_observation"},
+        {"name": "mvn_noise", "q_scale": 1.0, "q_prior_fraction": 0.1},
+    ],
     # Optional list of dot-separated attribute paths to freeze.
     # Example: ["noise", "unconstrained_prior_natural"]
     "freeze_paths": [],
 })
+
+
+def _build_post_optimizer_transform(spec):
+    spec = dict(OmegaConf.to_container(spec, resolve=True))
+    name = spec.pop("name", None)
+    if name == "gaussian_observation":
+        if spec:
+            raise ValueError(
+                "gaussian_observation does not accept transform settings: "
+                f"{sorted(spec)}"
+            )
+        return GaussianObservationMstep()
+    if name == "mvn_noise":
+        return MVNNoiseMstep(**spec)
+    raise ValueError(f"Unknown post_optimizer_transform: {name!r}")
 
 
 def _resolve_attr_path(obj, parts: tuple[str, ...]):
@@ -592,8 +610,9 @@ def train(
 
     Each batch performs one forward pass for loss, gradients, and transform
     outputs, then applies the optimizer and ordered
-    ``post_optimizer_transforms`` to the updated model. An empty transform tuple
-    gives optimizer-only training. Transform-owned frozen paths are merged with
+    ``post_optimizer_transforms`` to the updated model. An explicit empty
+    configured transform list gives optimizer-only training. Runtime transform
+    objects are additional custom extensions. Transform-owned frozen paths are merged with
     ``conf.freeze_paths`` before optimizer construction.
 
     Parameters
@@ -632,10 +651,9 @@ def train(
         is then ignored. ``conf.freeze_paths`` is still applied on top.
     post_optimizer_transforms : Sequence[PostOptimizerTransform], optional
         Ordered trainer-owned model transformations. Defaults to ``()``.
-        When ``conf.q_mstep`` is true, the trainer appends its built-in
-        ``MVNNoiseMstep`` after these transforms using ``conf.q_scale`` and
-        ``conf.q_prior_fraction``. Do not also pass an explicit
-        ``MVNNoiseMstep`` when ``q_mstep`` is enabled.
+        Additional runtime transform objects for custom policies. Built-in
+        transforms should be specified in ``conf.post_optimizer_transforms``
+        as serializable entries with a ``name`` and child settings.
     param_schedule : Callable or None, optional
         Optional ``param_schedule(model, step) -> model`` applied at the start
         of every step (before the loss/gradient computation), for driving a
@@ -653,14 +671,10 @@ def train(
         The final-epoch model.
     """
     conf = OmegaConf.merge(DEFAULT_TRAINER_CONFIG, conf)
-    post_optimizer_transforms = tuple(post_optimizer_transforms)
-    if conf.q_mstep:
-        post_optimizer_transforms += (
-            MVNNoiseMstep(
-                q_scale=conf.q_scale,
-                q_prior_fraction=conf.q_prior_fraction,
-            ),
-        )
+    configured_transforms = tuple(
+        _build_post_optimizer_transform(spec) for spec in conf.post_optimizer_transforms
+    )
+    post_optimizer_transforms = configured_transforms + tuple(post_optimizer_transforms)
 
     t0 = time.perf_counter()
 

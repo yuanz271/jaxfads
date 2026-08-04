@@ -35,12 +35,7 @@ from jaxfads import XFADS, configure_logging
 from jaxfads.base import Dynamics
 from jaxfads.nn import make_mlp
 from jaxfads.observations import GLM  # noqa: F401 -- registers GLM
-from jaxfads.training import (
-    EpochHandler,
-    GaussianObservationMstep,
-    train,
-    train_test_split,
-)
+from jaxfads.training import EpochHandler, train, train_test_split
 
 # ---------------------------------------------------------------------------
 # Lorenz simulation with known process noise, plus a linear-Gaussian
@@ -382,15 +377,16 @@ def main():
             "learning_rate": 1e-3,
             "max_epoch": args.max_epoch,
             "batch_size": args.batch_size,
-            "q_mstep": True,
-            "q_scale": q_scale,
-            "q_prior_fraction": 0.1,
+            "post_optimizer_transforms": [
+                {"name": "gaussian_observation"},
+                {"name": "mvn_noise", "q_scale": q_scale, "q_prior_fraction": 0.1},
+            ],
         })
         model = train(
             model,
             train_data,
             conf=trainer_conf,
-            post_optimizer_transforms=(GaussianObservationMstep(),),
+            post_optimizer_transforms=(),
         )
 
         _, Q_final = approx.unpack(

@@ -15,9 +15,10 @@
 * **Breaking:** M-step updates are now trainer-owned post-optimizer
   transformations. Gaussian R updates are selected with
   `post_optimizer_transforms=(GaussianObservationMstep(),)`. The built-in MVN Q
-  policy is configured through serializable trainer fields `q_mstep`,
-  `q_scale`, and `q_prior_fraction`; when enabled, the trainer constructs and
-  initializes `MVNNoiseMstep` before optimizer state creation. Model/component
+  policy is configured through ordered serializable trainer transform entries;
+  the default entries enable `gaussian_observation` and `mvn_noise`, and the
+  trainer constructs and initializes `MVNNoiseMstep` before optimizer state
+  creation. Model/component
   M-step APIs and epoch-local M-step accumulation have been removed. See
   `docs/training.md`.
 * Added `cuda12`/`cuda13` optional-dependency extras

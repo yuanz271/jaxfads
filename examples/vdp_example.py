@@ -27,12 +27,7 @@ from jaxfads import XFADS, configure_logging
 from jaxfads.base import Dynamics
 from jaxfads.nn import make_mlp
 from jaxfads.observations import GLM  # noqa: F401 — registers GLM
-from jaxfads.training import (
-    EpochHandler,
-    GaussianObservationMstep,
-    train,
-    train_test_split,
-)
+from jaxfads.training import EpochHandler, train, train_test_split
 
 # ---------------------------------------------------------------------------
 # Van der Pol dynamics
@@ -532,20 +527,14 @@ def main() -> None:
         seed=0,
         learning_rate=1e-3,
         batch_size=batch_size,
-        q_scale=1.0,
-        q_prior_fraction=0.1,
+        post_optimizer_transforms=[
+            {"name": "gaussian_observation"},
+            {"name": "mvn_noise", "q_scale": 1.0, "q_prior_fraction": 0.1},
+        ],
     )
 
-    trainer_conf_mlp = OmegaConf.create({
-        **base_trainer_conf,
-        "max_epoch": 500,
-        "q_mstep": True,
-    })
-    trainer_conf_ou = OmegaConf.create({
-        **base_trainer_conf,
-        "max_epoch": 100,
-        "q_mstep": True,
-    })
+    trainer_conf_mlp = OmegaConf.create({**base_trainer_conf, "max_epoch": 500})
+    trainer_conf_ou = OmegaConf.create({**base_trainer_conf, "max_epoch": 100})
     trainer_conf_lora = OmegaConf.create({
         **base_trainer_conf,
         "max_epoch": 100,
@@ -579,13 +568,7 @@ def main() -> None:
     model1 = model1.initialize(*train_data)
 
     handler1 = EpochHandler(valid_data=valid_data)
-    train(
-        model1,
-        train_data,
-        conf=trainer_conf_mlp,
-        on_epoch_end=handler1,
-        post_optimizer_transforms=(GaussianObservationMstep(),),
-    )
+    train(model1, train_data, conf=trainer_conf_mlp, on_epoch_end=handler1)
     trained1 = handler1.best_model
 
     key, k = jr.split(key)
@@ -646,13 +629,7 @@ def main() -> None:
     model2 = model2.initialize(*train_data)
 
     handler2 = EpochHandler(valid_data=valid_data)
-    train(
-        model2,
-        train_data,
-        conf=trainer_conf_ou,
-        on_epoch_end=handler2,
-        post_optimizer_transforms=(GaussianObservationMstep(),),
-    )
+    train(model2, train_data, conf=trainer_conf_ou, on_epoch_end=handler2)
     trained2 = handler2.best_model
 
     key, k = jr.split(key)
@@ -716,13 +693,7 @@ def main() -> None:
     model3 = model3.initialize(*train_data)
 
     handler3 = EpochHandler(valid_data=valid_data)
-    train(
-        model3,
-        train_data,
-        conf=trainer_conf_lora,
-        on_epoch_end=handler3,
-        post_optimizer_transforms=(GaussianObservationMstep(),),
-    )
+    train(model3, train_data, conf=trainer_conf_lora, on_epoch_end=handler3)
     trained3 = handler3.best_model
 
     key, k = jr.split(key)

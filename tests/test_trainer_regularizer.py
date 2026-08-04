@@ -92,7 +92,12 @@ def test_regularizer_adds_its_gradient(model_conf, sample_data):
 
 def test_train_applies_regularizer(model_conf, sample_data):
     """A regularizer passed to ``train`` is wired into the optimized loss."""
-    conf = OmegaConf.create({"max_epoch": 3, "batch_size": 5, "seed": 0})
+    conf = OmegaConf.create({
+        "max_epoch": 3,
+        "batch_size": 5,
+        "seed": 0,
+        "post_optimizer_transforms": [],
+    })
 
     def strong_reg(m):
         return 1e2 * jnp.sum(m.noise**2)

@@ -10,12 +10,7 @@ from omegaconf import OmegaConf
 
 import jaxfads.observations  # noqa: F401 — register GLM subclass
 from jaxfads.smoother import XFADS
-from jaxfads.training import (
-    GaussianObservationMstep,
-    MVNNoiseMstep,
-    batch_loss,
-    train,
-)
+from jaxfads.training import MVNNoiseMstep, batch_loss, train
 
 
 @pytest.mark.parametrize("kl_warmup_steps", [0, 1, 4, 10])
@@ -47,6 +42,7 @@ def trainer_config():
         "learning_rate": 1e-3,
         "batch_size": 2,
         "seed": 42,
+        "post_optimizer_transforms": [],
     })
 
 
@@ -112,9 +108,9 @@ def test_q_config_initialization_precedes_optimizer_init(
     """The optimizer receives Q initialized from serializable trainer config."""
     model = XFADS(gaussian_model_conf, jrnd.key(0)).initialize(*gaussian_sample_data)
     expected_free = model.approx.free_from_kw(scale=0.25)
-    trainer_config.q_mstep = True
-    trainer_config.q_scale = 0.25
-    trainer_config.q_prior_fraction = 0.1
+    trainer_config.post_optimizer_transforms = [
+        {"name": "mvn_noise", "q_scale": 0.25, "q_prior_fraction": 0.1}
+    ]
     seen = []
 
     def init_fn(params):
@@ -138,22 +134,18 @@ def test_q_config_initialization_precedes_optimizer_init(
     chex.assert_trees_all_close(seen[0], expected_free)
 
 
-def test_train_with_independent_post_optimizer_transforms(
+def test_train_with_configured_post_optimizer_transforms(
     gaussian_model_conf, trainer_config, gaussian_sample_data
 ):
-    """Independent R/Q transforms run after one optimizer forward pass."""
+    """Configured R/Q transforms run after one optimizer forward pass."""
     conf = gaussian_model_conf
+    trainer_config.post_optimizer_transforms = [
+        {"name": "gaussian_observation"},
+        {"name": "mvn_noise", "q_scale": 1.0, "q_prior_fraction": 0.1},
+    ]
     trainer_config.max_epoch = 1
     model = XFADS(conf, jrnd.key(0)).initialize(*gaussian_sample_data)
-    trained = train(
-        model,
-        gaussian_sample_data,
-        conf=trainer_config,
-        post_optimizer_transforms=(
-            GaussianObservationMstep(),
-            MVNNoiseMstep(q_scale=1.0, q_prior_fraction=0.1),
-        ),
-    )
+    trained = train(model, gaussian_sample_data, conf=trainer_config)
     assert jnp.isfinite(trained.observation.likelihood.cov()).all()
     assert jnp.isfinite(trained.noise).all()
 
@@ -276,6 +268,7 @@ def test_user_optimizer_composes_with_freeze_paths(
     trainer_config.max_epoch = 5
     trainer_config.batch_size = 64
     trainer_config.freeze_paths = ["noise"]
+    trainer_config.post_optimizer_transforms = []
 
     model = XFADS(model_conf, jrnd.key(0))
     # Snapshot to host: train() donates the input model's buffers.
@@ -349,6 +342,7 @@ def test_train_freeze_paths_keeps_noise_fixed(model_conf, trainer_config, sample
     trainer_config.max_epoch = 3
     trainer_config.batch_size = 64
     trainer_config.freeze_paths = ["noise"]
+    trainer_config.post_optimizer_transforms = []
     trained_model = train(model, sample_data, conf=trainer_config)
     noise_trained = jax.device_get(trained_model.noise)
     chex.assert_trees_all_close(noise_trained, noise0, atol=0.0)

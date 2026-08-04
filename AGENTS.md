@@ -114,19 +114,19 @@ Invariant for callers:
   - `trainer_conf.freeze_paths: list[str]` (dot-separated model attribute paths,
     e.g. `["noise"]`); applied on top of the default or a supplied
     optimizer.
-- M-step policy is trainer-owned and serializable: `trainer_conf.q_mstep`,
-  `trainer_conf.q_scale`, and `trainer_conf.q_prior_fraction` configure the
-  built-in Q transform. `q_mstep=false` leaves Q optimizer-managed; when true,
-  the trainer constructs `MVNNoiseMstep` before freeze-mask and optimizer-state
-  creation, initializes `noise`, applies the fractional Q update, and freezes
-  that array. Ordered `post_optimizer_transforms` remains the extension point
-  for R and custom transformations. An empty tuple with `q_mstep=false` is
-  optimizer-only training.
+- M-step policy is trainer-owned and serializable through ordered
+  `trainer_conf.post_optimizer_transforms` entries. Each entry has a symbolic
+  name and child settings; `gaussian_observation` and `mvn_noise` are the
+  built-in R/Q policies. `mvn_noise` owns Q initialization, fractional Q
+  update, and `noise` freezing. Runtime `post_optimizer_transforms` objects
+  remain the extension point for custom transformations. The default configured
+  list enables both built-ins; an explicit empty list is optimizer-only
+  training.
 - Each batch uses one pre-SGD inference forward for loss, gradients, and the
   selected plugins' statistics; plugins update the post-SGD model with no
   extra inference pass. Model/component M-step APIs are unsupported.
 - `state_noise`, `noise_prior`, and `noise_prior_dof` are unsupported. Q
-  policy fields belong to the serializable trainer config, not the model config.
+  policy belongs to the serializable trainer configuration.
 - No built-in covariance-based noise regularization is applied by default.
 
 ## Testing Workflow

@@ -45,9 +45,7 @@ Pass a `DictConfig` (or plain dict) as `conf`. Missing keys are filled from
 | `max_epoch` | `50` | Number of training epochs (always run in full unless a callback stops early) |
 | `batch_size` | `1` | Mini-batch size (must be divisible by device count) |
 | `seed` | `0` | Random seed for shuffling |
-| `q_scale` | `1.0` | Isotropic Q-prior scale used when `q_mstep` is enabled |
-| `q_prior_fraction` | `0.1` | Fractional Q-prior weight used when `q_mstep` is enabled |
-| `q_mstep` | `false` | Append the built-in `MVNNoiseMstep` using the Q settings above |
+| `post_optimizer_transforms` | R/Q built-ins | Ordered transform specifications; default entries are `gaussian_observation` and `mvn_noise` |
 | `freeze_paths` | `[]` | Optional list of dot-separated model attribute paths to freeze (e.g. `["noise"]`) |
 
 The default optimizer is **vanilla Adam** and `learning_rate` is its only
@@ -60,7 +58,9 @@ noise, or a custom schedule, pass your own `optax` optimizer via
 `train(..., optimizer=...)` (see below); `learning_rate` is then ignored, but
 `freeze_paths` is still applied on top.
 
-A model regularizer is **not** a config field; it is passed directly to
+The default resolved configuration enables both built-in R/Q transforms in
+order. Set `post_optimizer_transforms: []` explicitly for optimizer-only
+training. A model regularizer is **not** a config field; it is passed directly to
 `train(..., regularizer=...)` (see below), because it is a Python callable and
 the config is meant to stay serializable.
 
@@ -77,9 +77,10 @@ trainer_conf = OmegaConf.create(dict(
     learning_rate=5e-4,
     max_epoch=200,
     batch_size=64,
-    q_mstep=True,
-    q_scale=1.0,
-    q_prior_fraction=0.1,
+    post_optimizer_transforms=[
+        {"name": "gaussian_observation"},
+        {"name": "mvn_noise", "q_scale": 1.0, "q_prior_fraction": 0.1},
+    ],
 ))
 ```
 
@@ -166,10 +167,11 @@ the loss is evaluated on and what persists in the returned model. It is a
 general mechanism — the trainer only calls the function and does not
 interpret what it changes.
 
-Do **not** schedule `noise` while `MVNNoiseMstep` is selected. That plugin
-owns Q and would overwrite a scheduled value. With
-`post_optimizer_transforms=()`, Q is SGD-managed and may be scheduled
-explicitly if the path is also frozen from optimizer updates.
+Do **not** schedule `noise` while the configured `mvn_noise` transform is
+selected. That transform owns Q and would overwrite a scheduled value. With
+an explicit `post_optimizer_transforms: []` configuration, Q is SGD-managed
+and may be scheduled explicitly if the path is also frozen from optimizer
+updates.
 
 **`freeze_paths` is required, not optional, when using `param_schedule`.**
 Without it, the optimizer's own gradient-based update (plus gradient noise
@@ -266,9 +268,11 @@ is built from the actual initialized parameter arrays. `frozen_paths()`
 returns fully qualified, root-relative paths such as `"noise"`; the trainer
 combines these with `conf.freeze_paths`.
 
-`post_optimizer_transforms=()` performs ordinary optimizer-managed training:
-there are no transform initializers, transform-owned freeze paths, or
-post-optimizer model updates.
+An explicit `post_optimizer_transforms: []` configuration performs ordinary
+optimizer-managed training: there are no transform initializers,
+transform-owned freeze paths, or post-optimizer model updates. The runtime
+`post_optimizer_transforms=()` argument is an additional custom-transform
+extension and does not override configured built-ins.
 
 ### Gaussian observation-noise update
 
@@ -294,9 +298,9 @@ extra inference pass.
 ### MVN process-noise update
 
 The transition/process-noise covariance `Q` (`model.noise`) is controlled by
-serializable trainer configuration. With `q_mstep=True`, the trainer appends
-`MVNNoiseMstep` using `conf.q_scale` and `conf.q_prior_fraction` before
-freeze-mask and optimizer-state creation. Its initializer sets:
+an ordered serializable transform specification. Include a `mvn_noise` entry
+with `q_scale` and `q_prior_fraction`; the trainer resolves it before freeze-mask
+and optimizer-state creation. Its initializer sets:
 
 $$
 Q_0 = Q_{\mathrm{init}} = q_{\mathrm{scale}} I.
@@ -323,7 +327,7 @@ $$
 
 It replaces `noise` and declares `noise` frozen from optimizer updates. The
 built-in transform requires the concrete MVN approximation; unsupported
-representations fail explicitly. With `q_mstep=False`, Q remains
+representations fail explicitly. Omitting the `mvn_noise` entry leaves Q
 optimizer-managed.
 
 ### Ordering and lagged statistics
