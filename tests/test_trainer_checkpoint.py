@@ -168,4 +168,7 @@ def test_callback_receives_train_only_info():
     assert [d["epoch"] for d in seen] == [0, 1]
     for d in seen:
         assert isinstance(d["train_loss"], float)
-        assert set(d.keys()) == {"epoch", "step", "train_loss", "train_losses"}
+        assert isinstance(d["grad_norm"], float)
+        assert set(d.keys()) == {
+            "epoch", "step", "train_loss", "train_losses", "grad_norm", "grad_norms",
+        }

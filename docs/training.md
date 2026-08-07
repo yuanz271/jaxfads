@@ -355,7 +355,9 @@ train-only with plain Python values:
 
 ```python
 def on_epoch_end(model, info):
-    # info: {"epoch", "step", "train_loss", "train_losses"}
+    # info: {"epoch", "step", "train_loss", "train_losses", "grad_norm", "grad_norms"}
+    # grad_norm/grad_norms: epoch-mean global gradient norm (diagnostic only,
+    # from the gradients already computed for the optimizer update).
     return info["train_loss"] != info["train_loss"]  # stop on NaN
 
 trained = train(model, train_data, conf=trainer_conf, on_epoch_end=on_epoch_end)

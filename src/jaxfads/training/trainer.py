@@ -505,7 +505,12 @@ def _run_training_loop(
     regularizer=None,
     post_optimizer_transforms=(),
 ):
-    """Run minibatch optimization followed by ordered post-optimizer transforms."""
+    """Run minibatch optimization followed by ordered post-optimizer transforms.
+
+    The callback additionally receives epoch-mean global gradient norms as
+    diagnostics; these are computed from the gradients already used by the
+    optimizer and do not affect the update.
+    """
 
     @eqx.filter_jit(donate="all")
     def train_step(model, opt_state, batch, key, step):
@@ -527,17 +532,19 @@ def _run_training_loop(
             return loss, forward
 
         (loss, forward), grads = eqx.filter_value_and_grad(loss_fn, has_aux=True)(model)
+        grad_norm = optax.tree.norm(grads)
         params = eqx.filter(model, eqx.is_inexact_array)
         updates, opt_state = optimizer.update(grads, opt_state, params)
         model = eqx.apply_updates(model, updates)
         for transform in post_optimizer_transforms:
             model = transform(model, batch, forward, key=key)
-        return model, opt_state, step + 1, loss
+        return model, opt_state, step + 1, loss, grad_norm
 
     opt_state = optimizer.init(_copy_pytree(eqx.filter(model, eqx.is_inexact_array)))
     model, opt_state = eqx.filter_shard((model, opt_state), model_sharding)
 
     train_losses: list = []
+    grad_norms: list = []
     pbar = _training_progress()
     task_id = pbar.add_task("Training", total=max_epoch, loss=jnp.inf)
     pbar.start()
@@ -546,12 +553,18 @@ def _run_training_loop(
     key, loader_key = jr.split(key)
     current_epoch = 0
     epoch_batch_losses: list = []
+    epoch_batch_grad_norms: list = []
 
-    def finalize_epoch(epoch_idx, batch_losses):
-        train_loss = (
-            float(jnp.mean(jnp.stack(batch_losses))) if batch_losses else float("nan")
-        )
+    def finalize_epoch(epoch_idx, batch_losses, batch_grad_norms) -> bool:
+        """Record the epoch's training loss and run the callback."""
+        if batch_losses:
+            train_loss = float(jnp.mean(jnp.stack(batch_losses)))
+            grad_norm = float(jnp.mean(jnp.stack(batch_grad_norms)))
+        else:
+            train_loss = float("nan")
+            grad_norm = float("nan")
         train_losses.append(train_loss)
+        grad_norms.append(grad_norm)
         pbar.update(task_id, advance=1, loss=train_loss)
         if on_epoch_end is None:
             return False
@@ -560,6 +573,8 @@ def _run_training_loop(
             "step": step,
             "train_loss": train_loss,
             "train_losses": train_losses,
+            "grad_norm": grad_norm,
+            "grad_norms": grad_norms,
         }
         return bool(on_epoch_end(model, info))
 
@@ -568,18 +583,20 @@ def _run_training_loop(
             train_set, batch_size, max_epoch, loader_key
         ):
             if epoch != current_epoch:
-                if finalize_epoch(current_epoch, epoch_batch_losses):
+                if finalize_epoch(current_epoch, epoch_batch_losses, epoch_batch_grad_norms):
                     break
                 epoch_batch_losses = []
+                epoch_batch_grad_norms = []
                 current_epoch = epoch
 
             key, batch_key = jr.split(key)
-            model, opt_state, step, loss = train_step(
+            model, opt_state, step, loss, grad_norm_step = train_step(
                 model, opt_state, batch, batch_key, step
             )
             epoch_batch_losses.append(loss)
+            epoch_batch_grad_norms.append(grad_norm_step)
         else:
-            finalize_epoch(current_epoch, epoch_batch_losses)
+            finalize_epoch(current_epoch, epoch_batch_losses, epoch_batch_grad_norms)
     except KeyboardInterrupt:
         logger.info("training interrupted; discarding partial epoch loss metrics")
     finally:
@@ -631,7 +648,11 @@ def train(
     on_epoch_end : Callable or None
         ``on_epoch_end(model, info)`` called once per finished epoch with
         train-only ``info`` (``epoch``, ``step``, ``train_loss``,
-        ``train_losses``); returning a truthy value stops training.
+        ``train_losses``, ``grad_norm``, ``grad_norms``); returning a truthy
+        value stops training. ``grad_norm``/``grad_norms`` are the epoch-mean
+        (and per-epoch history of) global gradient norm -- a diagnostic only,
+        computed from the gradients already produced for the optimizer update
+        (no extra forward/backward pass, fully jit-traced, negligible cost).
     regularizer : Callable or None, optional
         Optional ``regularizer(model) -> Array`` scalar penalty added to the
         per-batch objective (``loss = -ELBO + regularizer(model)``). It is a
