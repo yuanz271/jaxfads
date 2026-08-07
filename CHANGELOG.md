@@ -2,6 +2,61 @@
 
 ## Unreleased
 
+* **Default behavior change:** `MVN` now defaults to
+  `use_sigma_points=True` -- propagating `q(z_{t-1})` through the
+  transition uses deterministic unscented-transform (UT) sigma points
+  instead of Monte Carlo sampling by default. `Approx.transition_points`
+  is a new, overridable hook (returns `(points, weights)` for this
+  propagation step); `MVN(use_sigma_points=False)` restores the previous
+  Monte Carlo behavior exactly, bit-for-bit. Real-data validation across
+  `state_dim` 8/16/32 showed UT is never worse, and often better/cheaper,
+  than Monte Carlo on posterior-RMSE. See the prediction-step propagation
+  section in `docs/algorithm.md`.
+* **Breaking:** M-step updates are now trainer-owned post-optimizer
+  transformations. Gaussian R updates are selected with
+  `post_optimizer_transforms=(GaussianObservationMstep(),)`. The built-in MVN Q
+  policy is configured through ordered serializable trainer transform entries;
+  the default entries enable `gaussian_observation` and `mvn_noise`, and the
+  trainer constructs and initializes `MVNNoiseMstep` before optimizer state
+  creation. Model/component
+  M-step APIs and epoch-local M-step accumulation have been removed. See
+  `docs/training.md`.
+* Added `cuda12`/`cuda13` optional-dependency extras
+  (`pip install jaxfads[cuda12]` or `jaxfads[cuda13]`) for one-step GPU
+  installs; the base `jax` dependency stays CPU-only. The two extras are
+  mutually exclusive (each pulls in a distinct jaxlib/CUDA build);
+  `cuda13` also drops some older GPU architectures (Maxwell/Volta/Pascal)
+  that `cuda12` still supports.
+* Removed the superseded direct-replacement `mstep_mode` trainer cadence
+  and its redundant full-dataset recomputation path.
+
+## 0.10.0
+
+* `Gaussian.eloglik` now computes the analytic expected log-likelihood via a
+  Woodbury/matrix-determinant-lemma form for the diagonal-plus-low-rank
+  observation covariance, instead of building a dense
+  `(observation_dim x observation_dim)` matrix. This cuts the dominant cost
+  from `O(observation_dim^2)` memory / `O(observation_dim^3)` time to
+  `O(observation_dim * state_dim^2 + state_dim^3)`, fixing an out-of-memory
+  failure with high-dimensional observations and a linear readout (e.g.
+  `observation_dim=497`, `state_dim=21`, `batch_size=16`). Verified to match
+  the previous dense implementation to ~1e-7 in log-density and ~1e-5 in
+  gradients.
+* Upgraded the supported `jax` range: the transitive `jax<0.7.0` cap
+  (inherited from `gearax`) is gone, `jax` now resolves to the latest
+  release (0.11.0) with no `[tool.uv] override-dependencies` needed, and
+  `requires-python` is bumped to `>=3.12` (jax 0.11.0 dropped Python 3.11
+  support). This required switching to `tfp-nightly[jax]` (stable
+  `tensorflow-probability` still depends on a jax internal removed in
+  0.7.0) and requesting explicit `Auto` mesh axes in `trainer.py`'s device
+  mesh to keep `eqx.filter_shard` working under jax's newer
+  "sharding-in-types" default (jax >=0.9.0).
+* Documented that custom `param_schedule` functions should anneal
+  constrained (e.g. variance) values and convert to free-form parameters
+  only as the final step, since interpolating in free-form space directly
+  would distort the intended path. The dedicated `noise_schedule` helper
+  was removed.
+
 ## 0.9.0
 
 * **Breaking:** the default optimizer is now **vanilla Adam**
@@ -19,12 +74,9 @@
   crash in the jitted loop.
 * `train` now accepts `param_schedule=` (a `Callable[[model, step], model]`)
   applied at the start of every training step, for driving an arbitrary model
-  attribute through a step-indexed `optax` schedule. A new helper,
-  `noise_schedule(approx, q_hi, q_lo, transition_steps)`, builds the common
-  case: annealing the process-noise scale (Q) geometrically via
-  `optax.exponential_decay`. `freeze_paths` should list the scheduled
-  attribute so the optimizer's own gradient-based update does not fight the
-  schedule.
+  attribute through a step-indexed `optax` schedule. `freeze_paths` should
+  list the scheduled attribute so the optimizer's own gradient-based update
+  does not fight the schedule.
 * KL warm-up is now driven by an `optax` schedule built from
   `conf.kl_warmup_steps`, evaluated on the training step and passed as the
   `beta` KL weight. `beta` stays an objective coefficient (never routed through
@@ -94,7 +146,7 @@
 ## 0.3.0
 
 * Added `filter`, `smooth`, and `causal` inference modes.
-* Added declarative parameter freezing via `freeze_paths` and `freeze_state_noise`.
+* Added declarative parameter freezing via `freeze_paths`.
 * Stabilized the low-rank MVN / LoRa path with additional smoke coverage.
 
 ## 0.2.0

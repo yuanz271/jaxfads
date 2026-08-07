@@ -42,7 +42,7 @@ jaxfads/
 | Approx posterior families | `src/jaxfads/distributions/` | currently `MVN` |
 | Observation models | `src/jaxfads/observations.py` | `GLM`, `Poisson`, `Gaussian` |
 | Encoders | `src/jaxfads/encoders.py` | `AlphaEncoder`, `BetaEncoder`; user-defined for NOFILT |
-| Training | `src/jaxfads/trainer.py` | `train()`, `batch_loss()`, `DEFAULT_TRAINER_CONFIG` |
+| Training | `src/jaxfads/training/` | `train()`, `batch_loss()`, `DEFAULT_TRAINER_CONFIG`, post-optimizer transforms |
 | Abstract interfaces | `src/jaxfads/base.py` | `Approx`, `Dynamics`, `Integrator`, `Observation`, `Encoder` |
 
 ## Core Design Notes
@@ -101,9 +101,9 @@ Invariant for callers:
     scalar penalty to the per-batch objective (`loss = -ELBO +
     regularizer(model)`).
   - `batch_loss` stays a pure objective; the trainer composes the penalty.
-  - Penalize the intended quantity in its own space (e.g. transform
-    `noise_free` via the Approx to regularize Q; do not penalize the raw free
-    parameters).
+  - Penalize the intended quantity in its own space (e.g. decode
+    `model.noise` through `model.approx` to regularize Q; do not penalize the
+    raw free parameters).
 - Optimizer policy is user-ownable. The default optimizer applies **no weight
   decay**: in a plugin framework the trainer cannot know which leaves are
   weight matrices vs variances/biases, so it makes no decay assumption. Pass
@@ -112,9 +112,36 @@ Invariant for callers:
   no `weight_decay` config field.
 - Parameter freezing is configured declaratively via:
   - `trainer_conf.freeze_paths: list[str]` (dot-separated model attribute paths,
-    e.g. `["noise_free"]`); applied on top of the default or a supplied
+    e.g. `["noise"]`); applied on top of the default or a supplied
     optimizer.
+- M-step policy is trainer-owned and serializable through ordered
+  `trainer_conf.post_optimizer_transforms` entries. Each entry has a symbolic
+  name and child settings; `gaussian_observation` and `mvn_noise` are the
+  built-in R/Q policies. `mvn_noise` owns Q initialization, fractional Q
+  update, and `noise` freezing. Runtime `post_optimizer_transforms` objects
+  remain the extension point for custom transformations. The default configured
+  list enables both built-ins; an explicit empty list is optimizer-only
+  training.
+- Each batch uses one pre-SGD inference forward for loss, gradients, and the
+  selected plugins' statistics; plugins update the post-SGD model with no
+  extra inference pass. Model/component M-step APIs are unsupported.
+- `state_noise`, `noise_prior`, and `noise_prior_dof` are unsupported. Q
+  policy belongs to the serializable trainer configuration.
 - No built-in covariance-based noise regularization is applied by default.
+
+## Testing Workflow
+
+- Run the full test suite (`pytest tests/`) **only** right before pushing, or
+  when explicitly asked — not automatically after every commit/edit.
+- During iteration, scope test runs to the files that exercise the changed
+  code (e.g. `pytest tests/test_trainer.py tests/test_observations.py` for
+  `trainer.py`/`observations.py` changes; include `tests/test_smoother.py`
+  for changes touching `base.py`'s `Observation`/`Approx`/`Dynamics` ABCs,
+  since `smoother.py`/`XFADS` sits directly on top of them).
+- Do not run a scoped set and then the full suite back-to-back for the same,
+  unchanged code — that pays both costs for no additional information. If a
+  full-suite run is warranted (about to push, or asked for), it replaces the
+  scoped run for that checkpoint, it doesn't follow it.
 
 ## Python rules
 

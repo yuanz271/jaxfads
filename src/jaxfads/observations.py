@@ -10,14 +10,14 @@ from collections.abc import Callable
 from typing import Any, Protocol
 
 import equinox as eqx
-import tensorflow_probability.substrates.jax.distributions as tfp
 from jax import Array
 from jax import numpy as jnp
 from jax import random as jrnd
+from jax.scipy.linalg import cho_solve
 
-from .base import Observation
-from .constraints import _EPS, constrain_positive, unconstrain_positive
-from .base import Approx
+from .base import Approx, Observation
+from .constraints import _EPS, _MIN_VARIANCE, constrain_positive, unconstrain_positive
+from .distributions.mvn import MVN
 from .nn import IdentityReadout, StationaryLinear, VariantBiasLinear
 
 _MAX_LOGRATE = 7.0
@@ -336,7 +336,8 @@ class GLM(Observation):
                 "GLM requires `obs_conf._approx_name` to be injected by XFADS for "
                 "fail-fast Approx validation."
             )
-        if str(approx_name) != "MVN":
+        approx_cls = Approx.get_subclass(str(approx_name))
+        if not issubclass(approx_cls, MVN):
             raise NotImplementedError(
                 "GLM analytic eloglik currently supports only MVN approximations "
                 "(requires approx.unpack(moment) -> (mean, cov))."
@@ -468,11 +469,11 @@ class GLM(Observation):
 
 __all__ = [
     "GLM",
+    "Gaussian",
+    "Likelihood",
     "Observation",
     "Poisson",
-    "Gaussian",
     "make_readout",
-    "Likelihood",
     "register_readout_init",
 ]
 
@@ -624,7 +625,7 @@ class Gaussian(eqx.Module, strict=True):
     def __init__(self, conf, key):  # pyright: ignore[reportMissingSuperCall]
         self.conf = conf
         cov = jnp.array(conf.get("cov", jnp.ones(conf.observation_dim)))
-        self.unconstrained_cov = unconstrain_positive(cov)
+        self.unconstrained_cov = unconstrain_positive(jnp.maximum(cov, _EPS))
 
     @staticmethod
     def link(y: Array) -> Array:
@@ -654,14 +655,14 @@ class Gaussian(eqx.Module, strict=True):
 
         Notes
         -----
-        Applies positive constraint to ensure valid variance values. When
-        ``obs_conf.cov_floor`` (default 0.0) is set, a constant floor is added
-        so the variance cannot collapse to ~0 — keeping ``C Σ_z Cᵀ + Σ_obs``
-        well-conditioned in the analytic log-likelihood (numerical safeguard,
-        e.g. for identity readouts where obs-noise is otherwise unidentifiable).
+        Applies positive constraint, then adds ``_MIN_VARIANCE`` (always, a
+        private float32-safety constant -- not a modeling choice) and the
+        optional ``obs_conf.cov_floor`` modeling safeguard. The private floor
+        prevents float32 underflow; the configurable floor can additionally
+        keep ``C Σ_z Cᵀ + Σ_obs`` well-conditioned for identity readouts.
         """
         floor = float(self.conf.get("cov_floor", 0.0))
-        return constrain_positive(self.unconstrained_cov) + floor
+        return _MIN_VARIANCE + constrain_positive(self.unconstrained_cov) + floor
 
     def eloglik(
         self,
@@ -707,21 +708,56 @@ class Gaussian(eqx.Module, strict=True):
 
         where the observation covariance includes both state uncertainty
         and observation noise.
+
+        Uses the matrix determinant lemma and Woodbury identity to avoid ever
+        forming the dense ``(observation_dim, observation_dim)`` covariance
+        matrix ``Sigma_y = R + C @ Cov(z) @ C.T``. This matters when
+        ``observation_dim >> state_dim`` (e.g. a linear readout onto raw,
+        high-dimensional observations): the naive dense form costs
+        ``O(observation_dim**2)`` memory and ``O(observation_dim**3)`` time
+        (a Cholesky factorization) per time step per trial in a batch; the
+        Woodbury form below costs ``O(observation_dim * state_dim)`` memory
+        and ``O(observation_dim * state_dim**2 + state_dim**3)`` time
+        instead.
+
+        The one ``O(observation_dim * state_dim**2)`` contraction
+        (``C.T @ diag(1/r) @ C``) depends only on the (trainable) readout
+        weight ``C`` and observation noise ``r`` -- not on ``moment``, ``t``,
+        or the batch/time index -- so under ``jax.vmap`` over batch and time
+        it carries no mapped axis and is effectively computed once rather
+        than once per (batch, time) instance.
         """
         mean_z, cov_z = approx.unpack(moment)
         mean_y = readout(t, mean_z)
-        C = readout.weight  # left matrix
-        cov_y = C @ cov_z @ C.T + jnp.diag(self.cov())
-        ll = tfp.MultivariateNormalFullCovariance(mean_y, cov_y).log_prob(y)
+        C = readout.weight  # (d, m): d = observation_dim, m = state_dim
+        r = self.cov()  # (d,)
+
+        d = r.shape[-1]
+        m = cov_z.shape[-1]
+        eye_m = jnp.eye(m, dtype=cov_z.dtype)
+        delta = y - mean_y  # (d,)
+        r_inv = 1.0 / r  # (d,)
+
+        # Hoistable: depends only on C, r (see Notes above).
+        Ct_Rinv = C.T * r_inv[None, :]  # (m, d)
+        K = Ct_Rinv @ C  # (m, m) = C^T R^-1 C
+
+        # Per-(batch,time): Sigma_z^-1 via a damped solve, matching this
+        # module's MVN.moment_to_natural convention for covariance inversion.
+        cov_z_damped = cov_z + _EPS * eye_m
+        cov_z_inv = jnp.linalg.solve(cov_z_damped, eye_m)
+        M = cov_z_inv + K  # (m, m), guaranteed PD (cov_z_inv is PD, K is PSD)
+        L_M = jnp.linalg.cholesky(M)
+
+        v = Ct_Rinv @ delta  # (m,)
+        Minv_v = cho_solve((L_M, True), v)
+        quad = jnp.sum(delta**2 * r_inv) - v @ Minv_v
+
+        logdet_R = jnp.sum(jnp.log(r))
+        L_cov_z = jnp.linalg.cholesky(cov_z_damped)
+        logdet_cov_z = 2.0 * jnp.sum(jnp.log(jnp.diag(L_cov_z)))
+        logdet_M = 2.0 * jnp.sum(jnp.log(jnp.diag(L_M)))
+        logdet = logdet_R + logdet_cov_z + logdet_M
+
+        ll = -0.5 * (d * jnp.log(2.0 * jnp.pi) + logdet + quad)
         return ll
-
-    # def set_static(self, static=True) -> None:
-    #     """
-    #     Set observation noise parameters as static (non-trainable).
-
-    #     Parameters
-    #     ----------
-    #     static : bool, default=True
-    #         Whether to make parameters static.
-    #     """
-    #     self.__dataclass_fields__["unconstrained_cov"].metadata = {"static": static}

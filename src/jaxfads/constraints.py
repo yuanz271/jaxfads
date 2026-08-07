@@ -14,8 +14,21 @@ from jax import Array
 from jax import numpy as jnp
 
 #: Machine epsilon for float32, used for numerical stability (e.g., matrix
-#: damping, covariance floors, Cholesky regularisation).
+#: damping, Cholesky regularisation).
 _EPS: float = float(jnp.finfo(jnp.float32).eps)
+
+#: Minimum representable variance, always enforced regardless of any
+#: user-supplied floor. Distinct from ``_EPS``: this guards against a
+#: specific float32 failure mode, not general relative precision. In
+#: float32, ``softplus(x)`` (``constrain_positive``) underflows to an exact
+#: ``0.0`` once ``x`` is sufficiently negative (roughly ``x <~ -90``), and an
+#: exactly-zero variance makes ``log(var)``/``1/var`` in a Gaussian
+#: log-likelihood produce ``-inf``/``inf``/``NaN`` -- a hard numerical
+#: failure, not merely a degenerate fit. ``1e-6`` keeps ``log(var)`` and
+#: ``1/var`` comfortably within safe float32 range (matching common practice
+#: in other Kalman/Gaussian-process implementations), independent of
+#: whatever modeling-level floor (if any) a caller opts into.
+_MIN_VARIANCE: float = 1e-6
 
 
 def constrain_positive(x: Array) -> Array:

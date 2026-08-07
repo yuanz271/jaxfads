@@ -27,8 +27,7 @@ from jaxfads import XFADS, configure_logging
 from jaxfads.base import Dynamics
 from jaxfads.nn import make_mlp
 from jaxfads.observations import GLM  # noqa: F401 — registers GLM
-from jaxfads.trainer import EpochHandler, train, train_test_split
-
+from jaxfads.training import EpochHandler, train, train_test_split
 
 # ---------------------------------------------------------------------------
 # Van der Pol dynamics
@@ -99,7 +98,8 @@ class MLPDynamics(Dynamics):
 
     The MLP learns the continuous-time derivative ``f(z)``,
     and ``eval`` returns that derivative ``f(z)``.
-    Noise is auto-initialised by XFADS via ``state_noise`` in dyn_conf.
+    Process-noise initialization and Q prior policy are supplied by the
+    serializable trainer configuration.
     """
 
     net: enn.Sequential
@@ -298,6 +298,7 @@ def evaluate(
     # Procrustes alignment
     aff = procrustes_affine(latent_states.reshape(-1, D), means.reshape(-1, D))
     aligned = align(aff, means)
+    aligned_covs = jax.vmap(jax.vmap(lambda cov: aff.A @ cov @ aff.A.T))(post_covs)
 
     # Metrics
     post_rmse = float(jnp.sqrt(jnp.mean((aligned - latent_states) ** 2)))
@@ -339,7 +340,8 @@ def evaluate(
         flow_nrmse=nrmse,
         flow_angle=angle,
         aligned_means=aligned,
-        covs=post_covs,
+        covs=aligned_covs,
+        raw_covs=post_covs,
         alignment=aff,
     )
 
@@ -508,8 +510,6 @@ def main() -> None:
         approx_kwargs={},
         seed=0,
         n_steps=T,
-        fb_penalty=0.0,
-        noise_penalty=0.01,
         dropout=0.0,
         enc_conf=enc_conf,
         obs_conf=obs_conf,
@@ -527,18 +527,20 @@ def main() -> None:
         seed=0,
         learning_rate=1e-3,
         batch_size=batch_size,
+        post_optimizer_transforms=[
+            {"name": "gaussian_observation"},
+            {"name": "mvn_noise", "q_scale": 1.0, "q_prior_fraction": 0.1},
+        ],
     )
 
     trainer_conf_mlp = OmegaConf.create({**base_trainer_conf, "max_epoch": 500})
     trainer_conf_ou = OmegaConf.create({**base_trainer_conf, "max_epoch": 100})
-    trainer_conf_lora = OmegaConf.create(
-        {
-            **base_trainer_conf,
-            "max_epoch": 100,
-            # Keep transition noise fixed for this low-rank encoder demo.
-            "freeze_paths": ["noise_free"],
-        }
-    )
+    trainer_conf_lora = OmegaConf.create({
+        **base_trainer_conf,
+        "max_epoch": 100,
+        # Keep transition noise fixed for this low-rank encoder demo.
+        "freeze_paths": ["noise"],
+    })
 
     eval_kw = dict(mu=mu, xlim=xlim, vlim=vlim, grid=grid)
 
@@ -549,22 +551,19 @@ def main() -> None:
     print("Case 1: MLPDynamics (learned dynamics)")
     print("=" * 60)
 
-    conf1 = OmegaConf.create(
-        {
-            **shared_conf,
-            "dynamics": "MLPDynamics",
-            "integrator": "RK4",
-            "mc_size": 4,
-            "dyn_conf": dict(
-                input_dim=0,
-                context_dim=0,
-                state_noise=1.0,
-                width=32,
-                depth=1,
-                dt=dt,
-                    ),
-        }
-    )
+    conf1 = OmegaConf.create({
+        **shared_conf,
+        "dynamics": "MLPDynamics",
+        "integrator": "RK4",
+        "mc_size": 4,
+        "dyn_conf": dict(
+            input_dim=0,
+            context_dim=0,
+            width=32,
+            depth=1,
+            dt=dt,
+        ),
+    })
     model1 = XFADS(conf1, jr.key(456))
     model1 = model1.initialize(*train_data)
 
@@ -614,21 +613,18 @@ def main() -> None:
     print("Case 2: OU (diffusion-style tracking prior)")
     print("=" * 60)
 
-    conf2 = OmegaConf.create(
-        {
-            **shared_conf,
-            "dynamics": "OU",
-            "integrator": "Euler",
-            "mc_size": 4,
-            "dyn_conf": dict(
-                input_dim=0,
-                context_dim=0,
-                theta=2.0,
-                dt=dt,
-                        state_noise=1.0,
-            ),
-        }
-    )
+    conf2 = OmegaConf.create({
+        **shared_conf,
+        "dynamics": "OU",
+        "integrator": "Euler",
+        "mc_size": 4,
+        "dyn_conf": dict(
+            input_dim=0,
+            context_dim=0,
+            theta=2.0,
+            dt=dt,
+        ),
+    })
     model2 = XFADS(conf2, jr.key(789))
     model2 = model2.initialize(*train_data)
 
@@ -678,24 +674,21 @@ def main() -> None:
     print("Case 3: Low-rank MVN + Functional")
     print("=" * 60)
 
-    conf3 = OmegaConf.create(
-        {
-            **shared_conf,
-            "approx": "MVN",
-            "approx_kwargs": {"rank": 1},
-            "dynamics": "Functional",
-            "integrator": "RK4",
-            "mc_size": 4,
-            "dyn_conf": dict(
-                input_dim=0,
-                context_dim=0,
-                fn_path="__main__:vdp_dynamics",
-                fn_kwargs={"mu": mu},
-                dt=dt,
-                        state_noise=1.0,
-            ),
-        }
-    )
+    conf3 = OmegaConf.create({
+        **shared_conf,
+        "approx": "MVN",
+        "approx_kwargs": {"rank": 1},
+        "dynamics": "Functional",
+        "integrator": "RK4",
+        "mc_size": 4,
+        "dyn_conf": dict(
+            input_dim=0,
+            context_dim=0,
+            fn_path="__main__:vdp_dynamics",
+            fn_kwargs={"mu": mu},
+            dt=dt,
+        ),
+    })
     model3 = XFADS(conf3, jr.key(321))
     model3 = model3.initialize(*train_data)
 
@@ -754,9 +747,7 @@ def main() -> None:
     print("\n" + "=" * 74)
     print(f"Summary  (Procrustes-aligned; obs noise σ = {sigma_obs})")
     print("=" * 74)
-    header = (
-        f"{'Metric':<30s} {'MLPDynamics':>14s} {'OU':>14s} {'LowRank':>14s}"
-    )
+    header = f"{'Metric':<30s} {'MLPDynamics':>14s} {'OU':>14s} {'LowRank':>14s}"
     print(header)
     print("-" * len(header))
     for metric, label in [

@@ -16,13 +16,13 @@ import jax
 import jax.numpy as jnp
 import jax.random as jr
 import numpy as np
-from omegaconf import OmegaConf
 import tensorflow_probability.substrates.jax.distributions as tfp
+from omegaconf import OmegaConf
 
 from jaxfads import XFADS
-from jaxfads.base import Encoder, Observation, Approx, Dynamics
+from jaxfads.base import Approx, Dynamics, Encoder, Observation
 from jaxfads.distributions import MVN
-from jaxfads.trainer import EpochHandler, train, train_test_split
+from jaxfads.training import EpochHandler, train, train_test_split
 
 
 class PCAEncoder(Encoder):
@@ -196,7 +196,6 @@ def nofilt_training_comparison():
             "dropout": 0.0,
             "nofilt_eps": 1e-6,
             "dyn_conf": {
-                            "state_noise": 0.1,
                 "input_dim": 0,
                 "context_dim": 0,
             },
@@ -239,7 +238,7 @@ def nofilt_training_comparison():
             "learning_rate": 1e-2,
             "max_epoch": 300,
             "batch_size": 64,
-            "freeze_paths": ["alpha_encoder", "observation", "noise_free"],
+            "freeze_paths": ["alpha_encoder", "observation", "noise"],
         }
     )
 

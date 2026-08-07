@@ -1,5 +1,7 @@
+
 import chex
 import pytest
+from conftest import MockDynamics  # noqa: F401 - class registration side-effect
 from jax import numpy as jnp
 from jax import random as jrnd
 from omegaconf import OmegaConf
@@ -227,3 +229,8 @@ def test_gaussian_cov_floor():
     cov = glm.likelihood.cov()
     # floor enforced: variance >= floor despite near-zero unconstrained cov
     assert float(cov.min()) >= 1e-2 - 1e-6, f"floor not applied: {cov}"
+
+
+def test_removed_manual_mstep_api_is_not_imported():
+    """Observation M-steps are trainer-plugin policy, not public APIs."""
+    assert not hasattr(GLM, "mstep_from_data")

@@ -5,13 +5,12 @@ description = "eXponential FAmily Dynamical System"
 authors = [{ name = "yuanz", email = "yuanz271@gmail.com" }]
 license = "MIT"
 readme = "README.md"
-requires-python = ">= 3.11"
+requires-python = ">= 3.12"
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
     "Topic :: Scientific/Engineering :: Mathematics",
     "License :: OSI Approved :: MIT License",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
@@ -20,11 +19,23 @@ dependencies = [
     "equinox>=0.11.12",
     "omegaconf>=2.3.0",
     "rich>=14.0.0",
-    "tensorflow-probability[jax]>=0.24.0,<0.26.0",
-    "jax>=0.4.38,<0.7.0",
-    "gearax @ git+https://github.com/yuanz271/gearax.git@29d694e66adb11c5bf6dd43c52ff5f839cd86f10",
+    "tfp-nightly[jax]",  # stable tensorflow-probability is JAX<0.7 only; nightly fixes JAX 0.7+ compat (see tensorflow/probability#1994)
+    "jax>=0.4.38",
+    "gearax @ git+https://github.com/yuanz271/gearax.git@9ef627f3f13940ec86e78228bd338329f172c959",  # bumped past gearax's own jax<0.7.0 pin removal; no override-dependencies needed here anymore
     "jaxtyping>=0.3.2",
 ]
+
+# GPU support is opt-in, not assumed: the base `jax` dependency above installs
+# CPU-only by default. Users pick exactly one of these extras based on their
+# system's CUDA version (jax[cuda12] and jax[cuda13] cannot coexist in the same
+# environment -- each installs a jaxlib build compiled against a specific CUDA
+# toolkit, so `pip install jaxfads[cuda12,cuda13]` together would conflict, not
+# combine). Note CUDA 13 dropped support for some older GPU architectures
+# (Maxwell/Volta/Pascal, SM < 7.5) that CUDA 12 still supports, so cuda13 is
+# not a strict superset -- users on older GPUs should stay on cuda12.
+[project.optional-dependencies]
+cuda12 = ["jax[cuda12]"]
+cuda13 = ["jax[cuda13]"]
 
 [dependency-groups]
 dev = [
@@ -54,12 +65,17 @@ packages = ["src/jaxfads"]
 allow-direct-references = true
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py312"
 preview = true
 
 [tool.ruff.lint]
 ignore = ["E501", "F722"]
 extend-select = ["FURB"]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: opt-in end-to-end integration tests",
+]
 
 [tool.numpydoc_validation]
 checks = ["GL01", "SS02", "PR01", "PR10", "RT01"]

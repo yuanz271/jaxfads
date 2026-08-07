@@ -13,21 +13,25 @@ from pathlib import Path
 from typing import Any
 
 import equinox as eqx
+from gearax.modules import ConfModule, load_model, save_model
 from jax import Array, vmap
 from jax import numpy as jnp
 from jax import random as jrnd
-from gearax.modules import ConfModule, load_model, save_model
 from omegaconf import OmegaConf
 
-from . import core, distributions, dynamics, encoders, integrators, observations  # noqa: F401 — side-effect registers subclasses
-from .base import Approx
-from .base import Dynamics, Integrator
-from .base import Encoder, Observation
+from . import (  # noqa: F401 — side-effect registers subclasses
+    core,
+    distributions,
+    dynamics,
+    encoders,
+    integrators,
+    observations,
+)
+from .base import Approx, Dynamics, Encoder, Integrator, Observation
 from .core import Mode
+from .logging import get_logger
 from .nn import DataMasker
 from .util import vmap_with_key
-from .logging import get_logger
-
 
 logger = get_logger(__name__)
 
@@ -71,8 +75,10 @@ class XFADS(ConfModule):
         Dropout masker for pseudo-observations during training.
     unconstrained_prior_natural : Array
         Free-form prior parameters (constrained to natural at inference).
-    noise_free : Array
-        Free-form noise parameters (constrained to canon/mean at inference).
+    approx : Approx
+        Static exponential-family approximation configuration.
+    noise : Array
+        Free-form process-noise parameters.
 
     Notes
     -----
@@ -124,7 +130,8 @@ class XFADS(ConfModule):
     beta_encoder: Callable | None
     masker: DataMasker
     unconstrained_prior_natural: Any
-    noise_free: Any
+    approx: Approx = eqx.field(static=True)
+    noise: Array
 
     def __init__(
         self, conf, key=None
@@ -185,7 +192,12 @@ class XFADS(ConfModule):
         self.dynamics = Dynamics.get_subclass(dynamics_name)(dyn_conf, key=ky)
         self.integrator = Integrator.get_subclass(integrator_name)(dyn_conf)
 
-        self.noise_free = self.approx.free_from_kw(scale=dyn_conf.state_noise)
+        approx_cls = Approx.get_subclass(self.conf.approx)
+        approx_kwargs = dict(self.conf.approx_kwargs)
+        approx_kwargs.setdefault("rank", self.conf.state_dim)
+        approx = approx_cls(dim=self.conf.state_dim, **approx_kwargs)
+        self.approx = approx
+        self.noise = approx.free_from_kw(scale=1.0)
 
         obs_conf = OmegaConf.merge(
             self.conf.obs_conf,
@@ -229,9 +241,6 @@ class XFADS(ConfModule):
         else:
             key, ky = jrnd.split(key)
             self.beta_encoder = encoders.BetaEncoder(enc_conf, ky)
-
-        # if "s" in static_params:
-        #     self.dynamics.set_static()
 
         self.unconstrained_prior_natural = self.approx.free_from_kw(scale=1.0)
 
@@ -299,23 +308,6 @@ class XFADS(ConfModule):
         logger.info("XFADS save: path=%s", str(path))
         save_model(path, model)
 
-    @property
-    def approx(self):
-        """
-        Exponential-family approximation instance.
-
-        Returns
-        -------
-        Approx
-            An approximation instance configured from ``approx`` and
-            ``approx_kwargs``.
-        """
-        cls = Approx.get_subclass(self.conf.approx)
-        kwargs = dict(self.conf.approx_kwargs)
-        # Default rank to state_dim (full rank) when not specified.
-        kwargs.setdefault("rank", self.conf.state_dim)
-        return cls(dim=self.conf.state_dim, **kwargs)
-
     def prior_natural(self) -> Array:
         """
         Get the prior distribution in natural parameter form.
@@ -367,6 +359,8 @@ class XFADS(ConfModule):
             Moment parameters of posterior distributions over states.
         predictions : Array, shape (N, T, param_dim)
             Predicted moment parameters from dynamics model.
+        M-step statistics are intentionally computed by trainer policies from
+        these inference outputs; the model forward pass remains inference-only.
 
         Notes
         -----
@@ -408,10 +402,7 @@ class XFADS(ConfModule):
         """
         approx = self.approx
 
-        def _free_to_natural(free_flat: Array) -> Array:
-            return approx.free_to_natural(free_flat)
-
-        batch_free_to_natural = vmap(vmap(_free_to_natural))
+        batch_free_to_natural = vmap(vmap(approx.free_to_natural))
         batch_alpha_encode = vmap_with_key(vmap_with_key(self.alpha_encoder))
         batch_beta_encode = (
             None if self.beta_encoder is None else vmap_with_key(self.beta_encoder)

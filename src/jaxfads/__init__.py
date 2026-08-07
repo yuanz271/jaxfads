@@ -11,6 +11,6 @@ from __future__ import annotations
 
 from .logging import configure_logging
 from .smoother import XFADS
-from .trainer import train
+from .training import train
 
-__all__ = ["XFADS", "train", "configure_logging"]
+__all__ = ["XFADS", "configure_logging", "train"]
