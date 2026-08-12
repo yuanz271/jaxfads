@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.11.0
+
 * **Default behavior change:** `MVN` now defaults to
   `use_sigma_points=True` -- propagating `q(z_{t-1})` through the
   transition uses deterministic unscented-transform (UT) sigma points
