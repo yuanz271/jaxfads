@@ -40,13 +40,37 @@ defensive abstraction or speculative compatibility:
 ## Repository workflow
 
 - Follow the existing source layout and naming conventions.
-- Use `uv run` for Python, pytest, Ruff, and related tools; consult `PYTHON.md`
-  for Python-specific commands.
+- Use `uv` for environment and package management; do not use pip, poetry,
+  conda, or manually managed virtual environments. Use `uv run` for Python,
+  pytest, Ruff, and related tools.
+- Add/remove/update dependencies with `uv add`, `uv remove`, or `uv lock`; do
+  not edit dependency declarations or lockfiles by hand. Use `uvx` for a
+  one-off tool that is not a project dependency.
 - During iteration, run tests scoped to the changed code. Run the full suite
   only when explicitly requested or as the final pre-push validation.
 - For changes affecting training, inference, serialization, or device behavior,
   include the smallest relevant regression test and update the corresponding
   public documentation in `docs/`.
+### Python project rules
+
+- The project uses `pyproject.toml` and `uv.lock`; do not create
+  `setup.py`, `setup.cfg`, or `requirements.txt`.
+- Tests use pytest, live under `tests/`, and follow `test_*.py` and `test_*`
+  naming. A test package does not need `__init__.py`.
+- Ruff provides linting, formatting, and import sorting. Use:
+  ```bash
+  uv run ruff check .
+  uv run ruff check --fix .
+  uv run ruff format .
+  uv run ruff format --check .
+  ```
+- Use `uv run ty check` or `uv run mypy .` when type checking is configured.
+- Follow the configured Ruff style: double quotes, spaces, and 88-character
+  formatting; do not add bare `# type: ignore` comments.
+- Pre-commit hooks use `prek` when available; install with
+  `uvx prek install` or use `uvx pre-commit install`.
+- Do not install packages globally or run `python setup.py`.
+
 - Device integration tests are opt-in:
   ```bash
   JAXFADS_RUN_DEVICE_INTEGRATION=1 uv run pytest -q -m integration \
