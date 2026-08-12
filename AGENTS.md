@@ -59,6 +59,25 @@ When implementing or reviewing changes in this repo:
 - Prefer simple, theoretically consistent formulations before adding special-case logic.
 - Add edge-case handling when it is required by a concrete failure, test, or user requirement.
 
+### Research-code implementation style
+
+This is research code. Favor mathematical clarity, algorithmic fluency, and
+readability over defensive abstraction or speculative compatibility:
+
+- Keep core algorithms pure, direct, and minimal. Express the mathematical
+  operation at the point where it is used rather than introducing wrappers,
+  fallbacks, or layers with no concrete second use.
+- Validate inputs at public boundaries and configuration resolution. Inside
+  numerical kernels and JAX-transformed code, rely on documented input
+  contracts and natural Python/JAX failures unless a guard is required for
+  numerical stability, data integrity, or a demonstrated failure mode.
+- Do not add speculative validation, fallback behavior, compatibility
+  scaffolding, or general-purpose extension mechanisms without a concrete
+  caller, requirement, or test.
+- Prefer focused tests for mathematical identities, invariants, conditioning,
+  numerical stability, and scientific behavior. Each test should distinguish a
+  required behavior or regression rather than exercise implementation detail.
+
 
 ### Exponential-family parameter forms
 
