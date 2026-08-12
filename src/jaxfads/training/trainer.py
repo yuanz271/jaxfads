@@ -69,12 +69,7 @@ def _build_post_optimizer_transform(spec):
     spec = dict(OmegaConf.to_container(spec, resolve=True))
     name = spec.pop("name", None)
     if name == "gaussian_observation":
-        if spec:
-            raise ValueError(
-                "gaussian_observation does not accept transform settings: "
-                f"{sorted(spec)}"
-            )
-        return GaussianObservationMstep()
+        return GaussianObservationMstep(**spec)
     if name == "mvn_noise":
         return MVNNoiseMstep(**spec)
     raise ValueError(f"Unknown post_optimizer_transform: {name!r}")

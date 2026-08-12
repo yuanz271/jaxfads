@@ -72,16 +72,18 @@ handler concerns (see [`EpochHandler`](#epoch-callbacks-and-the-epochhandler)).
 ```python
 from omegaconf import OmegaConf
 
-trainer_conf = OmegaConf.create(dict(
-    seed=42,
-    learning_rate=5e-4,
-    max_epoch=200,
-    batch_size=64,
-    post_optimizer_transforms=[
-        {"name": "gaussian_observation"},
-        {"name": "mvn_noise", "q_scale": 1.0, "q_prior_fraction": 0.1},
-    ],
-))
+trainer_conf = OmegaConf.create(
+    dict(
+        seed=42,
+        learning_rate=5e-4,
+        max_epoch=200,
+        batch_size=64,
+        post_optimizer_transforms=[
+            {"name": "gaussian_observation"},
+            {"name": "mvn_noise", "q_scale": 1.0, "q_prior_fraction": 0.1},
+        ],
+    )
+)
 ```
 
 ### Custom optimizer (e.g. masked weight decay)
@@ -186,6 +188,7 @@ pattern is:
 ```python
 import equinox as eqx
 
+
 def my_schedule(model, step):
     value = my_optax_schedule(step)
     return eqx.tree_at(lambda m: m.some_attribute, model, value)
@@ -228,6 +231,7 @@ def loss_and_forward(model):
     loss = ...
     return loss, forward
 
+
 (loss, forward), grads = eqx.filter_value_and_grad(
     loss_and_forward,
     has_aux=True,
@@ -252,14 +256,11 @@ declare model leaves that the optimizer must not update:
 
 ```python
 class PostOptimizerTransform(Protocol):
-    def initialize(self, model, *, key):
-        ...
+    def initialize(self, model, *, key): ...
 
-    def __call__(self, model, batch, forward, *, key):
-        ...
+    def __call__(self, model, batch, forward, *, key): ...
 
-    def frozen_paths(self, model) -> list[str]:
-        ...
+    def frozen_paths(self, model) -> list[str]: ...
 ```
 
 `initialize()` runs for each selected transform before freeze-mask
@@ -367,9 +368,8 @@ $$
 $$
 
 `update_rate=1.0` is direct replacement and preserves the current behavior.
-Smaller rates provide exponential averaging across minibatches. The rate is
-validated as finite and strictly positive, and is part of the serializable
-transform configuration.
+Smaller rates provide exponential averaging across minibatches. The rate is validated as finite and in `(0, 1]`, and is part of the
+serializable transform configuration.
 
 A Gaussian observation transform averages diagonal variances in observation
 space. An MVN process-noise transform first computes its residual covariance
@@ -412,6 +412,7 @@ def on_epoch_end(model, info):
     # info: {"epoch", "step", "train_loss", "train_losses"}
     return info["train_loss"] != info["train_loss"]  # stop on NaN
 
+
 trained = train(model, train_data, conf=trainer_conf, on_epoch_end=on_epoch_end)
 ```
 
@@ -433,11 +434,11 @@ train_data, valid_data = train_test_split(
 )
 
 handler = EpochHandler(
-    valid_data=valid_data,        # enables validation + best tracking
+    valid_data=valid_data,  # enables validation + best tracking
     checkpoint_path="runs/exp1",  # enables checkpoint/metrics/config writing
-    checkpoint_every=10,          # save current model every 10 epochs
-    patience=20,                  # early stopping; None disables
-    config=trainer_conf,          # dumped to config.yaml
+    checkpoint_every=10,  # save current model every 10 epochs
+    patience=20,  # early stopping; None disables
+    config=trainer_conf,  # dumped to config.yaml
 )
 
 train(model, train_data, conf=trainer_conf, on_epoch_end=handler)
@@ -495,11 +496,13 @@ nonlinear chart and are not a meaningful function of Q):
 ```python
 import jax.numpy as jnp
 
+
 def q_regularizer(model):
     approx = model.approx
     moment = approx.canon_to_moment(approx.free_to_canon(model.noise))
-    _, Q = approx.unpack(moment)          # full (D, D) covariance
-    return 1e-4 * jnp.trace(Q)            # well-defined function of Q
+    _, Q = approx.unpack(moment)  # full (D, D) covariance
+    return 1e-4 * jnp.trace(Q)  # well-defined function of Q
+
 
 train(model, data, conf=trainer_conf, regularizer=q_regularizer)
 ```
@@ -513,7 +516,7 @@ calling `train`:
 ```python
 from jaxfads import configure_logging
 
-configure_logging("INFO")               # console output
+configure_logging("INFO")  # console output
 configure_logging("DEBUG", file_path="train.log")  # + file output
 ```
 

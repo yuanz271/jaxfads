@@ -10,7 +10,7 @@ from omegaconf import OmegaConf
 
 import jaxfads.observations  # noqa: F401 — register GLM subclass
 from jaxfads.smoother import XFADS
-from jaxfads.training import MVNNoiseMstep, batch_loss, train
+from jaxfads.training import GaussianObservationMstep, MVNNoiseMstep, batch_loss, train
 
 
 @pytest.mark.parametrize("kl_warmup_steps", [0, 1, 4, 10])
@@ -206,6 +206,87 @@ def test_mvn_noise_mstep_q_scale_must_be_positive_and_finite(q_scale):
     """q_scale is a scalar process variance, not an arbitrary scale."""
     with pytest.raises(ValueError, match="finite and positive"):
         MVNNoiseMstep(q_scale=q_scale)
+
+
+@pytest.mark.parametrize("update_rate", [0.0, -0.1, 1.1, float("nan"), float("inf")])
+def test_transform_update_rate_must_be_in_unit_interval(update_rate):
+    with pytest.raises(ValueError, match=r"in \(0, 1\]"):
+        MVNNoiseMstep(update_rate=update_rate)
+    with pytest.raises(ValueError, match=r"in \(0, 1\]"):
+        GaussianObservationMstep(update_rate=update_rate)
+
+
+def test_gaussian_observation_mstep_ema_averages_variance_space(
+    gaussian_model_conf, gaussian_sample_data
+):
+    model = XFADS(gaussian_model_conf, jrnd.key(0)).initialize(*gaussian_sample_data)
+    forward = model(*gaussian_sample_data, key=jrnd.key(1))
+    current = model.observation.likelihood.cov()
+    direct = GaussianObservationMstep()(
+        model, gaussian_sample_data, forward, key=jrnd.key(2)
+    )
+    target = direct.observation.likelihood.cov()
+    averaged = GaussianObservationMstep(update_rate=0.25)(
+        model, gaussian_sample_data, forward, key=jrnd.key(2)
+    )
+    expected = 0.75 * current + 0.25 * target
+    chex.assert_trees_all_close(
+        averaged.observation.likelihood.cov(), expected, atol=1e-5
+    )
+
+
+@pytest.mark.parametrize("rank", [0, 2])
+def test_mvn_noise_mstep_ema_averages_covariance_space(gaussian_model_conf, rank):
+    d = 2
+    gaussian_model_conf.state_dim = d
+    gaussian_model_conf.approx_kwargs = {"rank": rank}
+    model = MVNNoiseMstep(q_scale=1.0, update_rate=0.25).initialize(
+        XFADS(gaussian_model_conf, jrnd.key(0)), key=jrnd.key(1)
+    )
+    approx = model.approx
+    current = jnp.eye(d)
+    posterior = jnp.stack((
+        approx.pack(jnp.zeros(d), current),
+        approx.pack(jnp.zeros(d), current),
+    ))[None]
+    predictive = jnp.stack((
+        approx.pack(jnp.zeros(d), 2.0 * current),
+        approx.pack(jnp.zeros(d), 2.0 * current),
+    ))[None]
+    updated = MVNNoiseMstep(q_scale=1.0, q_prior_fraction=0.0, update_rate=0.25)(
+        model,
+        (None, None, None, None),
+        (jnp.zeros_like(posterior), posterior, predictive),
+        key=jrnd.key(2),
+    )
+    _, q = approx.unpack(approx.canon_to_moment(approx.free_to_canon(updated.noise)))
+    expected = 0.75 * current + 0.25 * (2.0 * current)
+    chex.assert_trees_all_close(q, expected, atol=1e-5)
+
+
+def test_transform_config_rejects_unknown_name(trainer_config, model_conf, sample_data):
+    trainer_config.post_optimizer_transforms = [{"name": "unknown"}]
+    with pytest.raises(ValueError, match="Unknown post_optimizer_transform"):
+        train(XFADS(model_conf, jrnd.key(0)), sample_data, conf=trainer_config)
+
+
+def test_transform_does_not_run_model_forward(
+    gaussian_model_conf, gaussian_sample_data, monkeypatch
+):
+    model = XFADS(gaussian_model_conf, jrnd.key(0)).initialize(*gaussian_sample_data)
+    calls = []
+    original = XFADS.__call__
+
+    def counted(self, *args, **kwargs):
+        calls.append(1)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(XFADS, "__call__", counted)
+    forward = model(*gaussian_sample_data, key=jrnd.key(1))
+    GaussianObservationMstep(update_rate=0.25)(
+        model, gaussian_sample_data, forward, key=jrnd.key(2)
+    )
+    assert len(calls) == 1
 
 
 def test_train_accepts_user_optimizer(model_conf, trainer_config, sample_data):

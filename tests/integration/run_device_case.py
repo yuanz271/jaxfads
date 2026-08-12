@@ -50,8 +50,13 @@ def _trainer_conf():
         "learning_rate": 1e-3,
         "seed": 23,
         "post_optimizer_transforms": [
-            {"name": "gaussian_observation"},
-            {"name": "mvn_noise", "q_scale": 0.25, "q_prior_fraction": 0.1},
+            {"name": "gaussian_observation", "update_rate": 0.2},
+            {
+                "name": "mvn_noise",
+                "q_scale": 0.25,
+                "q_prior_fraction": 0.1,
+                "update_rate": 0.2,
+            },
         ],
     })
 

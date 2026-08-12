@@ -13,6 +13,22 @@ from ..constraints import _EPS, _MIN_VARIANCE, unconstrain_positive
 from ..distributions.mvn import MVN
 
 
+def _validate_update_rate(update_rate: float) -> float:
+    if not isfinite(update_rate) or not 0.0 < update_rate <= 1.0:
+        raise ValueError("update_rate must be finite and in (0, 1]")
+    return float(update_rate)
+
+
+def _ema(current, target, rate):
+    return (1.0 - rate) * current + rate * target
+
+
+def _project_psd(cov, floor):
+    cov = 0.5 * (cov + cov.T)
+    eigenvalues, eigenvectors = jnp.linalg.eigh(cov)
+    return (eigenvectors * jnp.maximum(eigenvalues, floor)) @ eigenvectors.T
+
+
 def gaussian_observation_stat(t, y, moment, approx, readout):
     unpack = jax.vmap(jax.vmap(approx.unpack))
     mean_z, cov_z = unpack(moment)
@@ -24,8 +40,14 @@ def gaussian_observation_stat(t, y, moment, approx, readout):
     return residual_sq + propagated_var
 
 
+@dataclass(frozen=True)
 class GaussianObservationMstep:
     """Update diagonal Gaussian observation covariance from posterior moments."""
+
+    update_rate: float = 1.0
+
+    def __post_init__(self):
+        _validate_update_rate(self.update_rate)
 
     def initialize(self, model, *, key):
         del key
@@ -45,7 +67,9 @@ class GaussianObservationMstep:
         valid = jnp.isfinite(y)
         sums = jnp.sum(jnp.where(valid, stat, 0), axis=(0, 1))
         counts = jnp.sum(valid, axis=(0, 1))
-        r_new = sums / jnp.maximum(counts, 1)
+        r_target = sums / jnp.maximum(counts, 1)
+        r_current = likelihood.cov()
+        r_new = _ema(r_current, r_target, self.update_rate)
         free = unconstrain_positive(jnp.maximum(r_new - _MIN_VARIANCE, _EPS))
         new_likelihood = eqx.tree_at(
             lambda leaf: leaf.unconstrained_cov, likelihood, free
@@ -68,12 +92,14 @@ class MVNNoiseMstep:
 
     q_scale: float = 1.0
     q_prior_fraction: float = 0.1
+    update_rate: float = 1.0
 
     def __post_init__(self):
         if self.q_scale <= 0 or not isfinite(self.q_scale):
             raise ValueError("q_scale must be finite and positive")
         if self.q_prior_fraction < 0 or not isfinite(self.q_prior_fraction):
             raise ValueError("q_prior_fraction must be finite and nonnegative")
+        _validate_update_rate(self.update_rate)
 
     def initialize(self, model, *, key):
         del key
@@ -105,10 +131,14 @@ class MVNNoiseMstep:
         d = q_hat.shape[-1]
         prior = self.q_scale * jnp.eye(d, dtype=q_hat.dtype)
         cov = (q_hat + self.q_prior_fraction * prior) / (1.0 + self.q_prior_fraction)
-        cov = 0.5 * (cov + cov.T)
+        _, current_cov = approx.unpack(
+            approx.canon_to_moment(approx.free_to_canon(model.noise))
+        )
+        cov = _ema(current_cov, cov, self.update_rate)
         if approx._layout.is_diag:
-            cov = jnp.diag(jnp.diagonal(cov))
-        cov = cov + _EPS * jnp.eye(d, dtype=cov.dtype)
+            cov = jnp.diag(jnp.maximum(jnp.diagonal(cov), _EPS))
+        else:
+            cov = _project_psd(cov, _EPS)
         free = approx.canon_to_free(
             approx.moment_to_canon(approx.pack(jnp.zeros(d, dtype=cov.dtype), cov))
         )
