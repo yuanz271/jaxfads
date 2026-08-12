@@ -340,6 +340,60 @@ from posterior moments and the current post-optimizer readout state. This
 accepted one-step-lagged approximation avoids a second inference pass and keeps
 the forward-output contract minimal.
 
+### Exponential averaging of stochastic transform estimates
+
+A minibatch closed-form estimate is a stochastic estimate of its population
+update. Built-in transforms may therefore stabilize their target with an
+`update_rate`:
+
+```yaml
+post_optimizer_transforms:
+  - name: gaussian_observation
+    update_rate: 0.2
+  - name: mvn_noise
+    q_scale: 1.0
+    q_prior_fraction: 0.1
+    update_rate: 0.2
+```
+
+For a target $\widehat\theta$ and current constrained parameter $\theta$,
+the transform applies:
+
+$$
+\theta_{\mathrm{new}}
+= (1-\rho)\theta_{\mathrm{current}}
++ \rho\widehat\theta,
+\qquad 0 < \rho \leq 1.
+$$
+
+`update_rate=1.0` is direct replacement and preserves the current behavior.
+Smaller rates provide exponential averaging across minibatches. The rate is
+validated as finite and strictly positive, and is part of the serializable
+transform configuration.
+
+A Gaussian observation transform averages diagonal variances in observation
+space. An MVN process-noise transform first computes its residual covariance
+estimate and applies the configured Q prior:
+
+$$
+Q_{\mathrm{target}}
+= \frac{\widehat Q + \alpha Q_0}{1+\alpha},
+\qquad
+\alpha=\texttt{q\_prior\_fraction},
+$$
+
+then averages $Q_{\mathrm{target}}$ with the current covariance in covariance
+space before encoding it into the model's free representation. Interpolating
+raw free parameters is not the specified behavior because their map to
+covariance is nonlinear.
+
+EMA uses the existing single forward output and current model leaves. It must
+not invoke a second model inference pass. Transform-owned freeze paths remain
+unchanged: the optimizer does not update the R/Q leaves that the transforms
+replace. Basic exponential averaging requires no additional transform state;
+the current model parameter is the running average. More elaborate stateful
+stabilizers may add serializable transform state in a future extension.
+
 ## Multi-Device Training
 
 When multiple devices are available, training data is automatically sharded
