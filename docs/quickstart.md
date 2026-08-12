@@ -11,7 +11,7 @@ import jax.random as jr
 import jax.numpy as jnp
 
 from jaxfads import XFADS
-from jaxfads.trainer import train
+from jaxfads.training import train
 
 # Ensure built-in subclasses are imported/registered as needed.
 from jaxfads.observations import GLM  # noqa: F401
@@ -31,7 +31,6 @@ conf = OmegaConf.create(
         "dyn_conf": {
             "theta": 2.0,
             "dt": 0.05,
-            "state_noise": 1.0,
             "input_dim": 0,
             "context_dim": 0,
         },
@@ -67,6 +66,10 @@ trainer_conf = OmegaConf.create(
         "learning_rate": 1e-3,
         "max_epoch": 50,
         "batch_size": 16,
+        "model_transformations": [
+            {"name": "gaussian_observation"},
+            {"name": "mvn_noise", "q_scale": 1.0, "q_prior_fraction": 0.1},
+        ],
         "freeze_paths": [],
     }
 )
@@ -109,4 +112,4 @@ natural_params, moment_params, predictions = trained(
 - [Training Configuration](training.md)
 - [Algorithm Overview](algorithm.md)
 - [Paper Parity Review](paper_parity_2403_01371.md)
-- [Learning Dynamics from PCA Coordinates](pca_dynamics_workflow.md)
+- [PCA dynamics verification](../benchmarks/pca_dynamics_verification.md)

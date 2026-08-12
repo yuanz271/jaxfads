@@ -15,9 +15,9 @@ from jax import numpy as jnp
 from jax import random as jrnd
 from jax.scipy.linalg import cho_solve
 
-from .base import Observation
-from .constraints import _EPS, constrain_positive, unconstrain_positive
-from .base import Approx
+from .base import Approx, Observation
+from .constraints import _EPS, _MIN_VARIANCE, constrain_positive, unconstrain_positive
+from .distributions.mvn import MVN
 from .nn import StationaryLinear, VariantBiasLinear
 
 _MAX_LOGRATE = 7.0
@@ -334,7 +334,8 @@ class GLM(Observation):
                 "GLM requires `obs_conf._approx_name` to be injected by XFADS for "
                 "fail-fast Approx validation."
             )
-        if str(approx_name) != "MVN":
+        approx_cls = Approx.get_subclass(str(approx_name))
+        if not issubclass(approx_cls, MVN):
             raise NotImplementedError(
                 "GLM analytic eloglik currently supports only MVN approximations "
                 "(requires approx.unpack(moment) -> (mean, cov))."
@@ -466,11 +467,11 @@ class GLM(Observation):
 
 __all__ = [
     "GLM",
+    "Gaussian",
+    "Likelihood",
     "Observation",
     "Poisson",
-    "Gaussian",
     "make_readout",
-    "Likelihood",
     "register_readout_init",
 ]
 
@@ -622,7 +623,7 @@ class Gaussian(eqx.Module, strict=True):
     def __init__(self, conf, key):  # pyright: ignore[reportMissingSuperCall]
         self.conf = conf
         cov = jnp.array(conf.get("cov", jnp.ones(conf.observation_dim)))
-        self.unconstrained_cov = unconstrain_positive(cov)
+        self.unconstrained_cov = unconstrain_positive(jnp.maximum(cov, _EPS))
 
     @staticmethod
     def link(y: Array) -> Array:
@@ -652,9 +653,13 @@ class Gaussian(eqx.Module, strict=True):
 
         Notes
         -----
-        Applies positive constraint to ensure valid variance values.
+        Applies positive constraint, then adds ``_MIN_VARIANCE`` (always, a
+        private float32-safety constant -- not a modeling choice) so the
+        variance stays bounded away from zero for any ``unconstrained_cov``,
+        including values that would otherwise underflow ``constrain_positive``
+        to an exact ``0.0``.
         """
-        return constrain_positive(self.unconstrained_cov)
+        return _MIN_VARIANCE + constrain_positive(self.unconstrained_cov)
 
     def eloglik(
         self,
@@ -753,14 +758,3 @@ class Gaussian(eqx.Module, strict=True):
 
         ll = -0.5 * (d * jnp.log(2.0 * jnp.pi) + logdet + quad)
         return ll
-
-    # def set_static(self, static=True) -> None:
-    #     """
-    #     Set observation noise parameters as static (non-trainable).
-
-    #     Parameters
-    #     ----------
-    #     static : bool, default=True
-    #         Whether to make parameters static.
-    #     """
-    #     self.__dataclass_fields__["unconstrained_cov"].metadata = {"static": static}

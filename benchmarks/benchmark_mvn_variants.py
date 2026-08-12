@@ -23,11 +23,11 @@ from omegaconf import OmegaConf
 
 from jaxfads import XFADS, configure_logging
 from jaxfads.observations import GLM  # noqa: F401 (register GLM)
-from jaxfads.trainer import EpochHandler, train, train_test_split
+from jaxfads.training import EpochHandler, train, train_test_split
 
 # Import helpers from the VDP example (sibling directory).
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "examples"))
-from vdp_example import evaluate, simulate_vdp  # noqa: E402
+from vdp_example import evaluate, simulate_vdp
 
 
 def _build_data(*, n_trials: int, n_steps: int, dt: float, mu: float, obs_dim: int):
@@ -50,12 +50,26 @@ def _build_data(*, n_trials: int, n_steps: int, dt: float, mu: float, obs_dim: i
 
 
 def _variant_rows(rank_list: list[int]):
+    # MVN defaults to use_sigma_points=True; pin False so this rank
+    # comparison isn't silently confounded by also switching propagation
+    # method (that's a different question, covered by
+    # benchmarks/benchmark_highd_oscillator.py).
     rows = [
-        dict(name="DiagMVN", approx="MVN", approx_kwargs={"rank": 0}),
-        dict(name="FullMVN", approx="MVN", approx_kwargs={}),
+        dict(
+            name="DiagMVN",
+            approx="MVN",
+            approx_kwargs={"rank": 0, "use_sigma_points": False},
+        ),
+        dict(name="FullMVN", approx="MVN", approx_kwargs={"use_sigma_points": False}),
     ]
     for r in rank_list:
-        rows.append(dict(name=f"LoRaMVN-r{r}", approx="MVN", approx_kwargs={"rank": r}))
+        rows.append(
+            dict(
+                name=f"LoRaMVN-r{r}",
+                approx="MVN",
+                approx_kwargs={"rank": r, "use_sigma_points": False},
+            )
+        )
     return rows
 
 
@@ -69,7 +83,6 @@ def main() -> None:
     parser.add_argument("--n-trials", type=int, default=64)
     parser.add_argument("--n-steps", type=int, default=300)
     parser.add_argument("--obs-dim", type=int, default=10)
-    parser.add_argument("--state-dim", type=int, default=2)
     parser.add_argument("--dt", type=float, default=0.04)
     parser.add_argument("--mu", type=float, default=2.0)
     parser.add_argument("--max-epoch", type=int, default=80)
@@ -77,7 +90,6 @@ def main() -> None:
     parser.add_argument("--seeds", type=str, default="0,1")
     parser.add_argument("--lora-ranks", type=str, default="1")
     parser.add_argument("--out-dir", type=str, default="benchmarks/results/vdp_smoke")
-    parser.add_argument("--freeze-state-noise", action="store_true")
     args = parser.parse_args()
 
     configure_logging("INFO")
@@ -88,6 +100,8 @@ def main() -> None:
 
     seeds = [int(s) for s in args.seeds.split(",") if s.strip()]
     lora_ranks = [int(s) for s in args.lora_ranks.split(",") if s.strip()]
+    if any(rank < 0 or rank > 2 for rank in lora_ranks):
+        parser.error("--lora-ranks values must satisfy 0 <= rank <= 2")
 
     data, latent, observations, c_true, b_true, sigma_obs = _build_data(
         n_trials=args.n_trials,
@@ -102,13 +116,11 @@ def main() -> None:
     base_conf = dict(
         mode="smooth",
         observation_dim=args.obs_dim,
-        state_dim=args.state_dim,
+        state_dim=2,
         dynamics="Functional",
         integrator="RK4",
         seed=0,
         n_steps=args.n_steps,
-        fb_penalty=0.0,
-        noise_penalty=0.01,
         dropout=0.0,
         mc_size=4,
         dyn_conf=dict(
@@ -117,7 +129,6 @@ def main() -> None:
             fn_path="vdp_example:vdp_dynamics",
             fn_kwargs={"mu": args.mu},
             dt=args.dt,
-                state_noise=0.1,
         ),
         enc_conf=dict(width=32, depth=2, dropout=None),
         obs_conf=dict(
@@ -135,7 +146,10 @@ def main() -> None:
         learning_rate=1e-3,
         max_epoch=args.max_epoch,
         batch_size=args.batch_size,
-        freeze_state_noise=bool(args.freeze_state_noise),
+        model_transformations=[
+            {"name": "gaussian_observation"},
+            {"name": "mvn_noise", "q_scale": 0.1, "q_prior_fraction": 0.1},
+        ],
     )
 
     train_data, valid_data = train_test_split(
@@ -147,14 +161,12 @@ def main() -> None:
 
     for variant in variants:
         for seed in seeds:
-            conf = OmegaConf.create(
-                {
-                    **base_conf,
-                    "seed": seed,
-                    "approx": variant["approx"],
-                    "approx_kwargs": variant["approx_kwargs"],
-                }
-            )
+            conf = OmegaConf.create({
+                **base_conf,
+                "seed": seed,
+                "approx": variant["approx"],
+                "approx_kwargs": variant["approx_kwargs"],
+            })
             model = XFADS(conf, jr.key(seed)).initialize(*train_data)
 
             t0 = time.perf_counter()
@@ -162,8 +174,15 @@ def main() -> None:
             train(
                 model,
                 train_data,
-                conf=OmegaConf.create({**trainer_conf, "seed": seed}),
+                conf=OmegaConf.create({
+                    **trainer_conf,
+                    "seed": seed,
+                    "model_transformations": trainer_conf[
+                        "model_transformations"
+                    ],
+                }),
                 on_epoch_end=handler,
+                model_transformations=(),
             )
             trained = handler.best_model
             dt_train = time.perf_counter() - t0

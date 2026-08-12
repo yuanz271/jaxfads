@@ -5,8 +5,7 @@ Reference: Dowling, Zhao, Park (2024). *eXponential FAmily Dynamical Systems
 [arXiv:2403.01371](https://arxiv.org/abs/2403.01371)
 
 See also: [Quickstart](quickstart.md), [Dynamics](dynamics.md),
-[Training](training.md), and
-[Parity Review](paper_parity_2403_01371.md).
+[Training](training.md), and [Reproducibility](reproducibility.md).
 
 ## Problem Setting
 
@@ -82,6 +81,79 @@ In code this is implemented by `core.expected_predictive_moment`:
 This gives predictive mean `m̄_t = (1/S) Σ m_θ(z^s)` and covariance
 `P̄_t = M̄_c M̄_cᵀ + Q` (Eq 23), where `M̄_c` is the centered sample
 matrix — a natural low-rank structure.
+
+### Transition-point propagation
+
+The prediction expectation is delegated to the approximation family through:
+
+```python
+points, weights = approx.transition_points(key, moment, mc_size)
+```
+
+`points` has shape `(n_points, state_dim)` and `weights` has shape
+`(n_points,)`. Core inference propagates the points through the latent
+transition, evaluates the predictive moment at each point, and computes the
+weighted average. The process-noise moment is part of the predictive-moment
+operation, not the point-selection policy.
+
+#### Monte Carlo default
+
+The default policy draws independent samples from the distribution represented
+by `moment` and assigns uniform weights:
+
+$$
+z_i \sim q(z),
+\qquad
+w_i = \frac{1}{S},
+\qquad
+S=\texttt{mc\_size}.
+$$
+
+When `mc_size <= state_dim`, the between-point covariance has rank at most
+`mc_size - 1`; the resulting approximation can be poorly conditioned for a
+full-dimensional predictive spread.
+
+#### MVN unscented sigma points
+
+`MVN` uses deterministic unscented-transform sigma points by default. For a
+Gaussian posterior with mean $m$, covariance $P$, and dimension $D$:
+
+$$
+\lambda = \alpha^2(D+\kappa)-D,
+\qquad
+c=D+\lambda.
+$$
+
+With $L L^\mathsf{T}=P$, the points are:
+
+$$
+X_0=m,
+\qquad
+X_i=m+\sqrt{c}\,L_{:,i},
+\qquad
+X_{D+i}=m-\sqrt{c}\,L_{:,i},
+$$
+
+for $i=1,\ldots,D$, with weights:
+
+$$
+w_0=\frac{\lambda}{c},
+\qquad
+w_i=\frac{1}{2c}
+\quad (i=1,\ldots,2D).
+$$
+
+The default parameters are `ut_alpha=1.0` and `ut_kappa=0.0`, giving
+`2D+1` points, `w_0=0`, and noncentral weights `1/(2D)`. `mc_size` is
+ignored when sigma points are enabled; set `use_sigma_points=False` to use
+Monte Carlo. Full MVN layouts use a Cholesky covariance factor, while the
+`rank=0` layout uses its diagonal covariance factor.
+
+Non-finite per-point predictive moments are excluded and the remaining valid
+weights are renormalized. If no positive valid weight remains, the predictive
+moment is non-finite. Very small scaled-UT `alpha` values can cause severe
+weight cancellation in float32; users overriding `ut_alpha` or `ut_kappa` are
+responsible for the resulting conditioning.
 
 ### Step 2 — Variational Update (Eq 13)
 
@@ -199,6 +271,26 @@ with shapes `(N, T, param_dim)`, `(N, T, param_dim)`, `(N, T, param_dim)`.
 | `filter` | `alpha` | filtering natural parameters (`λ̆_t`) |
 | `smooth` | `alpha + beta` | smoothing-side natural parameters (`λ_t`) |
 | `causal` | `alpha`, `beta` | reconstructed smoothing natural parameters (`λ_t = λ̆_t + b_t`) |
+| `nofilt` | custom encoder | posterior moments set directly from encoder outputs; no filtering recursion |
+
+## NOFILT inference
+
+`mode="nofilt"` bypasses the sequential filtering recursion. A user-defined
+encoder maps each observation to a latent point estimate. The framework wraps
+the estimate as a small-covariance approximation, computes dynamics predictions
+in parallel, and uses the same three-value forward contract as the filtering
+modes:
+
+```python
+natural, moment, predictive_moment = model(t, y, u, c, key=key)
+```
+
+The encoder is responsible for defining the latent coordinates. No beta encoder
+is constructed, and dynamics are trained through the predictive objective
+rather than through a filtering recursion. The approximation must support
+packing a point and covariance into its moment representation; the covariance
+scale is an explicit inference setting. This mode is useful for pretrained
+representations such as PCA or autoencoders, but the semantics are general.
 
 ## End-to-End Learning (Algorithm 1)
 

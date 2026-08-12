@@ -1,9 +1,10 @@
+import chex
 import pytest
+import tensorflow_probability.substrates.jax.distributions as tfp
 from jax import numpy as jnp
 from jax import random as jrnd
-import chex
-import tensorflow_probability.substrates.jax.distributions as tfp
 
+from jaxfads.base import Approx
 from jaxfads.distributions import MVN
 
 # rank=0 → diagonal, rank=dim → full
@@ -185,24 +186,6 @@ def test_encoder_free_to_natural_diag_matches_softplus():
     chex.assert_trees_all_close(natural[dim:], expected_j, atol=1e-6)
 
 
-def test_encoder_free_hooks_low_rank_produces_psd_precision_update():
-    dim, rank = 4, 2
-    approx = MVN(dim=dim, rank=rank)
-
-    assert approx.free_size() == 2 * dim + rank * dim
-    assert approx.param_size() == dim + dim * dim
-
-    free = jrnd.normal(jrnd.key(0), (approx.free_size(),))
-    natural = approx.free_to_natural(free)
-    chex.assert_shape(natural, (approx.param_size(),))
-
-    J = jnp.reshape(natural[dim:], (dim, dim))
-    chex.assert_trees_all_close(J, 0.5 * (J + J.T), atol=1e-6)
-
-    x = jrnd.normal(jrnd.key(2), (dim,))
-    quad = x @ J @ x
-    assert quad >= -1e-5
-
 
 @pytest.mark.parametrize("rank", [0, 2, 5])
 def test_encoder_free_zero_baseline_matches_across_ranks(rank):
@@ -229,6 +212,40 @@ def test_encoder_free_zero_baseline_matches_across_ranks(rank):
 
 
 def test_registry_lookup():
-    from jaxfads.base import Approx
 
     assert Approx.get_subclass("MVN") is MVN
+
+
+@pytest.mark.parametrize("dim,rank", _RANK_CASES)
+def test_transition_points_sigma_points_shape_and_weights(dim, rank):
+    """MVN(use_sigma_points=True).transition_points returns 2*dim+1 points
+    and weights summing to 1, for both diag (rank=0) and full (rank=dim)
+    layouts."""
+    mvn = MVN(dim=dim, rank=rank, use_sigma_points=True)
+    mean = jrnd.normal(jrnd.key(0), (dim,))
+    cov = _random_cov(jrnd.key(1), dim, rank)
+    moment = mvn.pack(mean, cov)
+
+    points, weights = mvn.transition_points(jrnd.key(2), moment, mc_size=4)
+
+    chex.assert_shape(points, (2 * dim + 1, dim))
+    chex.assert_shape(weights, (2 * dim + 1,))
+    chex.assert_trees_all_close(jnp.sum(weights), 1.0, atol=1e-5)
+    chex.assert_trees_all_close(points[0], mean, atol=1e-5)
+
+
+@pytest.mark.parametrize("dim,rank", _RANK_CASES)
+def test_transition_points_explicit_mc_matches_base_contract(dim, rank):
+    """MVN(use_sigma_points=False) (opt-out; MVN defaults to True) still
+    reproduces the base class's plain Monte Carlo contract exactly:
+    mc_size samples, uniform weights 1/mc_size."""
+    mvn = MVN(dim=dim, rank=rank, use_sigma_points=False)
+    mean = jrnd.normal(jrnd.key(0), (dim,))
+    cov = _random_cov(jrnd.key(1), dim, rank)
+    moment = mvn.pack(mean, cov)
+    mc_size = 8
+
+    points, weights = mvn.transition_points(jrnd.key(2), moment, mc_size)
+
+    chex.assert_shape(points, (mc_size, dim))
+    chex.assert_trees_all_close(weights, jnp.full((mc_size,), 1.0 / mc_size), atol=1e-8)

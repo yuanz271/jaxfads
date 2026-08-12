@@ -24,7 +24,7 @@ from omegaconf import OmegaConf
 
 from jaxfads import XFADS, configure_logging
 from jaxfads.observations import GLM  # noqa: F401 (register GLM)
-from jaxfads.trainer import EpochHandler, train, train_test_split
+from jaxfads.training import EpochHandler, train, train_test_split
 
 
 def oscillator_bank_dynamics(z, u, c, *, omega=1.2, gamma=0.15, beta=0.02):
@@ -120,7 +120,6 @@ def main() -> None:
     p.add_argument("--max-epoch", type=int, default=40)
     p.add_argument("--batch-size", type=int, default=32)
     p.add_argument("--out-dir", type=str, default="benchmarks/results/highd_oscillator")
-    p.add_argument("--freeze-state-noise", action="store_true")
     args = p.parse_args()
 
     configure_logging("INFO")
@@ -129,6 +128,10 @@ def main() -> None:
     dims = [int(s) for s in args.dims.split(",") if s.strip()]
     ranks = [int(s) for s in args.lora_ranks.split(",") if s.strip()]
     seeds = [int(s) for s in args.seeds.split(",") if s.strip()]
+    if any(dim <= 0 or dim % 2 for dim in dims):
+        p.error("--dims values must be positive even integers")
+    if any(rank < 0 for rank in ranks):
+        p.error("--lora-ranks values must be nonnegative")
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -162,61 +165,97 @@ def main() -> None:
         covariates = jnp.zeros((args.n_trials, args.n_steps, 0))
         data = (times, obs, controls, covariates)
 
-        variants = [
-            ("DiagMVN", "MVN", {"rank": 0}),
-            ("FullMVN", "MVN", {}),
-        ] + [(f"LoRaMVN-r{r}", "MVN", {"rank": r}) for r in ranks if r <= dim]
+        # MVN defaults to use_sigma_points=True; every "plain MC" variant
+        # below pins use_sigma_points=False explicitly so this comparison
+        # stays meaningful regardless of MVN's own default.
+        variants = (
+            [
+                ("DiagMVN", "MVN", {"rank": 0, "use_sigma_points": False}, None),
+                ("FullMVN", "MVN", {"use_sigma_points": False}, None),
+            ]
+            + [
+                (f"LoRaMVN-r{r}", "MVN", {"rank": r, "use_sigma_points": False}, None)
+                for r in ranks
+                if r <= dim
+            ]
+            + [
+                # Deliberately below the mc_size >= dim+1 safety threshold
+                # (transition_points' rank-deficiency warning) -- an
+                # explicit comparison point, not relying on the sweep's
+                # own default (now fixed to a safe dim+1) to demonstrate
+                # the pathology by accident.
+                ("FullMVN-mc4-unsafe", "MVN", {"use_sigma_points": False}, 4),
+                # Deterministic unscented-transform sigma points instead of
+                # MC; mc_size is ignored (always 2*dim+1 points).
+                ("FullMVN-UT", "MVN", {"use_sigma_points": True}, None),
+            ]
+            + [
+                # use_sigma_points only affects transition_points, which
+                # branches on approx._layout.is_diag (True for rank=0,
+                # False for any rank>0) -- never on the specific rank
+                # value, so it composes with LoRa's low-rank encoder
+                # parameterization exactly like plain MC does.
+                (f"LoRaMVN-r{r}-UT", "MVN", {"rank": r, "use_sigma_points": True}, None)
+                for r in ranks
+                if r <= dim
+            ]
+        )
 
-        for variant_name, approx_name, approx_kwargs in variants:
+        for variant_name, approx_name, approx_kwargs, mc_size_override in variants:
             for seed in seeds:
-                conf = OmegaConf.create(
-                    {
-                        "mode": "smooth",
-                        "observation_dim": args.obs_dim,
-                        "state_dim": dim,
-                        "dynamics": "Functional",
-                        "integrator": "RK4",
-                        "approx": approx_name,
-                        "approx_kwargs": approx_kwargs,
-                        "seed": seed,
-                        "n_steps": args.n_steps,
-                        "fb_penalty": 0.0,
-                        "noise_penalty": 0.01,
+                conf = OmegaConf.create({
+                    "mode": "smooth",
+                    "observation_dim": args.obs_dim,
+                    "state_dim": dim,
+                    "dynamics": "Functional",
+                    "integrator": "RK4",
+                    "approx": approx_name,
+                    "approx_kwargs": approx_kwargs,
+                    "seed": seed,
+                    "n_steps": args.n_steps,
+                    "dropout": 0.0,
+                    # Safe margin against the transition_points
+                    # rank-deficiency warning (mc_size <= state_dim):
+                    # the MC spread term needs mc_size >= dim + 1 to be
+                    # full rank, scaled per dim rather than one fixed
+                    # value across the sweep. mc_size_override lets
+                    # specific variants (the deliberate "unsafe" MC
+                    # comparison point) opt out of this safety margin.
+                    "mc_size": (
+                        mc_size_override if mc_size_override is not None else dim + 1
+                    ),
+                    "dyn_conf": {
+                        "input_dim": 0,
+                        "context_dim": 0,
+                        "fn_path": "benchmark_highd_oscillator:oscillator_bank_dynamics",
+                        "fn_kwargs": {},
+                        "dt": args.dt,
+                    },
+                    "enc_conf": {
+                        "width": 64,
+                        "depth": 2,
+                        "dropout": None,
+                    },
+                    "obs_conf": {
+                        "model": "GLM",
+                        "likelihood": "Gaussian",
+                        "cov": [float(sigma_obs**2)] * args.obs_dim,
+                        "norm_readout": False,
                         "dropout": 0.0,
-                        "mc_size": 4,
-                        "dyn_conf": {
-                            "input_dim": 0,
-                            "context_dim": 0,
-                            "fn_path": "benchmark_highd_oscillator:oscillator_bank_dynamics",
-                            "fn_kwargs": {},
-                            "dt": args.dt,
-                                            "state_noise": 0.1,
-                        },
-                        "enc_conf": {
-                            "width": 64,
-                            "depth": 2,
-                            "dropout": None,
-                        },
-                        "obs_conf": {
-                            "model": "GLM",
-                            "likelihood": "Gaussian",
-                            "cov": [float(sigma_obs**2)] * args.obs_dim,
-                            "norm_readout": False,
-                            "dropout": 0.0,
-                            "readout_init_conf": {"obs_noise_var": float(sigma_obs**2)},
-                        },
-                    }
-                )
+                        "readout_init_conf": {"obs_noise_var": float(sigma_obs**2)},
+                    },
+                })
 
-                trainer_conf = OmegaConf.create(
-                    {
-                        "seed": seed,
-                        "learning_rate": 1e-3,
-                        "max_epoch": args.max_epoch,
-                        "batch_size": args.batch_size,
-                        "freeze_state_noise": bool(args.freeze_state_noise),
-                    }
-                )
+                trainer_conf = OmegaConf.create({
+                    "seed": seed,
+                    "learning_rate": 1e-3,
+                    "max_epoch": args.max_epoch,
+                    "batch_size": args.batch_size,
+                    "model_transformations": [
+                        {"name": "gaussian_observation"},
+                        {"name": "mvn_noise", "q_scale": 0.1, "q_prior_fraction": 0.1},
+                    ],
+                })
 
                 train_data, valid_data = train_test_split(
                     data, rng=np.random.default_rng(0), test_size=args.batch_size
@@ -225,25 +264,29 @@ def main() -> None:
 
                 t0 = time.perf_counter()
                 handler = EpochHandler(valid_data=valid_data)
-                train(model, train_data, conf=trainer_conf, on_epoch_end=handler)
+                train(
+                    model,
+                    train_data,
+                    conf=trainer_conf,
+                    on_epoch_end=handler,
+                    model_transformations=(),
+                )
                 trained = handler.best_model
                 train_s = time.perf_counter() - t0
 
                 metrics = evaluate_model(trained, data, latent)
                 approx = trained.approx
 
-                raw_rows.append(
-                    {
-                        "state_dim": dim,
-                        "variant": variant_name,
-                        "seed": seed,
-                        "train_seconds": float(train_s),
-                        "natural_size": int(approx.param_size()),
-                        "encoder_free_size": int(approx.free_size()),
-                        "post_rmse": float(metrics["post_rmse"]),
-                        "obs_rmse": float(metrics["obs_rmse"]),
-                    }
-                )
+                raw_rows.append({
+                    "state_dim": dim,
+                    "variant": variant_name,
+                    "seed": seed,
+                    "train_seconds": float(train_s),
+                    "natural_size": int(approx.param_size()),
+                    "encoder_free_size": int(approx.free_size()),
+                    "post_rmse": float(metrics["post_rmse"]),
+                    "obs_rmse": float(metrics["obs_rmse"]),
+                })
 
     # aggregate
     groups: dict[tuple[int, str], list[dict]] = {}
@@ -254,21 +297,19 @@ def main() -> None:
     for (dim, variant), rows in sorted(
         groups.items(), key=lambda x: (x[0][0], x[0][1])
     ):
-        summary_rows.append(
-            {
-                "state_dim": dim,
-                "variant": variant,
-                "n_runs": len(rows),
-                "natural_size": rows[0]["natural_size"],
-                "encoder_free_size": rows[0]["encoder_free_size"],
-                "train_seconds_mean": mean_std(rows, "train_seconds")[0],
-                "train_seconds_std": mean_std(rows, "train_seconds")[1],
-                "post_rmse_mean": mean_std(rows, "post_rmse")[0],
-                "post_rmse_std": mean_std(rows, "post_rmse")[1],
-                "obs_rmse_mean": mean_std(rows, "obs_rmse")[0],
-                "obs_rmse_std": mean_std(rows, "obs_rmse")[1],
-            }
-        )
+        summary_rows.append({
+            "state_dim": dim,
+            "variant": variant,
+            "n_runs": len(rows),
+            "natural_size": rows[0]["natural_size"],
+            "encoder_free_size": rows[0]["encoder_free_size"],
+            "train_seconds_mean": mean_std(rows, "train_seconds")[0],
+            "train_seconds_std": mean_std(rows, "train_seconds")[1],
+            "post_rmse_mean": mean_std(rows, "post_rmse")[0],
+            "post_rmse_std": mean_std(rows, "post_rmse")[1],
+            "obs_rmse_mean": mean_std(rows, "obs_rmse")[0],
+            "obs_rmse_std": mean_std(rows, "obs_rmse")[1],
+        })
 
     raw_path = out_dir / "highd_oscillator_raw.json"
     summary_path = out_dir / "highd_oscillator_summary.json"

@@ -1,5 +1,8 @@
 # Distribution Design
 
+For the configuration and artifact reproducibility contract, see
+[Reproducibility](reproducibility.md).
+
 ## Overview
 
 The distribution system follows a two-layer design:
@@ -124,8 +127,9 @@ Quick reference (public API):
 | `free_size()` | `() → int` | Size of encoder free-form output vector (defaults to `param_size()`). |
 | `free_to_natural(free)` | `free → natural` | Convert free-form output into an additive natural update. |
 | `sample_by_moment(key, moment, n)` | `moment → samples` | Sampling from the distribution parameterized by `moment`. |
+| `transition_points(key, moment, mc_size)` | `moment → (points, weights)` | Representative points/weights for prediction-step propagation; see [Algorithm](algorithm.md#transition-point-propagation). |
+| `predictive_moment(z, noise)` | `(z, noise) → moment` | Computes a noise-included conditional moment. |
 | `kl(moment1, moment2)` | `moment × moment → scalar` | KL between two distributions. |
-| `predictive_moment(z, noise)` | `(z, noise) → moment` | Conditional moment parameters `E[T(z_t) | z_{t-1}]`. |
 
 ### Initialization
 
@@ -161,14 +165,16 @@ Quick reference (public API):
 | Method | Signature | Role |
 |--------|-----------|------|
 | `sample_by_moment` | `(key, μ, n) → z` | Draw `n` samples from the distribution |
+| `transition_points` | `(key, μ, mc_size) → (points, weights)` | Prediction-step propagation policy (default: MC; `MVN` defaults to unscented-transform sigma points) |
 | `kl` | `(μ₁, μ₂) → scalar` | KL divergence `KL(p₁ ‖ p₂)` |
 | `predictive_moment` | `(z, noise) → μ_flat` | Conditional moment parameters `E[T(z_t) | z_{t-1}]` |
 
 ### Usage in XFADS
 
 ```python
-# Construction — stored as free-form flat arrays on the module
-self.noise_free = self.approx.free_from_kw(scale=conf.state_noise)
+# Construction — static Approx plus free-form flat arrays on the module
+self.approx = approx
+self.noise = approx.free_from_kw(scale=1.0)
 self.unconstrained_prior_natural = self.approx.free_from_kw(scale=1.0)
 
 # Inference — derive natural/moment on the fly
@@ -177,7 +183,7 @@ prior_natural = self.approx.moment_to_natural(
         self.approx.free_to_canon(self.unconstrained_prior_natural)
     )
 )
-noise = self.approx.canon_to_moment(self.approx.free_to_canon(self.noise_free))
+noise = self.approx.canon_to_moment(self.approx.free_to_canon(self.noise))
 
 # Encoder outputs are flat arrays → additive natural updates
 # (encoders output flat unconstrained updates for additive filtering)

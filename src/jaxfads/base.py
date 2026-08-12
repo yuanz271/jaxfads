@@ -11,11 +11,45 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
-from jax import Array
-from jaxtyping import PyTree
-
 from gearax.mixin import SubclassRegistryMixin
 from gearax.modules import ConfModule
+from jax import Array
+from jax import numpy as jnp
+from jaxtyping import PyTree
+
+from .logging import get_logger
+
+logger = get_logger(__name__)
+
+
+def _monte_carlo_transition_points(
+    approx: Approx, key: Array, moment: Array, mc_size: int
+) -> tuple[Array, Array]:
+    """Default transition-point policy: ``mc_size`` i.i.d. samples via
+    ``approx.sample_by_moment``, uniform weights ``1/mc_size``.
+
+    Standalone, composable, independently testable -- ``Approx.
+    transition_points`` merely delegates to it. Warns when ``mc_size`` is
+    small enough relative to the ambient state dimension that the
+    between-sample "spread" term is rank-deficient (see
+    ``docs/algorithm.md#transition-point-propagation``).
+    """
+    points = approx.sample_by_moment(key, moment, mc_size)
+    dim = points.shape[-1]  # ambient state dim, read off sample_by_moment's
+    # own output shape -- no new abstract Approx property needed
+    # (param_size() isn't dim; e.g. full-rank MVN has param_size = dim + dim**2).
+    if mc_size <= dim:
+        logger.warning(
+            "transition_points: mc_size=%d <= state_dim=%d; the MC spread "
+            "term is rank-deficient (rank <= mc_size-1 < state_dim), the "
+            "same structural precondition behind the Heywood-style exploit "
+            "against R. Use mc_size >= state_dim + 1, or a deterministic "
+            "policy (e.g. MVN(use_sigma_points=True)) to avoid this entirely.",
+            mc_size,
+            dim,
+        )
+    weights = jnp.full((mc_size,), 1.0 / mc_size)
+    return points, weights
 
 
 class Approx(SubclassRegistryMixin, ABC):
@@ -136,6 +170,39 @@ class Approx(SubclassRegistryMixin, ABC):
         canon = self.free_to_canon(free)
         moment = self.canon_to_moment(canon)
         return self.moment_to_natural(moment)
+
+    def transition_points(
+        self, key: Array, moment: Array, mc_size: int
+    ) -> tuple[Array, Array]:
+        """Representative (points, weights) approximating q(z_{t-1}) for
+        propagation through the transition.
+
+        Parameters
+        ----------
+        key : Array
+            JAX PRNG key.
+        moment : Array
+            Moment parameters of q(z_{t-1}).
+        mc_size : int
+            Requested point/sample count (may be ignored by deterministic
+            overrides).
+
+        Returns
+        -------
+        points : Array, shape (n_points, state_dim)
+        weights : Array, shape (n_points,)
+            Nonnegative-summing-to-1 by default; overrides may use signed
+            weights (e.g. unscented-transform weights).
+
+        Notes
+        -----
+        Default: plain Monte Carlo via :func:`_monte_carlo_transition_points`
+        (today's behavior, bit-for-bit). Approximations may override this
+        with a deterministic point set (e.g. unscented-transform sigma
+        points) -- see ``MVN(use_sigma_points=True)`` and
+        ``docs/algorithm.md#transition-point-propagation``.
+        """
+        return _monte_carlo_transition_points(self, key, moment, mc_size)
 
     @abstractmethod
     def kl(self, moment1: Array, moment2: Array) -> Array:
@@ -371,11 +438,12 @@ class Observation(SubclassRegistryMixin, ConfModule):
         ...
 
     @abstractmethod
-    def initialize(self, t: Array, y: Array, u: Array, c: Array) -> "Observation":
+    def initialize(self, t: Array, y: Array, u: Array, c: Array) -> Observation:
         """
         Initialize observation parameters from data statistics.
         """
         ...
+
 
 
 class Encoder(SubclassRegistryMixin, ConfModule):
@@ -407,7 +475,7 @@ class Encoder(SubclassRegistryMixin, ConfModule):
 __all__ = [
     "Approx",
     "Dynamics",
+    "Encoder",
     "Integrator",
     "Observation",
-    "Encoder",
 ]

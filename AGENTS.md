@@ -1,130 +1,81 @@
-# JAXFADS - Project Knowledge Base
+# JAXFADS Agent Instructions
 
-**Updated:** 2026-03-01  
-**Branch:** main
+This file contains repository-specific instructions for agents and contributors.
+It is not the source of truth for the public design or API. Use the normative
+documents in `docs/` for that:
 
-## Overview
+- `docs/design.md` — architecture and component contracts;
+- `docs/algorithm.md` — inference and prediction semantics;
+- `docs/training.md` — training and model-transformation behavior;
+- `docs/reproducibility.md` — reproducibility and artifact principles; and
+- `docs/roadmap.md` — deferred architectural direction.
 
-JAX library for variational Bayesian state-space modeling (XFADS). Implements
-variational inference for nonlinear state-space models with exponential-family
-approximate posteriors via Equinox/JAX.
+## Research-code priorities
 
-## Structure
+When implementing or reviewing changes:
 
-```
-jaxfads/
-├── src/jaxfads/                 # Core library
-│   ├── base.py                  # ABCs + subclass registries (Approx/Dynamics/Integrator/Observation)
-│   ├── smoother.py              # XFADS orchestrator
-│   ├── core.py                  # filtering/smoothing primitives
-│   ├── dynamics/                # built-in latent dynamics (e.g. OU, functional wrapper)
-│   ├── integrators.py              # Euler/RK4/discrete integrators
-│   ├── vi.py                    # ELBO
-│   ├── observations.py          # GLM observation model + Poisson/Gaussian likelihoods
-│   ├── encoders.py              # Alpha/Beta encoders
-│   ├── trainer.py               # training loop
-│   ├── distributions/           # Approx implementations (currently MVN)
-│   │   └── mvn.py
-│   ├── nn.py                    # neural blocks (MLPs, readouts, etc.)
-│   ├── constraints.py           # parameter constraints
-│   ├── util.py                  # helpers
-│   └── ilqr.py                  # iLQR utilities
-├── tests/                       # Unit tests mirroring src/ structure
-└── pyproject.toml               # Build config, deps, ruff settings
-```
+1. prioritize mathematical correctness;
+2. preserve mathematical consistency across components and inference/training
+   contracts;
+3. preserve numerical stability and conditioning; and
+4. keep the implementation direct, readable, and minimal.
 
-## Where to Look
+This is research code. Prefer mathematical clarity and algorithmic fluency over
+defensive abstraction or speculative compatibility:
 
-| Task | Location | Notes |
-|------|----------|-------|
-| Main model class | `src/jaxfads/smoother.py` | `XFADS` |
-| Filtering primitives | `src/jaxfads/core.py` | `filter()`, `smooth()`, `causal()`, `nofilt()`, `expected_predictive_moment()` |
-| Approx posterior families | `src/jaxfads/distributions/` | currently `MVN` |
-| Observation models | `src/jaxfads/observations.py` | `GLM`, `Poisson`, `Gaussian` |
-| Encoders | `src/jaxfads/encoders.py` | `AlphaEncoder`, `BetaEncoder`; user-defined for NOFILT |
-| Training | `src/jaxfads/trainer.py` | `train()`, `batch_loss()`, `DEFAULT_TRAINER_CONFIG` |
-| Abstract interfaces | `src/jaxfads/base.py` | `Approx`, `Dynamics`, `Integrator`, `Observation`, `Encoder` |
+- Keep core algorithms pure and direct. Express the mathematical operation at
+  its use site instead of adding wrappers or layers without a concrete second
+  use.
+- Validate inputs at public boundaries and configuration resolution. Inside
+  numerical kernels and JAX-transformed code, rely on documented contracts and
+  natural Python/JAX failures unless a guard is required for numerical
+  stability, data integrity, or a demonstrated failure mode.
+- Do not add speculative validation, fallback behavior, compatibility
+  scaffolding, or general-purpose extension mechanisms without a concrete
+  caller, requirement, or discriminative test.
+- Prefer focused tests for mathematical identities, invariants, conditioning,
+  numerical stability, and scientific behavior. Test behavior rather than
+  implementation details.
 
-## Core Design Notes
+## Repository workflow
 
-### Mathematical priority for contributors/agents
+- Follow the existing source layout and naming conventions.
+- Use `uv` for environment and package management; do not use pip, poetry,
+  conda, or manually managed virtual environments. Use `uv run` for Python,
+  pytest, Ruff, and related tools.
+- Add/remove/update dependencies with `uv add`, `uv remove`, or `uv lock`; do
+  not edit dependency declarations or lockfiles by hand. Use `uvx` for a
+  one-off tool that is not a project dependency.
+- During iteration, run tests scoped to the changed code. Run the full suite
+  only when explicitly requested or as the final pre-push validation.
+- For changes affecting training, inference, serialization, or device behavior,
+  include the smallest relevant regression test and update the corresponding
+  public documentation in `docs/`.
+### Python project rules
 
-When implementing or reviewing changes in this repo:
+- The project uses `pyproject.toml` and `uv.lock`; do not create
+  `setup.py`, `setup.cfg`, or `requirements.txt`.
+- Tests use pytest, live under `tests/`, and follow `test_*.py` and `test_*`
+  naming. A test package does not need `__init__.py`.
+- Ruff provides linting, formatting, and import sorting. Use:
+  ```bash
+  uv run ruff check .
+  uv run ruff check --fix .
+  uv run ruff format .
+  uv run ruff format --check .
+  ```
+- Use `uv run ty check` or `uv run mypy .` when type checking is configured.
+- Follow the configured Ruff style: double quotes, spaces, and 88-character
+  formatting; do not add bare `# type: ignore` comments.
+- Pre-commit hooks use `prek` when available; install with
+  `uvx prek install` or use `uvx pre-commit install`.
+- Do not install packages globally or run `python setup.py`.
 
-- Do **not** over-index on exotic edge cases by default.
-- Prioritize, in order:
-  1. **Mathematical correctness** (objective, parameter transforms, inference equations)
-  2. **Mathematical consistency** across modules (Approx/encoders/core/trainer contracts)
-  3. **Numerical stability** (well-conditioned transforms, finite outputs, stable parameterization)
-- Prefer simple, theoretically consistent formulations before adding special-case logic.
-- Add edge-case handling when it is required by a concrete failure, test, or user requirement.
-
-
-### Exponential-family parameter forms
-
-- **Natural parameters** (η): flat vectors for additive filtering updates.
-- **Moment parameters** (μ): flat vectors of expected sufficient statistics
-  `E[T(z)]`.
-
-### MVN approximation
-
-`MVN(dim, rank)` — a single `rank` parameter controls the exponential-family
-layout and encoder precision parameterization:
-
-- `rank=0`: diagonal EF layout — `param_size = 2D`, `free_size = 2D`
-- `rank>0`: full EF layout — `param_size = D + D²`, `free_size = 2D + D·rank`
-
-Encoder precision: `J = diag(softplus(d)) + L @ Lᵀ` for all ranks.
-
-Invariant for callers:
-- `MVN.unpack(moment)` returns `(mean, cov)` where `cov` is **always** a full
-  `(D, D)` covariance matrix (diagonal-valued when rank=0).
-
-### Config invariants (avoiding duplication)
-
-- `conf.state_dim` and `conf.observation_dim` are the **single source of truth**.
-  `XFADS` injects these into `dyn_conf`/`obs_conf`/`enc_conf` at construction.
-- `enc_conf` does **not** contain `approx` / `approx_kwargs`.
-  Encoders are Approx-agnostic and only require:
-  - `param_size` (natural-parameter size; injected by `XFADS`)
-  - `free_size` (encoder free-form size; injected by `XFADS`)
-  - `state_dim` (latent dimensionality; injected by `XFADS`)
-  - `observation_dim` (injected by `XFADS`)
-  - encoder hyperparameters (`width`, `depth`, `dropout`)
-
-### Training regularization
-
-- The trainer supports an optional user hook passed as an argument (not config,
-  since it is a callable):
-  - `train(model, data, *, conf, on_epoch_end=None, regularizer=None,
-    optimizer=None)` where `regularizer: Callable[[XFADS], Array] | None` adds a
-    scalar penalty to the per-batch objective (`loss = -ELBO +
-    regularizer(model)`).
-  - `batch_loss` stays a pure objective; the trainer composes the penalty.
-  - Penalize the intended quantity in its own space (e.g. transform
-    `noise_free` via the Approx to regularize Q; do not penalize the raw free
-    parameters).
-- Optimizer policy is user-ownable. The default optimizer applies **no weight
-  decay**: in a plugin framework the trainer cannot know which leaves are
-  weight matrices vs variances/biases, so it makes no decay assumption. Pass
-  `optimizer=` (an `optax.GradientTransformation`) to take full control, e.g.
-  `optax.add_decayed_weights(wd, mask=...)` with a model-derived mask. There is
-  no `weight_decay` config field.
-- Parameter freezing is configured declaratively via:
-  - `trainer_conf.freeze_paths: list[str]` (dot-separated model attribute paths,
-    e.g. `["noise_free"]`); applied on top of the default or a supplied
-    optimizer.
-- No built-in covariance-based noise regularization is applied by default.
-
-## Python rules
-
-Python-specific development rules, tooling, and workflows are defined in:
-
-- `PYTHON.md`
-
-Use `PYTHON.md` as the source of truth for Python commands, lint/format/test
-workflows, and related conventions.
-
-#### Docs to consider updating
-
-- `README.md`, `AGENTS.md`, `PYTHON.md`, `docs/*.md`, `examples/*` comments/config snippets
+- Device integration tests are opt-in:
+  ```bash
+  JAXFADS_RUN_DEVICE_INTEGRATION=1 uv run pytest -q -m integration \
+      tests/integration/test_device_parity.py
+  ```
+- Do not modify or inspect the contents of the untracked `gearax/` directory.
+- Before committing, review `git diff`, run `git diff --check`, and ensure no
+  unrelated files are included.

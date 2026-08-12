@@ -1,5 +1,6 @@
 import chex
 import pytest
+from conftest import MockDynamics  # noqa: F401 - class registration side-effect
 from jax import numpy as jnp
 from jax import random as jrnd
 from omegaconf import OmegaConf

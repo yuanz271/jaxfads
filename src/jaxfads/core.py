@@ -20,13 +20,73 @@ from jax.lax import scan
 from .base import Approx
 
 __all__ = [
-    "expected_predictive_moment",
     "Mode",
-    "filter",
-    "smooth",
     "causal",
+    "expected_predictive_moment",
+    "filter",
     "nofilt",
+    "propagate_transition_points",
+    "smooth",
 ]
+
+
+def propagate_transition_points(
+    key: Array,
+    moment: Array,
+    u: Array,
+    c: Array,
+    f: Callable[..., Array],
+    approx: Approx,
+    mc_size: int,
+) -> tuple[Array, Array]:
+    """Push a weighted point set from ``approx.transition_points`` through
+    the one-step transition ``f``, with **no** noise added.
+
+    Returns ``(zs, weights)``: the propagated points and their weights,
+    shape ``(n_points, state_dim)`` and ``(n_points,)`` respectively.
+    ``n_points`` may differ from ``mc_size`` -- deterministic
+    ``transition_points`` overrides (e.g. unscented-transform sigma
+    points) return a fixed count regardless of the requested ``mc_size``.
+
+    Shared by :func:`expected_predictive_moment`, which adds noise afterward
+    via ``approx.predictive_moment`` for the filtering-time predictive
+    distribution ``p(z_t)``. The transition/process noise ``Q`` is supplied
+    separately to that predictive-moment operation.
+
+    Parameters
+    ----------
+    key : PRNGKeyArray
+        Random key for sampling.
+    moment : Array
+        Moment parameters of the state distribution to propagate,
+        ``q(z_{t-1})``.
+    u : Array, shape (input_dim,)
+        Control/input vector.
+    c : Array, shape (covariate_dim,)
+        Covariate vector.
+    f : Callable
+        One-step transition callable.
+    approx : Approx
+        Exponential family approximation instance.
+    mc_size : int
+        Requested point/sample count; may be ignored by deterministic
+        ``transition_points`` overrides.
+
+    Notes
+    -----
+    The same ``key`` is intentionally reused for every point when
+    evaluating ``f``. This keeps any stochastic regularisation inside
+    ``f`` (e.g. dropout) fixed within the expectation.
+    """
+    key, subkey = jrnd.split(key)
+    z, weights = approx.transition_points(subkey, moment, mc_size)
+    n_points = z.shape[0]  # not mc_size -- deterministic policies may return
+    # a different, fixed point count (e.g. unscented-transform sigma points
+    # always return 2*dim + 1, regardless of the mc_size argument).
+    u_bc = jnp.broadcast_to(u, shape=(n_points,) + u.shape)
+    c_bc = jnp.broadcast_to(c, shape=(n_points,) + c.shape)
+    zs = jax.vmap(partial(f, key=key), in_axes=(0, 0, 0))(z, u_bc, c_bc)
+    return zs, weights
 
 
 def expected_predictive_moment(
@@ -40,7 +100,11 @@ def expected_predictive_moment(
     mc_size: int,
 ) -> Array:
     """
-    Compute expected predictive moment via Monte Carlo sampling.
+    Compute expected predictive moment via a weighted point set from
+    ``approx.transition_points`` (default: Monte Carlo; some ``Approx``
+    implementations may override with a deterministic point set, e.g.
+    unscented-transform sigma points -- see
+    ``docs/algorithm.md#transition-point-propagation``).
 
     Implements Eq (12): ``μ̄_t = E_{π(z_{t-1})}[μ_θ(z_{t-1})]``
     where ``μ_θ`` is the predictive moment function (Eq 4)
@@ -66,45 +130,50 @@ def expected_predictive_moment(
     approx : Approx
         Exponential family approximation instance.
     mc_size : int
-        Number of Monte Carlo samples.
+        Requested point/sample count; may be ignored by deterministic
+        ``transition_points`` overrides.
 
     Returns
     -------
     Array
-        Expected predictive moment parameters (i.e. averaged
+        Expected predictive moment parameters (i.e. weighted-averaged
         ``E[T(z_t) | z_{t-1}]``).
 
     Notes
     -----
-    The same ``key`` is intentionally reused for every MC sample when
+    The same ``key`` is intentionally reused for every point when
     evaluating ``f``.  This keeps any stochastic regularisation inside
     ``f`` (e.g. dropout) fixed within the expectation.
 
     Non-finite handling:
-    After computing per-sample predictive moment, any sample containing
-    NaN or Inf values is masked out before averaging.
-    If every sample is non-finite the result will itself be non-finite.
+    After computing per-point predictive moment, any point containing
+    NaN or Inf values is masked out (its weight zeroed) before the
+    weighted average. If every point is non-finite the result will itself
+    be non-finite.
     """
-    key, subkey = jrnd.split(key)
-    z = approx.sample_by_moment(subkey, moment, mc_size)
-    u_bc = jnp.broadcast_to(u, shape=(mc_size,) + u.shape)
-    c_bc = jnp.broadcast_to(c, shape=(mc_size,) + c.shape)
+    zs, weights = propagate_transition_points(key, moment, u, c, f, approx, mc_size)
+    return _average_predictive_moment(zs, weights, noise, approx)
 
-    # Transition outputs for each MC sample
-    zs = jax.vmap(partial(f, key=key), in_axes=(0, 0, 0))(z, u_bc, c_bc)
 
-    # Per-sample predictive moment
+def _average_predictive_moment(
+    zs: Array, weights: Array, noise: Array, approx: Approx
+) -> Array:
+    """Average predictive moments over an already-propagated point set."""
     predictive_moment_samples = jax.vmap(
         partial(approx.predictive_moment, noise=noise)
     )(zs)
 
-    # Non-finite safe averaging
-    valid = jnp.all(jnp.isfinite(predictive_moment_samples), axis=-1)  # (S,)
+    # Non-finite safe weighted averaging. Strict generalization of the
+    # former uniform-weight reduction (sum(safe)/n_valid): for weights
+    # w_i = 1/mc_size, sum(w_valid*safe)/sum(w_valid) reduces to that
+    # formula exactly.
+    valid = jnp.all(jnp.isfinite(predictive_moment_samples), axis=-1)  # (n_points,)
     safe = jnp.where(valid[:, None], predictive_moment_samples, 0.0)
-    n_valid = jnp.sum(valid)
+    w_valid = jnp.where(valid, weights, 0.0)
+    w_sum = jnp.sum(w_valid)
     avg = jnp.where(
-        n_valid > 0,
-        jnp.sum(safe, axis=0) / n_valid,
+        w_sum > 0,
+        jnp.sum(w_valid[:, None] * safe, axis=0) / w_sum,
         jnp.full(predictive_moment_samples.shape[-1:], jnp.nan),
     )
 
@@ -138,7 +207,7 @@ def _site_filter(
     site_natural: Array,
     u: Array,
     c: Array,
-) -> tuple[Array, Array, Array]:
+):
     """
     Generic forward recursion over natural-parameter site updates in XFADS.
 
@@ -169,6 +238,9 @@ def _site_filter(
         Filtered moment parameters for each time step.
     moment_p : Array, shape (T, param_dim)
         Predicted moment parameters from dynamics.
+    The recursion returns only natural, posterior-moment, and
+    predictive-moment arrays. Trainer-side M-step policies derive any
+    required statistics from those outputs.
 
     Notes
     -----
@@ -182,32 +254,27 @@ def _site_filter(
     approx = model.approx
     nature_p_1 = model.prior_natural()
 
-    noise = approx.canon_to_moment(approx.free_to_canon(model.noise_free))
-
-    expected_moment_forward = partial(
-        expected_predictive_moment,
-        f=model.transition,
-        noise=noise,
-        approx=approx,
-        mc_size=model.conf.mc_size,
-    )
+    noise = approx.canon_to_moment(approx.free_to_canon(model.noise))
+    f = model.transition
+    mc_size = model.conf.mc_size
 
     nature_f_1 = nature_p_1 + site_natural[0]
 
-    def ff(carry, obs, expected_moment):
+    def ff(carry, obs):
         key, nature_tm1 = carry
         key, ky = jrnd.split(key)
         site_t, u_tm1, c_tm1 = obs
         moment_tm1 = approx.natural_to_moment(nature_tm1)
-        moment_p_t = expected_moment(ky, moment_tm1, u_tm1, c_tm1)
+        zs, weights = propagate_transition_points(
+            ky, moment_tm1, u_tm1, c_tm1, f, approx, mc_size
+        )
+        moment_p_t = _average_predictive_moment(zs, weights, noise, approx)
         nature_p_t = approx.moment_to_natural(moment_p_t)
         nature_t = nature_p_t + site_t
         return (key, nature_t), (moment_p_t, nature_p_t, nature_t)
 
     key, ky = jrnd.split(key)
-    scan_body = eqx.filter_checkpoint(
-        partial(ff, expected_moment=expected_moment_forward)
-    )
+    scan_body = eqx.filter_checkpoint(ff)
     _, (moment_p, _, nature_f) = scan(
         scan_body,
         init=(ky, nature_f_1),
@@ -216,9 +283,10 @@ def _site_filter(
     nature_f = jnp.vstack((nature_f_1, nature_f))  # 1...T
 
     moment_f = jax.vmap(approx.natural_to_moment)(nature_f)
-    moment_p = jnp.vstack(
-        (approx.natural_to_moment(nature_f_1), moment_p)
-    )  # prediction of t=1 is the prior
+    moment_p = jnp.vstack((
+        approx.natural_to_moment(nature_f_1),
+        moment_p,
+    ))  # prediction of t=1 is the prior
 
     return nature_f, moment_f, moment_p
 
@@ -230,11 +298,12 @@ def filter(
     alpha: Array,
     u: Array,
     c: Array,
-) -> tuple[Array, Array, Array]:
+):
     """
     Alpha-only filtering posterior recursion.
 
-    This returns filtering natural/moment parameters and predictive moments.
+    This returns filtering natural/moment parameters, predictive moments,
+    and three inference arrays; M-step policies derive statistics from them.
     """
     return _site_filter(model, key, _t, alpha, u, c)
 
@@ -247,7 +316,7 @@ def smooth(
     beta: Array,
     u: Array,
     c: Array,
-) -> tuple[Array, Array, Array]:
+):
     """
     Smoothing-side recursion using additive natural sites ``alpha + beta``.
     """
@@ -262,7 +331,7 @@ def causal(
     beta: Array,
     u: Array,
     c: Array,
-) -> tuple[Array, Array, Array]:
+):
     """
     Causal Eq. 29 inference path using the repository beta indexing convention.
 
@@ -274,6 +343,10 @@ def causal(
 
     Under the paper indexing, this corresponds to
     ``lambda_t = check_lambda_t + beta_{t+1}``.
+
+    This mode returns the filtering posterior, reconstructed posterior, and
+    predictive moments. Trainer policies derive any update statistics from
+    those three outputs.
     """
     check_nature, _, moment_p = filter(model, key, _t, alpha, u, c)
     nature = check_nature + beta
@@ -288,27 +361,33 @@ def nofilt(
     alpha: Array,
     u: Array,
     c: Array,
-) -> tuple[Array, Array, Array]:
+):
     """Non-filter mode: posterior from encoder only, no filtering recursion.
 
     Posterior natural parameters are set directly by encoder output ``alpha``.
     Predictive moments are computed in parallel for ELBO KL terms.
+
+    Returns the same three inference arrays as the filtering paths. M-step
+    policies derive any statistics they need from these outputs.
     """
     approx = model.approx
-    noise = approx.canon_to_moment(approx.free_to_canon(model.noise_free))
+    noise = approx.canon_to_moment(approx.free_to_canon(model.noise))
+    f = model.transition
+    mc_size = model.conf.mc_size
 
     nature = alpha
     moment = jax.vmap(approx.natural_to_moment)(nature)
 
-    expected_moment_fn = partial(
-        expected_predictive_moment,
-        f=model.transition,
-        noise=noise,
-        approx=approx,
-        mc_size=model.conf.mc_size,
-    )
     keys = jrnd.split(key, nature.shape[0] - 1)
-    moment_p_rest = jax.vmap(expected_moment_fn)(keys, moment[:-1], u[:-1], c[:-1])
+
+    def _step(key_i, moment_tm1_i, u_i, c_i):
+        zs, weights = propagate_transition_points(
+            key_i, moment_tm1_i, u_i, c_i, f, approx, mc_size
+        )
+        moment_p_t = _average_predictive_moment(zs, weights, noise, approx)
+        return moment_p_t
+
+    moment_p_rest = jax.vmap(_step)(keys, moment[:-1], u[:-1], c[:-1])
     moment_p = jnp.vstack((moment[0:1], moment_p_rest))
 
     return nature, moment, moment_p
@@ -377,7 +456,7 @@ def _bismooth(
     approx = model.approx
     nature_prior = model.prior_natural()
 
-    noise = approx.canon_to_moment(approx.free_to_canon(model.noise_free))
+    noise = approx.canon_to_moment(approx.free_to_canon(model.noise))
 
     natural_to_moment = jax.vmap(approx.natural_to_moment)
     expected_moment_forward = partial(

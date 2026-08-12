@@ -18,4 +18,5 @@ examples/*.pdf
 .git-town.toml
 .python-version
 .pi/
+.pi-subagents/
 benchmarks/results/

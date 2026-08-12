@@ -465,22 +465,6 @@ class VariantBiasLinear(Module):
         """
         return self.layer.weight
 
-    def set_static(self, static=True) -> None:
-        """
-        Set parameters as static or trainable (placeholder implementation).
-
-        Parameters
-        ----------
-        static : bool, default=True
-            Whether to make parameters static (non-trainable).
-
-        Notes
-        -----
-        This method is currently not implemented and serves as a placeholder
-        for future functionality to control parameter training.
-        """
-        pass
-
     def set_weight(self, weight: Array) -> "VariantBiasLinear":
         """
         Set the readout weight matrix.
