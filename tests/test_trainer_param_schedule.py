@@ -86,7 +86,7 @@ def test_train_with_param_schedule_anneals_noise(model_conf, sample_data):
         "max_epoch": max_epoch,
         "batch_size": batch_size,
         "seed": 0,
-        "post_optimizer_transforms": [],
+        "model_transformations": [],
         "freeze_paths": ["noise"],
     })
 
@@ -114,7 +114,7 @@ def test_param_schedule_without_freeze_paths_gets_fought_by_optimizer(
         "max_epoch": 3,
         "batch_size": 5,
         "seed": 0,
-        "post_optimizer_transforms": [],
+        "model_transformations": [],
         "freeze_paths": [],
     })
 

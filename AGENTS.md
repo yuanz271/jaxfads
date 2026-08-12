@@ -42,7 +42,7 @@ jaxfads/
 | Approx posterior families | `src/jaxfads/distributions/` | currently `MVN` |
 | Observation models | `src/jaxfads/observations.py` | `GLM`, `Poisson`, `Gaussian` |
 | Encoders | `src/jaxfads/encoders.py` | `AlphaEncoder`, `BetaEncoder`; user-defined for NOFILT |
-| Training | `src/jaxfads/training/` | `train()`, `batch_loss()`, `DEFAULT_TRAINER_CONFIG`, post-optimizer transforms |
+| Training | `src/jaxfads/training/` | `train()`, `batch_loss()`, `DEFAULT_TRAINER_CONFIG`, model transformations |
 | Abstract interfaces | `src/jaxfads/base.py` | `Approx`, `Dynamics`, `Integrator`, `Observation`, `Encoder` |
 
 ## Core Design Notes
@@ -134,15 +134,15 @@ Invariant for callers:
     e.g. `["noise"]`); applied on top of the default or a supplied
     optimizer.
 - M-step policy is trainer-owned and serializable through ordered
-  `trainer_conf.post_optimizer_transforms` entries. Each entry has a symbolic
+  `trainer_conf.model_transformations` entries. Each entry has a symbolic
   name and child settings; `gaussian_observation` and `mvn_noise` are the
   built-in R/Q policies. `mvn_noise` owns Q initialization, fractional Q
-  update, and `noise` freezing. Runtime `post_optimizer_transforms` objects
+  update, and `noise` freezing. Runtime `model_transformations` objects
   remain the extension point for custom transformations. The default configured
   list enables both built-ins; an explicit empty list is optimizer-only
   training.
 - Each batch uses one pre-SGD inference forward for loss, gradients, and the
-  selected plugins' statistics; plugins update the post-SGD model with no
+  selected plugins' statistics; plugins update the post-optimizer model with no
   extra inference pass. Model/component M-step APIs are unsupported.
 - `state_noise`, `noise_prior`, and `noise_prior_dof` are unsupported. Q
   policy belongs to the serializable trainer configuration.

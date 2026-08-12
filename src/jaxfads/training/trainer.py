@@ -55,7 +55,7 @@ DEFAULT_TRAINER_CONFIG = DictConfig({
     "kl_warmup_steps": 0,
     # Ordered built-in transform specifications. Runtime transform objects may
     # be supplied separately for custom policies.
-    "post_optimizer_transforms": [
+    "model_transformations": [
         {"name": "gaussian_observation"},
         {"name": "mvn_noise", "q_scale": 1.0, "q_prior_fraction": 0.1},
     ],
@@ -65,14 +65,14 @@ DEFAULT_TRAINER_CONFIG = DictConfig({
 })
 
 
-def _build_post_optimizer_transform(spec):
+def _build_model_transformation(spec):
     spec = dict(OmegaConf.to_container(spec, resolve=True))
     name = spec.pop("name", None)
     if name == "gaussian_observation":
         return GaussianObservationMstep(**spec)
     if name == "mvn_noise":
         return MVNNoiseMstep(**spec)
-    raise ValueError(f"Unknown post_optimizer_transform: {name!r}")
+    raise ValueError(f"Unknown model_transformation: {name!r}")
 
 
 def _resolve_attr_path(obj, parts: tuple[str, ...]):
@@ -498,9 +498,9 @@ def _run_training_loop(
     param_schedule=None,
     beta_schedule=None,
     regularizer=None,
-    post_optimizer_transforms=(),
+    model_transformations=(),
 ):
-    """Run minibatch optimization followed by ordered post-optimizer transforms."""
+    """Run minibatch optimization followed by ordered model transformations."""
 
     @eqx.filter_jit(donate="all")
     def train_step(model, opt_state, batch, key, step):
@@ -525,7 +525,7 @@ def _run_training_loop(
         params = eqx.filter(model, eqx.is_inexact_array)
         updates, opt_state = optimizer.update(grads, opt_state, params)
         model = eqx.apply_updates(model, updates)
-        for transform in post_optimizer_transforms:
+        for transform in model_transformations:
             model = transform(model, batch, forward, key=key)
         return model, opt_state, step + 1, loss
 
@@ -592,7 +592,7 @@ def train(
     regularizer=None,
     optimizer=None,
     param_schedule=None,
-    post_optimizer_transforms=(),
+    model_transformations=(),
 ):
     """
     Training routine for XFADS models with multi-device support.
@@ -603,12 +603,13 @@ def train(
     those are epoch-level policy supplied via ``on_epoch_end`` (see
     :class:`EpochHandler`). The caller owns the train/validation split.
 
-    Each batch performs one forward pass for loss, gradients, and transform
-    outputs, then applies the optimizer and ordered
-    ``post_optimizer_transforms`` to the updated model. An explicit empty
-    configured transform list gives optimizer-only training. Runtime transform
-    objects are additional custom extensions. Transform-owned frozen paths are merged with
-    ``conf.freeze_paths`` before optimizer construction.
+    Each batch performs one forward pass for loss, gradients, and model
+    transformation outputs, then applies the optimizer and ordered
+    ``model_transformations`` to the updated model. An explicit empty
+    configured transformation list gives optimizer-only training. Runtime
+    transformation objects are additional custom extensions. Transformation-owned
+    frozen paths are merged with ``conf.freeze_paths`` before optimizer
+    construction.
 
     Parameters
     ----------
@@ -644,10 +645,10 @@ def train(
         clipping, weight decay, gradient noise, or a custom schedule, build
         your own ``optax`` optimizer and pass it here; ``conf.learning_rate``
         is then ignored. ``conf.freeze_paths`` is still applied on top.
-    post_optimizer_transforms : Sequence[PostOptimizerTransform], optional
+    model_transformations : Sequence[ModelTransformation], optional
         Ordered trainer-owned model transformations. Defaults to ``()``.
         Additional runtime transform objects for custom policies. Built-in
-        transforms should be specified in ``conf.post_optimizer_transforms``
+        transforms should be specified in ``conf.model_transformations``
         as serializable entries with a ``name`` and child settings.
     param_schedule : Callable or None, optional
         Optional ``param_schedule(model, step) -> model`` applied at the start
@@ -667,15 +668,15 @@ def train(
     """
     conf = OmegaConf.merge(DEFAULT_TRAINER_CONFIG, conf)
     configured_transforms = tuple(
-        _build_post_optimizer_transform(spec) for spec in conf.post_optimizer_transforms
+        _build_model_transformation(spec) for spec in conf.model_transformations
     )
-    post_optimizer_transforms = configured_transforms + tuple(post_optimizer_transforms)
+    model_transformations = configured_transforms + tuple(model_transformations)
 
     t0 = time.perf_counter()
 
     key = jr.key(conf.seed)
     key, init_key = jr.split(key)
-    for transform in post_optimizer_transforms:
+    for transform in model_transformations:
         model = transform.initialize(model, key=init_key)
 
     # >>> Prepare sharding
@@ -733,7 +734,7 @@ def train(
     freeze_mask = jax.tree.map(lambda _: False, params)
     transform_paths = [
         path
-        for transform in post_optimizer_transforms
+        for transform in model_transformations
         for path in transform.frozen_paths(model)
     ]
     freeze_paths = [str(p) for p in conf.freeze_paths] + transform_paths
@@ -781,7 +782,7 @@ def train(
         param_schedule=param_schedule,
         beta_schedule=beta_schedule,
         regularizer=regularizer,
-        post_optimizer_transforms=post_optimizer_transforms,
+        model_transformations=model_transformations,
     )
 
     dt = time.perf_counter() - t0

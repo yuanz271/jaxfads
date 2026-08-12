@@ -1,14 +1,14 @@
-"""Training routines and trainer-owned post-optimizer transformations."""
+"""Training routines and trainer-owned model transformations."""
 
 from .msteps import GaussianObservationMstep, MVNNoiseMstep
 from .trainer import EpochHandler, batch_loss, train, train_test_split
-from .transforms import PostOptimizerTransform
+from .transforms import ModelTransformation
 
 __all__ = [
     "EpochHandler",
     "GaussianObservationMstep",
     "MVNNoiseMstep",
-    "PostOptimizerTransform",
+    "ModelTransformation",
     "batch_loss",
     "train",
     "train_test_split",

@@ -1,4 +1,4 @@
-"""Latent-z case for the post-optimizer transform design's Q update -- a real XFADS
+"""Latent-z case for the model transformation design's Q update -- a real XFADS
 model doing posterior inference, not the known-z clean baseline
 (benchmarks/q_update_known_z.py).
 
@@ -377,7 +377,7 @@ def main():
             "learning_rate": 1e-3,
             "max_epoch": args.max_epoch,
             "batch_size": args.batch_size,
-            "post_optimizer_transforms": [
+            "model_transformations": [
                 {"name": "gaussian_observation"},
                 {"name": "mvn_noise", "q_scale": q_scale, "q_prior_fraction": 0.1},
             ],
@@ -386,7 +386,7 @@ def main():
             model,
             train_data,
             conf=trainer_conf,
-            post_optimizer_transforms=(),
+            model_transformations=(),
         )
 
         _, Q_final = approx.unpack(

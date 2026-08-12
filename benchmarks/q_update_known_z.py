@@ -1,4 +1,4 @@
-"""Known-z clean baseline for the post-optimizer transform design's Q update.
+"""Known-z clean baseline for the model transformation design's Q update.
 
 Tests the joint-MLE-degeneracy claim directly, with z fully known (no
 latent inference, no XFADS model at all -- isolates this from the

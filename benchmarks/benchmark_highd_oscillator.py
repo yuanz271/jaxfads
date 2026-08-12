@@ -251,7 +251,7 @@ def main() -> None:
                     "learning_rate": 1e-3,
                     "max_epoch": args.max_epoch,
                     "batch_size": args.batch_size,
-                    "post_optimizer_transforms": [
+                    "model_transformations": [
                         {"name": "gaussian_observation"},
                         {"name": "mvn_noise", "q_scale": 0.1, "q_prior_fraction": 0.1},
                     ],
@@ -269,7 +269,7 @@ def main() -> None:
                     train_data,
                     conf=trainer_conf,
                     on_epoch_end=handler,
-                    post_optimizer_transforms=(),
+                    model_transformations=(),
                 )
                 trained = handler.best_model
                 train_s = time.perf_counter() - t0

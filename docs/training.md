@@ -45,7 +45,7 @@ Pass a `DictConfig` (or plain dict) as `conf`. Missing keys are filled from
 | `max_epoch` | `50` | Number of training epochs (always run in full unless a callback stops early) |
 | `batch_size` | `1` | Mini-batch size (must be divisible by device count) |
 | `seed` | `0` | Random seed for shuffling |
-| `post_optimizer_transforms` | R/Q built-ins | Ordered transform specifications; default entries are `gaussian_observation` and `mvn_noise` |
+| `model_transformations` | R/Q built-ins | Ordered transform specifications; default entries are `gaussian_observation` and `mvn_noise` |
 | `freeze_paths` | `[]` | Optional list of dot-separated model attribute paths to freeze (e.g. `["noise"]`) |
 
 The default optimizer is **vanilla Adam** and `learning_rate` is its only
@@ -59,7 +59,7 @@ noise, or a custom schedule, pass your own `optax` optimizer via
 `freeze_paths` is still applied on top.
 
 The default resolved configuration enables both built-in R/Q transforms in
-order. Set `post_optimizer_transforms: []` explicitly for optimizer-only
+order. Set `model_transformations: []` explicitly for optimizer-only
 training. A model regularizer is **not** a config field; it is passed directly to
 `train(..., regularizer=...)` (see below), because it is a Python callable and
 the config is meant to stay serializable.
@@ -78,7 +78,7 @@ trainer_conf = OmegaConf.create(
         learning_rate=5e-4,
         max_epoch=200,
         batch_size=64,
-        post_optimizer_transforms=[
+        model_transformations=[
             {"name": "gaussian_observation"},
             {"name": "mvn_noise", "q_scale": 1.0, "q_prior_fraction": 0.1},
         ],
@@ -171,7 +171,7 @@ interpret what it changes.
 
 Do **not** schedule `noise` while the configured `mvn_noise` transform is
 selected. That transform owns Q and would overwrite a scheduled value. With
-an explicit `post_optimizer_transforms: []` configuration, Q is SGD-managed
+an explicit `model_transformations: []` configuration, Q is SGD-managed
 and may be scheduled explicitly if the path is also frozen from optimizer
 updates.
 
@@ -215,7 +215,7 @@ Each batch follows this order:
 1. Run one model forward pass while evaluating the loss.
 2. Differentiate the scalar loss and obtain optimizer gradients.
 3. Apply the single Optax optimizer transformation.
-4. Apply each `post_optimizer_transforms` item in sequence.
+4. Apply each `model_transformations` item in sequence.
 
 The optimizer is typically gradient-based, but the contract does not require
 that assumption. Transforms are model-level operations, not a second optimizer.
@@ -255,7 +255,7 @@ A transform may initialize model state, update the post-optimizer model, and
 declare model leaves that the optimizer must not update:
 
 ```python
-class PostOptimizerTransform(Protocol):
+class ModelTransformation(Protocol):
     def initialize(self, model, *, key): ...
 
     def __call__(self, model, batch, forward, *, key): ...
@@ -269,10 +269,10 @@ is built from the actual initialized parameter arrays. `frozen_paths()`
 returns fully qualified, root-relative paths such as `"noise"`; the trainer
 combines these with `conf.freeze_paths`.
 
-An explicit `post_optimizer_transforms: []` configuration performs ordinary
+An explicit `model_transformations: []` configuration performs ordinary
 optimizer-managed training: there are no transform initializers,
 transform-owned freeze paths, or post-optimizer model updates. The runtime
-`post_optimizer_transforms=()` argument is an additional custom-transform
+`model_transformations=()` argument is an additional custom-transform
 extension and does not override configured built-ins.
 
 ### Gaussian observation-noise update
@@ -348,7 +348,7 @@ update. Built-in transforms may therefore stabilize their target with an
 `update_rate`:
 
 ```yaml
-post_optimizer_transforms:
+model_transformations:
   - name: gaussian_observation
     update_rate: 0.2
   - name: mvn_noise

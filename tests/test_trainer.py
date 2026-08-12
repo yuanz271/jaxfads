@@ -42,7 +42,7 @@ def trainer_config():
         "learning_rate": 1e-3,
         "batch_size": 2,
         "seed": 42,
-        "post_optimizer_transforms": [],
+        "model_transformations": [],
     })
 
 
@@ -108,7 +108,7 @@ def test_q_config_initialization_precedes_optimizer_init(
     """The optimizer receives Q initialized from serializable trainer config."""
     model = XFADS(gaussian_model_conf, jrnd.key(0)).initialize(*gaussian_sample_data)
     expected_free = model.approx.free_from_kw(scale=0.25)
-    trainer_config.post_optimizer_transforms = [
+    trainer_config.model_transformations = [
         {"name": "mvn_noise", "q_scale": 0.25, "q_prior_fraction": 0.1}
     ]
     seen = []
@@ -134,12 +134,12 @@ def test_q_config_initialization_precedes_optimizer_init(
     chex.assert_trees_all_close(seen[0], expected_free)
 
 
-def test_train_with_configured_post_optimizer_transforms(
+def test_train_with_configured_model_transformations(
     gaussian_model_conf, trainer_config, gaussian_sample_data
 ):
     """Configured R/Q transforms run after one optimizer forward pass."""
     conf = gaussian_model_conf
-    trainer_config.post_optimizer_transforms = [
+    trainer_config.model_transformations = [
         {"name": "gaussian_observation"},
         {"name": "mvn_noise", "q_scale": 1.0, "q_prior_fraction": 0.1},
     ]
@@ -265,8 +265,8 @@ def test_mvn_noise_mstep_ema_averages_covariance_space(gaussian_model_conf, rank
 
 
 def test_transform_config_rejects_unknown_name(trainer_config, model_conf, sample_data):
-    trainer_config.post_optimizer_transforms = [{"name": "unknown"}]
-    with pytest.raises(ValueError, match="Unknown post_optimizer_transform"):
+    trainer_config.model_transformations = [{"name": "unknown"}]
+    with pytest.raises(ValueError, match="Unknown model_transformation"):
         train(XFADS(model_conf, jrnd.key(0)), sample_data, conf=trainer_config)
 
 
@@ -349,7 +349,7 @@ def test_user_optimizer_composes_with_freeze_paths(
     trainer_config.max_epoch = 5
     trainer_config.batch_size = 64
     trainer_config.freeze_paths = ["noise"]
-    trainer_config.post_optimizer_transforms = []
+    trainer_config.model_transformations = []
 
     model = XFADS(model_conf, jrnd.key(0))
     # Snapshot to host: train() donates the input model's buffers.
@@ -423,7 +423,7 @@ def test_train_freeze_paths_keeps_noise_fixed(model_conf, trainer_config, sample
     trainer_config.max_epoch = 3
     trainer_config.batch_size = 64
     trainer_config.freeze_paths = ["noise"]
-    trainer_config.post_optimizer_transforms = []
+    trainer_config.model_transformations = []
     trained_model = train(model, sample_data, conf=trainer_config)
     noise_trained = jax.device_get(trained_model.noise)
     chex.assert_trees_all_close(noise_trained, noise0, atol=0.0)

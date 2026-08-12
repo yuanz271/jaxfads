@@ -49,7 +49,7 @@ def _trainer_conf():
         "batch_size": 4,
         "learning_rate": 1e-3,
         "seed": 23,
-        "post_optimizer_transforms": [
+        "model_transformations": [
             {"name": "gaussian_observation", "update_rate": 0.2},
             {
                 "name": "mvn_noise",

@@ -527,7 +527,7 @@ def main() -> None:
         seed=0,
         learning_rate=1e-3,
         batch_size=batch_size,
-        post_optimizer_transforms=[
+        model_transformations=[
             {"name": "gaussian_observation"},
             {"name": "mvn_noise", "q_scale": 1.0, "q_prior_fraction": 0.1},
         ],

@@ -96,7 +96,7 @@ def test_train_applies_regularizer(model_conf, sample_data):
         "max_epoch": 3,
         "batch_size": 5,
         "seed": 0,
-        "post_optimizer_transforms": [],
+        "model_transformations": [],
     })
 
     def strong_reg(m):

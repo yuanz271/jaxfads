@@ -1,11 +1,11 @@
-"""Contracts for trainer-owned post-optimizer model transformations."""
+"""Contracts for trainer-owned model transformations."""
 
 from __future__ import annotations
 
 from typing import Any, Protocol
 
 
-class PostOptimizerTransform(Protocol):
+class ModelTransformation(Protocol):
     """One ordered, trainer-owned model transformation."""
 
     def initialize(self, model, *, key) -> Any: ...

@@ -67,7 +67,7 @@ Example:
 dynamics: Functional
 integrator: Identity
 # Optional Q initialization/update: add a mvn_noise entry to
-# trainer_conf.post_optimizer_transforms.
+# trainer_conf.model_transformations.
 
 dyn_conf:
   fn_path: my_pkg.my_maps:my_transition
@@ -82,7 +82,7 @@ dyn_conf:
 dynamics: OU
 integrator: Euler
 # Optional Q initialization/update: add a mvn_noise entry to
-# trainer_conf.post_optimizer_transforms.
+# trainer_conf.model_transformations.
 
 dyn_conf:
   theta: 2.0
@@ -97,7 +97,7 @@ dyn_conf:
 dynamics: Identity
 integrator: Identity
 # Optional Q initialization/update: add a mvn_noise entry to
-# trainer_conf.post_optimizer_transforms.
+# trainer_conf.model_transformations.
 
 dyn_conf:
   input_dim: 0
@@ -113,7 +113,7 @@ Use this as the weakest built-in dynamics prior when you want
 dynamics: MyDynamics
 integrator: Identity
 # Optional Q initialization/update: add a mvn_noise entry to
-# trainer_conf.post_optimizer_transforms.
+# trainer_conf.model_transformations.
 
 dyn_conf:
   input_dim: 0

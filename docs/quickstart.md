@@ -66,7 +66,7 @@ trainer_conf = OmegaConf.create(
         "learning_rate": 1e-3,
         "max_epoch": 50,
         "batch_size": 16,
-        "post_optimizer_transforms": [
+        "model_transformations": [
             {"name": "gaussian_observation"},
             {"name": "mvn_noise", "q_scale": 1.0, "q_prior_fraction": 0.1},
         ],

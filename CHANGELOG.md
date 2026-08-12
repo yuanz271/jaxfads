@@ -14,7 +14,7 @@
   section in `docs/algorithm.md`.
 * **Breaking:** M-step updates are now trainer-owned post-optimizer
   transformations. Gaussian R updates are selected with
-  `post_optimizer_transforms=(GaussianObservationMstep(),)`. The built-in MVN Q
+  `model_transformations=(GaussianObservationMstep(),)`. The built-in MVN Q
   policy is configured through ordered serializable trainer transform entries;
   the default entries enable `gaussian_observation` and `mvn_noise`, and the
   trainer constructs and initializes `MVNNoiseMstep` before optimizer state
