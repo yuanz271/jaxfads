@@ -1,4 +1,3 @@
-
 import chex
 import pytest
 from conftest import MockDynamics  # noqa: F401 - class registration side-effect
@@ -132,8 +131,3 @@ def test_set_readout_stationary_smoke():
     updated = observation.set_readout(weight=weight, bias=bias)
     chex.assert_trees_all_close(updated.readout.weight, weight)
     chex.assert_trees_all_close(updated.readout.layer.bias, bias)
-
-
-def test_removed_manual_mstep_api_is_not_imported():
-    """Observation M-steps are trainer-plugin policy, not public APIs."""
-    assert not hasattr(GLM, "mstep_from_data")

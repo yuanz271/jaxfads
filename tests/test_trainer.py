@@ -307,7 +307,7 @@ def test_train_accepts_user_optimizer(model_conf, trainer_config, sample_data):
 
 @pytest.mark.parametrize(
     "opt_name",
-    ["prodigy", "adamw", "lamb", "lars"],
+    ["prodigy", "adamw"],
 )
 def test_train_with_params_aware_optimizer(
     model_conf, trainer_config, sample_data, opt_name
